@@ -238,108 +238,121 @@ impl App for EclipseApp {
         let central_frame = self.theme.panel_frame_with_state(is_floating);
 
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+            ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
 
-            // 1. TOP TITLEBAR
-            titlebar::render_titlebar(
-                ui,
-                &self.theme,
-                &mut self.search_query,
-                &mut on_scan,
-                &mut self.focus_search,
-                can_back,
-                can_fwd,
-                &mut on_back,
-                &mut on_forward,
-            );
+            // 1. TOP TITLEBAR (with 14px horizontal padding)
+            egui::Frame::none()
+                .inner_margin(egui::Margin { left: 14.0, right: 14.0, top: 6.0, bottom: 4.0 })
+                .show(ui, |ui| {
+                    titlebar::render_titlebar(
+                        ui,
+                        &self.theme,
+                        &mut self.search_query,
+                        &mut on_scan,
+                        &mut self.focus_search,
+                        can_back,
+                        can_fwd,
+                        &mut on_back,
+                        &mut on_forward,
+                    );
+                });
 
             // Toast / Status Message bar
             if let Some((ref msg, time)) = self.status_msg {
                 if time.elapsed().as_secs() < 4 {
                     ui.add_space(2.0);
-                    let toast_frame = egui::Frame::none()
-                        .fill(self.theme.accent_glow)
-                        .stroke(Stroke::new(1.0_f32, self.theme.border_accent))
-                        .rounding(Rounding::same(8.0_f32))
-                        .inner_margin(egui::Margin::symmetric(12.0_f32, 5.0_f32));
+                    egui::Frame::none()
+                        .inner_margin(egui::Margin::symmetric(14.0, 0.0))
+                        .show(ui, |ui| {
+                            let toast_frame = egui::Frame::none()
+                                .fill(self.theme.accent_glow)
+                                .stroke(Stroke::new(1.0_f32, self.theme.border_accent))
+                                .rounding(Rounding::same(8.0_f32))
+                                .inner_margin(egui::Margin::symmetric(12.0_f32, 5.0_f32));
 
-                    toast_frame.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            render_icon(ui, Icon::Sparkle, 13.0, self.theme.accent);
-                            ui.label(RichText::new(msg).color(self.theme.text_primary).size(12.0));
+                            toast_frame.show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    render_icon(ui, Icon::Sparkle, 13.0, self.theme.accent);
+                                    ui.label(RichText::new(msg).color(self.theme.text_primary).size(12.0));
+                                });
+                            });
                         });
-                    });
                 }
             }
 
             // 2. MAIN WORKSPACE (Sidebar + Viewport + Queue drawer)
-            // Dynamically calculate workspace height leaving exact space for docked bottom playerbar
-            let playerbar_id = egui::Id::new("eclipse_docked_playerbar_height");
-            let playerbar_h: f32 = ctx.data(|d| d.get_temp(playerbar_id)).unwrap_or(68.0);
-            let workspace_height = (ui.available_height() - playerbar_h - ui.spacing().item_spacing.y).max(100.0);
+            let playerbar_h = 68.0_f32;
+            let workspace_height = (ui.available_height() - playerbar_h).max(100.0);
 
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+            ui.allocate_ui_with_layout(
+                vec2(ui.available_width(), workspace_height),
+                Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::Frame::none()
+                        .inner_margin(egui::Margin { left: 14.0, right: 14.0, top: 4.0, bottom: 8.0 })
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
 
-                // Sidebar Left
-                let mut sidebar_frame = self.theme.glass_frame(12.0);
-                sidebar_frame.inner_margin = egui::Margin::symmetric(12.0_f32, 10.0_f32);
+                                // Sidebar Left
+                                let mut sidebar_frame = self.theme.glass_frame(12.0);
+                                sidebar_frame.inner_margin = egui::Margin::symmetric(12.0_f32, 10.0_f32);
 
-                let sidebar_width = 240.0;
-                let mut next_tab = self.current_tab;
-                let mut on_create_sidebar_playlist = false;
+                                let sidebar_width = 240.0;
+                                let mut next_tab = self.current_tab;
+                                let mut on_create_sidebar_playlist = false;
 
-                ui.allocate_ui_with_layout(
-                    vec2(sidebar_width, workspace_height),
-                    Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        sidebar_frame.show(ui, |ui| {
-                            sidebar::render_sidebar(
-                                ui,
-                                &mut next_tab,
-                                &self.playlists,
-                                &self.theme,
-                                self.tracks.len(),
-                                self.playlists.len(),
-                                &mut on_create_sidebar_playlist,
-                                self.cfg.streaming.show_spotify,
-                                self.cfg.streaming.show_youtube_music,
-                            );
-                        });
-                    },
-                );
+                                ui.allocate_ui_with_layout(
+                                    vec2(sidebar_width, workspace_height - 12.0),
+                                    Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        sidebar_frame.show(ui, |ui| {
+                                            sidebar::render_sidebar(
+                                                ui,
+                                                &mut next_tab,
+                                                &self.playlists,
+                                                &self.theme,
+                                                self.tracks.len(),
+                                                self.playlists.len(),
+                                                &mut on_create_sidebar_playlist,
+                                                self.cfg.streaming.show_spotify,
+                                                self.cfg.streaming.show_youtube_music,
+                                            );
+                                        });
+                                    },
+                                );
 
-                if next_tab != self.current_tab {
-                    self.navigate_to(next_tab);
-                }
+                                if next_tab != self.current_tab {
+                                    self.navigate_to(next_tab);
+                                }
 
-                if on_create_sidebar_playlist {
-                    let default_name = format!("New Playlist {}", self.playlists.len() + 1);
-                    if let Ok(id) = self.db.create_playlist(&default_name) {
-                        self.reload_data();
-                        self.playlists_state.selected_playlist_id = Some(id);
-                        self.navigate_to(NavTab::Playlist(id));
-                        self.set_status(&format!("Playlist '{}' created", default_name));
-                    }
-                }
+                                if on_create_sidebar_playlist {
+                                    let default_name = format!("New Playlist {}", self.playlists.len() + 1);
+                                    if let Ok(id) = self.db.create_playlist(&default_name) {
+                                        self.reload_data();
+                                        self.playlists_state.selected_playlist_id = Some(id);
+                                        self.navigate_to(NavTab::Playlist(id));
+                                        self.set_status(&format!("Playlist '{}' created", default_name));
+                                    }
+                                }
 
-                // Center Content Area
-                let content_width = if self.show_queue {
-                    ui.available_width() - 250.0
-                } else {
-                    ui.available_width()
-                };
+                                // Center Content Area (Borderless: outer white border removed)
+                                let content_width = if self.show_queue {
+                                    ui.available_width() - 250.0
+                                } else {
+                                    ui.available_width()
+                                };
 
-                let mut on_trigger_scan = false;
-                let mut content_frame = self.theme.card_frame(12.0);
-                content_frame.inner_margin = egui::Margin::same(14.0_f32);
+                                let mut on_trigger_scan = false;
+                                let content_frame = egui::Frame::none()
+                                    .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32));
 
-                ui.allocate_ui_with_layout(
-                    vec2(content_width, workspace_height),
-                    Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        content_frame.show(ui, |ui| {
-                            match self.current_tab {
+                                ui.allocate_ui_with_layout(
+                                    vec2(content_width, workspace_height - 12.0),
+                                    Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        content_frame.show(ui, |ui| {
+                                            match self.current_tab {
                                 NavTab::Home => {
                                     render_home(
                                         ui,
@@ -670,20 +683,28 @@ impl App for EclipseApp {
                         self.player.play_index(i);
                     }
                 }
-            });
-
-            // 3. BOTTOM PLAYERBAR DOCKED
-            let pb_response = playerbar::render_playerbar(
-                ui,
-                &mut self.player,
-                &self.theme,
-                &mut self.show_queue,
-                &mut self.cfg.pip.enabled,
-                &mut toggle_now_playing,
-                &mut on_toggle_fav,
-                &mut self.art_manager,
+                            });
+                        });
+                },
             );
-            ctx.data_mut(|d| d.insert_temp(playerbar_id, pb_response.rect.height()));
+
+            // 3. BOTTOM PLAYERBAR DOCKED (spans 100% full width across window)
+            ui.allocate_ui_with_layout(
+                vec2(ui.available_width(), playerbar_h),
+                Layout::top_down(egui::Align::Min),
+                |ui| {
+                    playerbar::render_playerbar(
+                        ui,
+                        &mut self.player,
+                        &self.theme,
+                        &mut self.show_queue,
+                        &mut self.cfg.pip.enabled,
+                        &mut toggle_now_playing,
+                        &mut on_toggle_fav,
+                        &mut self.art_manager,
+                    );
+                },
+            );
         });
 
         // Handle navigation history buttons

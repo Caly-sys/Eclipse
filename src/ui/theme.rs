@@ -125,9 +125,9 @@ impl Theme {
                 Self {
                     name: "Eclipse".into(),
                     bg: Color32::from_rgb(10, 10, 12),
-                    surface: Color32::from_rgb(17, 17, 19),
-                    surface_hover: Color32::from_rgb(28, 28, 31),
-                    card: Color32::from_rgb(22, 22, 24),
+                    surface: Color32::from_rgb(16, 16, 19),
+                    surface_hover: Color32::from_rgb(26, 26, 30),
+                    card: Color32::from_rgb(20, 20, 23),
                     border: Color32::from_rgba_premultiplied(255, 255, 255, 15),
                     border_accent: Color32::from_rgba_premultiplied(255, 255, 255, 25),
                     text_primary: Color32::from_rgb(244, 244, 245),
@@ -185,22 +185,20 @@ impl Theme {
     /// Application canvas frame adapting to floating (rounded corners with luminous border)
     /// or maximized/fullscreen (flush square edges)
     pub fn panel_frame_with_state(&self, is_floating: bool) -> Frame {
-        let (rounding, stroke, inner_margin) = if is_floating {
+        let (rounding, stroke) = if is_floating {
             (
                 Rounding::same(12.0_f32),
                 Stroke::new(1.0_f32, self.border),
-                Margin::same(10.0_f32),
             )
         } else {
             (
                 Rounding::ZERO,
                 Stroke::NONE,
-                Margin::same(8.0_f32),
             )
         };
 
         Frame {
-            inner_margin,
+            inner_margin: Margin::ZERO,
             outer_margin: Margin::ZERO,
             rounding,
             fill: self.bg,
@@ -218,9 +216,9 @@ mod tests {
     fn test_default_eclipse_theme_tokens() {
         let theme = Theme::from_name("Eclipse", None);
         assert_eq!(theme.bg, Color32::from_rgb(10, 10, 12));
-        assert_eq!(theme.surface, Color32::from_rgb(17, 17, 19));
-        assert_eq!(theme.surface_hover, Color32::from_rgb(28, 28, 31));
-        assert_eq!(theme.card, Color32::from_rgb(22, 22, 24));
+        assert_eq!(theme.surface, Color32::from_rgb(16, 16, 19));
+        assert_eq!(theme.surface_hover, Color32::from_rgb(26, 26, 30));
+        assert_eq!(theme.card, Color32::from_rgb(20, 20, 23));
         assert_eq!(theme.border, Color32::from_rgba_premultiplied(255, 255, 255, 15));
         assert_eq!(theme.border_accent, Color32::from_rgba_premultiplied(255, 255, 255, 25));
         assert_eq!(theme.accent, Color32::WHITE);

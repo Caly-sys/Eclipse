@@ -95,7 +95,7 @@ pub fn render_home(
     ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 20.0);
+            ui.spacing_mut().item_spacing = vec2(0.0, 16.0);
 
             // =================================================================
             // 1. GREETING HEADER
@@ -150,79 +150,86 @@ pub fn render_home(
 // =============================================================================
 fn render_greeting_header(ui: &mut Ui, theme: &Theme) {
     let (date_str, greeting) = get_local_date_and_greeting();
+    let total_w = ui.available_width();
+    let header_h = 52.0_f32;
 
-    ui.horizontal(|ui| {
-        // Left Column: Date in uppercase muted tracking + bold greeting
-        ui.vertical(|ui| {
-            ui.label(
-                RichText::new(&date_str)
-                    .size(11.5)
-                    .color(theme.text_muted)
-                    .strong(),
-            );
-            ui.add_space(2.0);
-            ui.label(
-                RichText::new(&greeting)
-                    .size(32.0)
-                    .color(Color32::from_rgb(244, 244, 245))
-                    .strong(),
-            );
-        });
-
-        // Right Column: ECLIPSED brand block + circular waveform/equalizer badge
-        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-            // Circular waveform/equalizer badge
-            let (badge_rect, badge_resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
-            let badge_bg = if badge_resp.hovered() {
-                Color32::from_rgb(28, 28, 32)
-            } else {
-                Color32::from_rgb(22, 22, 26)
-            };
-            ui.painter().circle_filled(badge_rect.center(), 22.0, badge_bg);
-            ui.painter().circle_stroke(
-                badge_rect.center(),
-                22.0,
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 22)),
-            );
-            let icon_rect = Rect::from_center_size(badge_rect.center(), vec2(20.0, 20.0));
-            paint_icon(ui.painter(), Icon::BarChart, icon_rect, theme.accent);
-
-            ui.add_space(14.0);
-
-            // Brand Text Stack
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(
+        vec2(total_w, header_h),
+        Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            // Left Group: Date in uppercase muted tracking stacked directly above greeting
+            ui.allocate_ui_with_layout(
+                vec2((total_w - 240.0).max(180.0), header_h),
+                Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
                     ui.label(
-                        RichText::new("E C L I P S E D")
-                            .size(13.5)
+                        RichText::new(&date_str)
+                            .size(11.5)
+                            .color(theme.text_muted)
+                            .strong(),
+                    );
+                    ui.label(
+                        RichText::new(&greeting)
+                            .size(32.0)
                             .color(Color32::from_rgb(244, 244, 245))
                             .strong(),
                     );
-                    ui.add_space(4.0);
-                    // Version tag pill
-                    let (tag_rect, _) = ui.allocate_exact_size(vec2(42.0, 16.0), Sense::hover());
-                    ui.painter().rect_filled(tag_rect, Rounding::same(4.0), Color32::from_rgb(26, 26, 30));
-                    ui.painter().rect_stroke(
-                        tag_rect,
-                        Rounding::same(4.0),
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 18)),
-                    );
-                    ui.painter().text(
-                        tag_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "v1.2.0",
-                        egui::FontId::proportional(10.0),
-                        theme.text_muted,
-                    );
-                });
-                ui.label(
-                    RichText::new("music, in the dark.")
-                        .size(11.0)
-                        .color(theme.text_muted),
+                },
+            );
+
+            // Right Group: Right-aligned text column placed left of circular 44x44 equalizer badge
+            ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing = vec2(14.0, 0.0);
+
+                // Circular waveform/equalizer badge on far right
+                let (badge_rect, badge_resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
+                let badge_bg = if badge_resp.hovered() {
+                    Color32::from_rgb(28, 28, 32)
+                } else {
+                    Color32::from_rgb(20, 20, 24)
+                };
+                ui.painter().circle_filled(badge_rect.center(), 22.0, badge_bg);
+                ui.painter().circle_stroke(
+                    badge_rect.center(),
+                    22.0,
+                    Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
+                );
+                let icon_rect = Rect::from_center_size(badge_rect.center(), vec2(20.0, 20.0));
+                paint_icon(ui.painter(), Icon::BarChart, icon_rect, theme.accent);
+
+                // Right-aligned text column placed left of the circular badge
+                ui.allocate_ui_with_layout(
+                    vec2(170.0, 44.0),
+                    Layout::top_down(egui::Align::Max),
+                    |ui| {
+                        ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+                            ui.label(
+                                RichText::new("E C L I P S E D")
+                                    .size(13.5)
+                                    .color(Color32::from_rgb(244, 244, 245))
+                                    .strong(),
+                            );
+                            ui.label(
+                                RichText::new("v1.2.0")
+                                    .size(10.5)
+                                    .color(theme.text_muted),
+                            );
+                        });
+                        ui.label(
+                            RichText::new("music, in the dark.")
+                                .size(11.0)
+                                .color(theme.text_muted),
+                        );
+                    },
                 );
             });
-        });
-    });
+        },
+    );
+
+    ui.add_space(20.0); // margin-bottom: 20px
 }
 
 // =============================================================================
@@ -241,16 +248,18 @@ fn render_row1_bento(
     on_trigger_scan: &mut bool,
 ) {
     let available_w = ui.available_width();
-    let gap = 14.0_f32;
+    let gap = 16.0_f32;
     let is_wide = available_w >= 640.0;
+    let row1_h = 184.0_f32;
 
+    // Asymmetric 1.35fr : 1fr split
     let left_w = if is_wide {
-        ((available_w - gap) * 0.55).max(340.0)
+        ((available_w - gap) * (1.35 / 2.35)).max(340.0)
     } else {
         available_w
     };
     let right_w = if is_wide {
-        (available_w - gap - left_w).max(280.0)
+        available_w - gap - left_w
     } else {
         available_w
     };
@@ -265,14 +274,15 @@ fn render_row1_bento(
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = vec2(gap, 0.0);
 
-            // Left Card (~55% width): PICK UP WHERE YOU LEFT OFF
+            // Left Card (1.35fr width): PICK UP WHERE YOU LEFT OFF
             ui.allocate_ui_with_layout(
-                vec2(left_w, 0.0),
+                vec2(left_w, row1_h),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
                     render_pick_up_card(
                         ui,
                         left_w,
+                        row1_h,
                         active_track.as_ref(),
                         player,
                         theme,
@@ -284,12 +294,12 @@ fn render_row1_bento(
                 },
             );
 
-            // Right Nested 2x2 Bento Grid (~45% width)
+            // Right Nested 2x2 Bento Grid (1fr width)
             ui.allocate_ui_with_layout(
-                vec2(right_w, 0.0),
+                vec2(right_w, row1_h),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
-                    render_stats_2x2_bento(ui, right_w, tracks, theme, player, on_navigate);
+                    render_stats_2x2_bento(ui, right_w, row1_h, tracks, theme, player, on_navigate);
                 },
             );
         });
@@ -298,6 +308,7 @@ fn render_row1_bento(
         render_pick_up_card(
             ui,
             left_w,
+            row1_h,
             active_track.as_ref(),
             player,
             theme,
@@ -307,7 +318,7 @@ fn render_row1_bento(
             on_trigger_scan,
         );
         ui.add_space(gap);
-        render_stats_2x2_bento(ui, right_w, tracks, theme, player, on_navigate);
+        render_stats_2x2_bento(ui, right_w, row1_h, tracks, theme, player, on_navigate);
     }
 }
 
@@ -315,6 +326,7 @@ fn render_row1_bento(
 fn render_pick_up_card(
     ui: &mut Ui,
     card_w: f32,
+    card_h: f32,
     active_track: Option<&Track>,
     player: &mut PlayerController,
     theme: &Theme,
@@ -324,17 +336,18 @@ fn render_pick_up_card(
     on_trigger_scan: &mut bool,
 ) {
     let mut frame = theme.card_frame(14.0);
-    frame.fill = Color32::from_rgb(22, 22, 24); // #161618
+    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
     frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)); // subtle rgba(255,255,255,0.06)
     frame.inner_margin = egui::Margin::symmetric(16.0, 16.0);
 
     let frame_response = frame.show(ui, |ui| {
         ui.set_width(card_w - 32.0);
+        ui.set_height(card_h - 32.0);
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = vec2(16.0, 0.0);
 
-            // Large 136x136px rounded square Album Cover with soft shadow / border
+            // Large 136x136px rounded square Album Cover (border-radius: 8px, border: none)
             let (art_box, art_resp) = ui.allocate_exact_size(vec2(136.0, 136.0), Sense::click());
             if art_resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -349,24 +362,14 @@ fn render_pick_up_card(
                         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
-                    ui.painter().rect_stroke(
-                        art_box,
-                        Rounding::same(10.0),
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 25)),
-                    );
                     painted = true;
                 }
             }
 
             if !painted {
-                ui.painter().rect_filled(art_box, Rounding::same(10.0), Color32::from_rgb(28, 28, 32));
-                ui.painter().rect_stroke(
-                    art_box,
-                    Rounding::same(10.0),
-                    Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 18)),
-                );
+                ui.painter().rect_filled(art_box, Rounding::same(8.0), Color32::from_rgb(26, 26, 30));
                 let icon_box = Rect::from_center_size(art_box.center(), vec2(48.0, 48.0));
-                paint_icon(ui.painter(), Icon::Disc, icon_box, theme.accent);
+                paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
             }
 
             if art_resp.clicked() {
@@ -500,6 +503,7 @@ fn render_pick_up_card(
 fn render_stats_2x2_bento(
     ui: &mut Ui,
     right_w: f32,
+    row1_h: f32,
     tracks: &[Track],
     theme: &Theme,
     player: &mut PlayerController,
@@ -536,9 +540,9 @@ fn render_stats_2x2_bento(
 
     let fav_count = tracks.iter().filter(|t| t.favorite).count();
 
-    let card_gap = 10.0_f32;
-    let sub_w = ((right_w - card_gap) / 2.0).max(120.0);
-    let sub_h = 85.0_f32;
+    let card_gap = 12.0_f32;
+    let sub_w = ((right_w - card_gap) / 2.0).max(100.0);
+    let sub_h = (row1_h - card_gap) / 2.0;
 
     // Row 1: LIBRARY & LISTENING TIME
     ui.horizontal(|ui| {
@@ -686,7 +690,7 @@ fn render_bento_subcard<F, C>(
     C: FnOnce(),
 {
     let mut frame = theme.card_frame(12.0);
-    frame.fill = Color32::from_rgb(22, 22, 24); // #161618
+    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
     frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
     frame.inner_margin = egui::Margin::symmetric(14.0, 10.0);
 
@@ -729,7 +733,7 @@ fn render_action_subcard<P, C>(
     C: FnOnce(),
 {
     let mut frame = theme.card_frame(12.0);
-    frame.fill = Color32::from_rgb(22, 22, 24); // #161618
+    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
     frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
     frame.inner_margin = egui::Margin::symmetric(14.0, 10.0);
 
@@ -831,8 +835,9 @@ fn render_row2_split_grid(
     on_navigate: &mut Option<NavTab>,
 ) {
     let available_w = ui.available_width();
-    let gap = 14.0_f32;
+    let gap = 16.0_f32;
     let is_wide = available_w >= 640.0;
+    let row2_h = 212.0_f32;
     let col_w = if is_wide {
         ((available_w - gap) / 2.0).max(280.0)
     } else {
@@ -843,46 +848,48 @@ fn render_row2_split_grid(
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = vec2(gap, 0.0);
 
-            // Left Card: ON REPEAT
+            // Left Card: ON REPEAT (equal 50/50 width, shared row2_h)
             ui.allocate_ui_with_layout(
-                vec2(col_w, 0.0),
+                vec2(col_w, row2_h),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
-                    render_on_repeat_card(ui, col_w, tracks, theme, art_manager, on_play_track);
+                    render_on_repeat_card(ui, col_w, row2_h, tracks, theme, art_manager, on_play_track);
                 },
             );
 
-            // Right Card: RECENTLY ADDED
+            // Right Card: RECENTLY ADDED (equal 50/50 width, shared row2_h)
             ui.allocate_ui_with_layout(
-                vec2(col_w, 0.0),
+                vec2(col_w, row2_h),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
-                    render_recently_added_card(ui, col_w, tracks, theme, art_manager, on_play_track, on_navigate);
+                    render_recently_added_card(ui, col_w, row2_h, tracks, theme, art_manager, on_play_track, on_navigate);
                 },
             );
         });
     } else {
-        render_on_repeat_card(ui, col_w, tracks, theme, art_manager, on_play_track);
+        render_on_repeat_card(ui, col_w, row2_h, tracks, theme, art_manager, on_play_track);
         ui.add_space(gap);
-        render_recently_added_card(ui, col_w, tracks, theme, art_manager, on_play_track, on_navigate);
+        render_recently_added_card(ui, col_w, row2_h, tracks, theme, art_manager, on_play_track, on_navigate);
     }
 }
 
 fn render_on_repeat_card(
     ui: &mut Ui,
     col_w: f32,
+    card_h: f32,
     tracks: &[Track],
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_play_track: &mut Option<Track>,
 ) {
     let mut frame = theme.card_frame(14.0);
-    frame.fill = Color32::from_rgb(22, 22, 24); // #161618
+    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
     frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
     frame.inner_margin = egui::Margin::symmetric(16.0, 14.0);
 
     frame.show(ui, |ui| {
         ui.set_width(col_w - 32.0);
+        ui.set_height(card_h - 28.0);
 
         // Card header
         ui.label(
@@ -907,7 +914,7 @@ fn render_on_repeat_card(
             );
         } else {
             for (idx, track) in top_4.iter().enumerate() {
-                let row_h = 38.0_f32;
+                let row_h = 36.0_f32;
                 let (row_rect, row_resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
 
                 if row_resp.hovered() {
@@ -929,10 +936,10 @@ fn render_on_repeat_card(
                     theme.text_muted,
                 );
 
-                // 36x36px rounded Album Cover
+                // 34x34px square Album Cover (border: none)
                 let art_rect = Rect::from_min_size(
-                    pos2(row_rect.min.x + 32.0, row_rect.center().y - 18.0),
-                    vec2(36.0, 36.0),
+                    pos2(row_rect.min.x + 32.0, row_rect.center().y - 17.0),
+                    vec2(34.0, 34.0),
                 );
 
                 let mut painted = false;
@@ -943,18 +950,13 @@ fn render_on_repeat_card(
                         Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                         Color32::WHITE,
                     );
-                    ui.painter().rect_stroke(
-                        art_rect,
-                        Rounding::same(6.0),
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
-                    );
                     painted = true;
                 }
 
                 if !painted {
-                    ui.painter().rect_filled(art_rect, Rounding::same(6.0), Color32::from_rgb(32, 32, 36));
+                    ui.painter().rect_filled(art_rect, Rounding::same(6.0), Color32::from_rgb(28, 28, 32));
                     let icon_box = Rect::from_center_size(art_rect.center(), vec2(16.0, 16.0));
-                    paint_icon(ui.painter(), Icon::Disc, icon_box, theme.accent);
+                    paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
                 }
 
                 // Right-aligned Artist · Nx plays
@@ -996,9 +998,11 @@ fn render_on_repeat_card(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_recently_added_card(
     ui: &mut Ui,
     col_w: f32,
+    card_h: f32,
     tracks: &[Track],
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
@@ -1006,12 +1010,13 @@ fn render_recently_added_card(
     on_navigate: &mut Option<NavTab>,
 ) {
     let mut frame = theme.card_frame(14.0);
-    frame.fill = Color32::from_rgb(22, 22, 24); // #161618
+    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
     frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
     frame.inner_margin = egui::Margin::symmetric(16.0, 14.0);
 
     frame.show(ui, |ui| {
         ui.set_width(col_w - 32.0);
+        ui.set_height(card_h - 28.0);
 
         // Card header
         ui.horizontal(|ui| {
@@ -1038,7 +1043,7 @@ fn render_recently_added_card(
                 }
             });
         });
-        ui.add_space(14.0);
+        ui.add_space(12.0);
 
         let mut sorted_recent = tracks.to_vec();
         sorted_recent.sort_by_key(|t| std::cmp::Reverse(t.id));
@@ -1054,7 +1059,7 @@ fn render_recently_added_card(
         } else {
             let inner_w = col_w - 32.0;
             let item_gap = 10.0_f32;
-            let col_item_w = ((inner_w - 4.0 * item_gap) / 5.0).clamp(52.0, 72.0);
+            let col_item_w = ((inner_w - 4.0 * item_gap) / 5.0).clamp(52.0, 76.0);
             let cover_size = col_item_w;
 
             ui.horizontal(|ui| {
@@ -1062,10 +1067,10 @@ fn render_recently_added_card(
 
                 for track in recent_5 {
                     ui.allocate_ui_with_layout(
-                        vec2(col_item_w, cover_size + 42.0),
+                        vec2(col_item_w, cover_size + 44.0),
                         Layout::top_down(egui::Align::Center),
                         |ui| {
-                            // Square Album Cover with border-radius 8px
+                            // Square Album Cover with border-radius 8px and NO border
                             let (art_box, art_resp) = ui.allocate_exact_size(vec2(cover_size, cover_size), Sense::click());
                             if art_resp.hovered() {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1079,40 +1084,28 @@ fn render_recently_added_card(
                                     Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                                     Color32::WHITE,
                                 );
-                                let stroke_color = if art_resp.hovered() {
-                                    theme.border_accent
-                                } else {
-                                    Color32::from_rgba_premultiplied(255, 255, 255, 20)
-                                };
-                                ui.painter().rect_stroke(art_box, Rounding::same(8.0), Stroke::new(1.0_f32, stroke_color));
                                 painted = true;
                             }
 
                             if !painted {
-                                ui.painter().rect_filled(art_box, Rounding::same(8.0), Color32::from_rgb(28, 28, 32));
-                                let stroke_color = if art_resp.hovered() {
-                                    theme.border_accent
-                                } else {
-                                    Color32::from_rgba_premultiplied(255, 255, 255, 18)
-                                };
-                                ui.painter().rect_stroke(art_box, Rounding::same(8.0), Stroke::new(1.0_f32, stroke_color));
+                                ui.painter().rect_filled(art_box, Rounding::same(8.0), Color32::from_rgb(26, 26, 30));
                                 let icon_box = Rect::from_center_size(art_box.center(), vec2(22.0, 22.0));
-                                paint_icon(ui.painter(), Icon::Disc, icon_box, theme.accent);
+                                paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
                             }
 
-                            ui.add_space(5.0);
+                            ui.add_space(6.0);
 
-                            // Bold truncated track title below
+                            // Bold truncated track title directly underneath: 12px #e4e4e7
                             let title_chars = (col_item_w / 7.0).max(5.0) as usize;
                             let title_str = truncate_str(track.display_title(), title_chars);
                             let title_lbl = ui.add(
                                 egui::Label::new(
                                     RichText::new(title_str)
-                                        .size(11.0)
+                                        .size(12.0)
                                         .color(if art_resp.hovered() {
                                             Color32::WHITE
                                         } else {
-                                            Color32::from_rgb(244, 244, 245)
+                                            Color32::from_rgb(228, 228, 231)
                                         })
                                         .strong(),
                                 )
@@ -1124,7 +1117,7 @@ fn render_recently_added_card(
                             let artist_str = truncate_str(track.display_artist(), artist_chars);
                             ui.label(
                                 RichText::new(artist_str)
-                                    .size(9.5)
+                                    .size(10.0)
                                     .color(Color32::from_rgb(113, 113, 122)),
                             );
 
@@ -1222,7 +1215,7 @@ fn render_row3_jump_back_in(
 
     if jump_albums.is_empty() {
         let mut empty_frame = theme.card_frame(10.0);
-        empty_frame.fill = Color32::from_rgb(22, 22, 24);
+        empty_frame.fill = Color32::from_rgb(20, 20, 23);
         empty_frame.inner_margin = egui::Margin::symmetric(20.0, 16.0);
         empty_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1268,11 +1261,11 @@ fn render_row3_jump_back_in(
                                     let border_color = if art_resp.hovered() {
                                         theme.border_accent
                                     } else {
-                                        Color32::from_rgba_premultiplied(255, 255, 255, 22)
+                                        Color32::from_rgba_premultiplied(255, 255, 255, 15)
                                     };
                                     ui.painter().rect_stroke(
                                         art_box,
-                                        Rounding::same(10.0),
+                                        Rounding::same(8.0),
                                         Stroke::new(1.0_f32, border_color),
                                     );
                                     painted = true;
@@ -1281,22 +1274,12 @@ fn render_row3_jump_back_in(
                                 if !painted {
                                     ui.painter().rect_filled(
                                         art_box,
-                                        Rounding::same(10.0),
+                                        Rounding::same(8.0),
                                         Color32::from_rgb(26, 26, 30),
-                                    );
-                                    let border_color = if art_resp.hovered() {
-                                        theme.border_accent
-                                    } else {
-                                        Color32::from_rgba_premultiplied(255, 255, 255, 18)
-                                    };
-                                    ui.painter().rect_stroke(
-                                        art_box,
-                                        Rounding::same(10.0),
-                                        Stroke::new(1.0_f32, border_color),
                                     );
                                     let icon_box =
                                         Rect::from_center_size(art_box.center(), vec2(40.0, 40.0));
-                                    paint_icon(ui.painter(), Icon::Disc, icon_box, theme.accent);
+                                    paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
                                 }
 
                                 // Subtle play button overlay on hover

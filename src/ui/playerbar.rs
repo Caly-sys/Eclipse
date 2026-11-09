@@ -20,14 +20,15 @@ pub fn render_playerbar(
     art_manager: &mut AlbumArtManager,
 ) -> egui::Response {
     let frame = egui::Frame::none()
-        .fill(Color32::from_rgb(17, 17, 19))
-        .inner_margin(egui::Margin::symmetric(16.0, 8.0));
+        .fill(Color32::from_rgb(16, 16, 19)) // #101013
+        .inner_margin(egui::Margin::symmetric(20.0, 8.0)); // padding: 0 20px
 
     let inner = frame.show(ui, |ui| {
         let total_w = ui.available_width();
-        let left_w = 280.0_f32.min(total_w * 0.32).max(180.0);
-        let right_w = 300.0_f32.min(total_w * 0.34).max(200.0);
-        let center_w = (total_w - left_w - right_w - 20.0).max(180.0);
+        let side_w = 300.0_f32.min((total_w - 260.0) / 2.0).max(180.0);
+        let left_w = side_w;
+        let right_w = side_w;
+        let center_w = (total_w - side_w * 2.0).max(220.0);
 
         ui.horizontal(|ui| {
             // =================================================================

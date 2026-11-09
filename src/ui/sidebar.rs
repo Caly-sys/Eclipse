@@ -1,7 +1,7 @@
 ﻿use crate::library::model::Playlist;
 use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::theme::Theme;
-use egui::{vec2, Color32, Layout, Rect, RichText, Rounding, ScrollArea, Stroke, Ui};
+use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, ScrollArea, Stroke, Ui};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavTab {
@@ -261,16 +261,16 @@ fn playlist_nav_button(
     }
 
     // Active pill Umbra Obsidian tokens:
-    // Highlight: rgba(255, 255, 255, 0.06) -> Color32::from_rgba_premultiplied(255, 255, 255, 15)
-    // Border: 1px rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
-    // Text: #f4f4f5 Primary
+    // Dark translucent background: rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
+    // Border: None (subtle dark glass)
+    // Text: #ffffff White
     // Icon: #ffffff White
-    // Indicator: 3px vertical white bar on left edge
+    // Indicator: 3px vertical white bar (16px high, border-radius 99px) on left edge
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 15),
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
-            Color32::from_rgb(244, 244, 245),
+            Color32::from_rgba_premultiplied(255, 255, 255, 20),
+            Stroke::NONE,
+            Color32::WHITE,
             Color32::WHITE,
         )
     } else if is_hovered {
@@ -294,13 +294,13 @@ fn playlist_nav_button(
         ui.painter().rect_stroke(rect, Rounding::same(8.0), stroke);
     }
 
-    // 3px vertical white indicator bar on left edge of active route
+    // 3px vertical white indicator bar (height 16px, border-radius 99px) on left edge of active route
     if is_selected {
-        let bar_rect = Rect::from_min_size(
-            rect.min + vec2(2.0, 7.0),
-            vec2(3.0, height - 14.0),
+        let bar_rect = Rect::from_center_size(
+            pos2(rect.min.x + 3.5, rect.center().y),
+            vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), Color32::WHITE);
+        ui.painter().rect_filled(bar_rect, Rounding::same(99.0), Color32::WHITE);
     }
 
     // Vector playlist icon
@@ -389,16 +389,16 @@ fn nav_button(
     }
 
     // Active pill Umbra Obsidian tokens:
-    // Highlight: rgba(255, 255, 255, 0.06) -> Color32::from_rgba_premultiplied(255, 255, 255, 15)
-    // Border: 1px rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
-    // Text: #f4f4f5 Primary
+    // Dark translucent background: rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
+    // Border: None (subtle dark glass)
+    // Text: #ffffff White
     // Icon: #ffffff White
-    // Indicator: 3px vertical white bar on left edge
+    // Indicator: 3px vertical white bar (16px high, border-radius 99px) on left edge
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 15),
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
-            Color32::from_rgb(244, 244, 245),
+            Color32::from_rgba_premultiplied(255, 255, 255, 20),
+            Stroke::NONE,
+            Color32::WHITE,
             Color32::WHITE,
         )
     } else if is_hovered {
@@ -422,13 +422,13 @@ fn nav_button(
         ui.painter().rect_stroke(rect, Rounding::same(8.0), stroke);
     }
 
-    // 3px vertical white indicator bar on left edge of active route
+    // 3px vertical white indicator bar (height 16px, border-radius 99px) on left edge of active route
     if is_selected {
-        let bar_rect = Rect::from_min_size(
-            rect.min + vec2(2.0, 7.0),
-            vec2(3.0, height - 14.0),
+        let bar_rect = Rect::from_center_size(
+            pos2(rect.min.x + 3.5, rect.center().y),
+            vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), Color32::WHITE);
+        ui.painter().rect_filled(bar_rect, Rounding::same(99.0), Color32::WHITE);
     }
 
     // Clean vector icon (16px)
