@@ -261,31 +261,29 @@ fn playlist_nav_button(
     }
 
     // Active pill Umbra Obsidian tokens:
-    // Dark translucent background: rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
-    // Border: None (subtle dark glass)
-    // Text: #ffffff White
-    // Icon: #ffffff White
-    // Indicator: 3px vertical white bar (16px high, border-radius 99px) on left edge
+    // 1. Active: background: rgba(255, 255, 255, 0.07), color: #ffffff, border: none, border-radius: 8px
+    // 2. Hover (inactive): background: rgba(255, 255, 255, 0.04), color: #e4e4e7, border: none
+    // 3. Default (inactive): background: transparent, color: #a1a1aa, border: none
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 20),
+            Color32::from_rgba_premultiplied(255, 255, 255, 18), // rgba(255, 255, 255, 0.07)
             Stroke::NONE,
             Color32::WHITE,
             Color32::WHITE,
         )
     } else if is_hovered {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 10),
-            Stroke::new(1.0_f32, theme.border),
-            theme.text_primary,
-            theme.text_primary,
+            Color32::from_rgba_premultiplied(255, 255, 255, 10), // rgba(255, 255, 255, 0.04)
+            Stroke::NONE,
+            Color32::from_rgb(228, 228, 231), // #e4e4e7
+            Color32::from_rgb(228, 228, 231), // #e4e4e7
         )
     } else {
         (
             Color32::TRANSPARENT,
             Stroke::NONE,
-            theme.text_secondary,
-            theme.text_muted,
+            Color32::from_rgb(161, 161, 170), // #a1a1aa
+            Color32::from_rgb(161, 161, 170), // #a1a1aa
         )
     };
 
@@ -294,13 +292,15 @@ fn playlist_nav_button(
         ui.painter().rect_stroke(rect, Rounding::same(8.0), stroke);
     }
 
-    // 3px vertical white indicator bar (height 16px, border-radius 99px) on left edge of active route
+    // Left Vertical White Indicator Bar (Umbra Style):
+    // position: absolute; left: -6px; top: 50%; transform: translateY(-50%);
+    // width: 3px; height: 16px; background-color: #ffffff; border-radius: 999px;
     if is_selected {
-        let bar_rect = Rect::from_center_size(
-            pos2(rect.min.x + 3.5, rect.center().y),
+        let bar_rect = Rect::from_min_size(
+            pos2(rect.min.x - 6.0, rect.center().y - 8.0),
             vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(99.0), Color32::WHITE);
+        ui.painter().rect_filled(bar_rect, Rounding::same(999.0), Color32::WHITE);
     }
 
     // Vector playlist icon
@@ -375,7 +375,7 @@ fn nav_button(
     target: NavTab,
     icon: Icon,
     label: &str,
-    theme: &Theme,
+    _theme: &Theme,
 ) {
     let is_selected = *current == target;
     let width = ui.available_width();
@@ -389,31 +389,29 @@ fn nav_button(
     }
 
     // Active pill Umbra Obsidian tokens:
-    // Dark translucent background: rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
-    // Border: None (subtle dark glass)
-    // Text: #ffffff White
-    // Icon: #ffffff White
-    // Indicator: 3px vertical white bar (16px high, border-radius 99px) on left edge
+    // 1. Active: background: rgba(255, 255, 255, 0.07), color: #ffffff, border: none, border-radius: 8px
+    // 2. Hover (inactive): background: rgba(255, 255, 255, 0.04), color: #e4e4e7, border: none
+    // 3. Default (inactive): background: transparent, color: #a1a1aa, border: none
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 20),
+            Color32::from_rgba_premultiplied(255, 255, 255, 18), // rgba(255, 255, 255, 0.07)
             Stroke::NONE,
             Color32::WHITE,
             Color32::WHITE,
         )
     } else if is_hovered {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 10),
-            Stroke::new(1.0_f32, theme.border),
-            theme.text_primary,
-            theme.text_primary,
+            Color32::from_rgba_premultiplied(255, 255, 255, 10), // rgba(255, 255, 255, 0.04)
+            Stroke::NONE,
+            Color32::from_rgb(228, 228, 231), // #e4e4e7
+            Color32::from_rgb(228, 228, 231), // #e4e4e7
         )
     } else {
         (
             Color32::TRANSPARENT,
             Stroke::NONE,
-            theme.text_secondary,
-            theme.text_muted,
+            Color32::from_rgb(161, 161, 170), // #a1a1aa
+            Color32::from_rgb(161, 161, 170), // #a1a1aa
         )
     };
 
@@ -422,13 +420,15 @@ fn nav_button(
         ui.painter().rect_stroke(rect, Rounding::same(8.0), stroke);
     }
 
-    // 3px vertical white indicator bar (height 16px, border-radius 99px) on left edge of active route
+    // Left Vertical White Indicator Bar (Umbra Style):
+    // position: absolute; left: -6px; top: 50%; transform: translateY(-50%);
+    // width: 3px; height: 16px; background-color: #ffffff; border-radius: 999px;
     if is_selected {
-        let bar_rect = Rect::from_center_size(
-            pos2(rect.min.x + 3.5, rect.center().y),
+        let bar_rect = Rect::from_min_size(
+            pos2(rect.min.x - 6.0, rect.center().y - 8.0),
             vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(99.0), Color32::WHITE);
+        ui.painter().rect_filled(bar_rect, Rounding::same(999.0), Color32::WHITE);
     }
 
     // Clean vector icon (16px)
