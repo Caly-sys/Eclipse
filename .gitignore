@@ -4,6 +4,7 @@
 *.log
 *.sqlite
 *.db
+*.zip
 .vscode/
 .idea/
 
