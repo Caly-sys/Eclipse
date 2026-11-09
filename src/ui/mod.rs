@@ -2,6 +2,7 @@
 pub mod components;
 pub mod fonts;
 pub mod icons;
+pub mod pip;
 pub mod playerbar;
 pub mod resize;
 pub mod shortcuts;
@@ -175,8 +176,8 @@ impl EclipseApp {
 
 impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // High frame rate during playback for smooth spectrum visualizer
-        if self.player.engine.is_playing() || self.is_scanning {
+        // High frame rate during playback for smooth spectrum visualizer and PiP overlay
+        if self.player.engine.is_playing() || self.is_scanning || self.cfg.pip.enabled {
             ctx.request_repaint();
         }
 
@@ -653,6 +654,7 @@ impl App for EclipseApp {
                 &mut self.player,
                 &self.theme,
                 &mut self.show_queue,
+                &mut self.cfg.pip.enabled,
                 &mut toggle_now_playing,
                 &mut on_toggle_fav,
                 &mut self.art_manager,
@@ -743,6 +745,39 @@ impl App for EclipseApp {
             };
             self.navigate_to(target);
         }
+
+        // Render Desktop PiP Overlay Viewport Window
+        let prev_pip_enabled = self.cfg.pip.enabled;
+        if self.cfg.pip.enabled {
+            let mut pip_fav = None;
+            let pip_settings = self.cfg.pip.clone();
+            pip::show_pip_viewport(
+                ctx,
+                &mut self.player,
+                &self.theme,
+                &mut self.art_manager,
+                &mut self.cfg.pip.enabled,
+                &mut pip_fav,
+                &pip_settings,
+            );
+            if let Some(track_id) = pip_fav {
+                if let Ok(new_fav) = self.db.toggle_favorite(track_id) {
+                    if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                        t.favorite = new_fav;
+                    }
+                    if self.player.current_track().is_some() {
+                        for q in &mut self.player.queue {
+                            if q.id == track_id {
+                                q.favorite = new_fav;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if prev_pip_enabled != self.cfg.pip.enabled {
+            let _ = self.cfg.save();
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -805,5 +840,15 @@ mod tests {
         assert_ne!(NavTab::Favorites, NavTab::NeverPlayed);
         assert_eq!(NavTab::Playlist(1), NavTab::Playlist(1));
         assert_ne!(NavTab::Playlist(1), NavTab::Playlist(2));
+    }
+
+    #[test]
+    fn test_viewport_api() {
+        let _builder = egui::ViewportBuilder::default()
+            .with_always_on_top()
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_inner_size(egui::vec2(360.0, 110.0))
+            .with_resizable(false);
     }
 }

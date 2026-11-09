@@ -8,11 +8,13 @@ use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, Stroke, Ui};
 use std::time::Duration;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_playerbar(
     ui: &mut Ui,
     player: &mut PlayerController,
     theme: &Theme,
     show_queue: &mut bool,
+    show_pip_overlay: &mut bool,
     toggle_now_playing: &mut bool,
     on_toggle_fav: &mut Option<i64>,
     art_manager: &mut AlbumArtManager,
@@ -297,6 +299,15 @@ pub fn render_playerbar(
                         *show_queue = !*show_queue;
                     }
 
+                    // View Toggle: Mini Player & Desktop Overlay (PiP)
+                    let pip_color = if *show_pip_overlay { theme.accent } else { theme.text_secondary };
+                    if icon_button(ui, Icon::PictureInPicture, 15.0, pip_color)
+                        .on_hover_text("Mini Player & Desktop Overlay (PiP)")
+                        .clicked()
+                    {
+                        *show_pip_overlay = !*show_pip_overlay;
+                    }
+
                     // View Toggle: Synced Lyrics Quick Access
                     if icon_button(ui, Icon::Mic, 15.0, theme.text_secondary)
                         .on_hover_text("Synced Lyrics (L)")
@@ -571,6 +582,7 @@ mod tests {
                 let mut player = PlayerController::new(&cfg);
                 let mut art_manager = AlbumArtManager::new();
                 let mut show_queue = false;
+                let mut show_pip_overlay = false;
                 let mut toggle_np = false;
                 let mut on_fav = None;
 
@@ -580,6 +592,7 @@ mod tests {
                     &mut player,
                     &theme,
                     &mut show_queue,
+                    &mut show_pip_overlay,
                     &mut toggle_np,
                     &mut on_fav,
                     &mut art_manager,
@@ -615,6 +628,7 @@ mod tests {
                     &mut player,
                     &theme,
                     &mut show_queue,
+                    &mut show_pip_overlay,
                     &mut toggle_np,
                     &mut on_fav,
                     &mut art_manager,

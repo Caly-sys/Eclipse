@@ -235,6 +235,28 @@ impl Default for ShortcutsSettings {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct PipSettings {
+    pub enabled: bool,
+    pub show_desktop_lyrics: bool,
+    pub pos_x: Option<f32>,
+    pub pos_y: Option<f32>,
+    pub click_through: bool,
+}
+
+impl Default for PipSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            show_desktop_lyrics: true,
+            pos_x: None,
+            pos_y: None,
+            click_through: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -263,6 +285,7 @@ pub struct AppConfig {
     pub lyrics: LyricsSettings,
     pub streaming: StreamingSettings,
     pub shortcuts: ShortcutsSettings,
+    pub pip: PipSettings,
 }
 
 pub type AppSettings = AppConfig;
@@ -323,6 +346,7 @@ impl Default for AppConfig {
             lyrics: LyricsSettings::default(),
             streaming: StreamingSettings::default(),
             shortcuts: ShortcutsSettings::default(),
+            pip: PipSettings::default(),
         }
     }
 }
@@ -546,6 +570,12 @@ mod tests {
         assert_eq!(cfg.shortcuts.toggle_sidebar, "Ctrl+B");
         assert_eq!(cfg.shortcuts.toggle_fullscreen, "F11");
         assert_eq!(cfg.shortcuts.toggle_lyrics, "L");
+
+        assert!(!cfg.pip.enabled);
+        assert!(cfg.pip.show_desktop_lyrics);
+        assert_eq!(cfg.pip.pos_x, None);
+        assert_eq!(cfg.pip.pos_y, None);
+        assert!(!cfg.pip.click_through);
     }
 
     #[test]
@@ -592,6 +622,11 @@ mod tests {
         cfg.appearance.compact_sidebar = true;
         cfg.lyrics.lyrics_font_size = 20.0;
         cfg.streaming.enable_streaming = true;
+        cfg.pip.enabled = true;
+        cfg.pip.show_desktop_lyrics = false;
+        cfg.pip.pos_x = Some(240.0);
+        cfg.pip.pos_y = Some(180.0);
+        cfg.pip.click_through = true;
 
         let json = serde_json::to_string_pretty(&cfg).expect("Serialization failed");
         let decoded: AppConfig = serde_json::from_str(&json).expect("Deserialization failed");
@@ -602,6 +637,11 @@ mod tests {
         assert!(decoded.appearance.compact_sidebar);
         assert!((decoded.lyrics.lyrics_font_size - 20.0).abs() < 1e-6);
         assert!(decoded.streaming.enable_streaming);
+        assert!(decoded.pip.enabled);
+        assert!(!decoded.pip.show_desktop_lyrics);
+        assert_eq!(decoded.pip.pos_x, Some(240.0));
+        assert_eq!(decoded.pip.pos_y, Some(180.0));
+        assert!(decoded.pip.click_through);
     }
 
     #[test]
@@ -646,6 +686,39 @@ mod tests {
         assert_eq!(decoded.audio.output_device, "System default");
         assert_eq!(decoded.audio.buffer_ms, 120);
         assert!(!cfg_is_equalizer_enabled(&decoded));
+
+        // Verify PipSettings defaults on legacy JSON
+        assert!(!decoded.pip.enabled);
+        assert!(decoded.pip.show_desktop_lyrics);
+        assert_eq!(decoded.pip.pos_x, None);
+        assert_eq!(decoded.pip.pos_y, None);
+        assert!(!decoded.pip.click_through);
+    }
+
+    #[test]
+    fn test_pip_settings_serde() {
+        let default_pip = PipSettings::default();
+        assert!(!default_pip.enabled);
+        assert!(default_pip.show_desktop_lyrics);
+        assert_eq!(default_pip.pos_x, None);
+        assert_eq!(default_pip.pos_y, None);
+        assert!(!default_pip.click_through);
+
+        let custom_pip = PipSettings {
+            enabled: true,
+            show_desktop_lyrics: false,
+            pos_x: Some(350.0),
+            pos_y: Some(520.0),
+            click_through: true,
+        };
+
+        let json = serde_json::to_string(&custom_pip).expect("Failed to serialize PipSettings");
+        let deserialized: PipSettings = serde_json::from_str(&json).expect("Failed to deserialize PipSettings");
+        assert_eq!(deserialized, custom_pip);
+
+        let empty_json = "{}";
+        let from_empty: PipSettings = serde_json::from_str(empty_json).expect("Failed to deserialize empty JSON");
+        assert_eq!(from_empty, default_pip);
     }
 
     fn cfg_is_equalizer_enabled(cfg: &AppConfig) -> bool {

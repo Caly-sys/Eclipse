@@ -1096,6 +1096,17 @@ fn render_lyrics_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
             });
         },
     );
+
+    // 5. Desktop overlay lyrics in PiP mode
+    setting_row_card(
+        ui,
+        theme,
+        "Desktop overlay lyrics",
+        "Display floating synchronized lyrics above the desktop in Picture-in-Picture mode.",
+        |ui| {
+            pill_toggle_switch(ui, &mut cfg.pip.show_desktop_lyrics, theme);
+        },
+    );
 }
 
 fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
