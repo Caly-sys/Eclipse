@@ -1,0 +1,28 @@
+﻿[package]
+name = "umbra"
+version = "1.2.0"
+edition = "2021"
+description = "Umbra — music, in the dark. A local-first lossless music player rewritten in Rust."
+authors = ["sadult", "Hype AMD"]
+
+[dependencies]
+eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+egui = "0.29"
+egui_extras = { version = "0.29", features = ["image", "all_loaders"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rodio = { version = "0.19", default-features = false, features = ["symphonia-all", "flac", "vorbis", "wav", "mp3"] }
+rustfft = "6.2"
+lofty = "0.21"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = { version = "2.10", features = ["json"] }
+walkdir = "2.5"
+rfd = "0.15"
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

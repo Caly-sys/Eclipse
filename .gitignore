@@ -1,0 +1,9 @@
+/target
+*.exe
+*.pdb
+*.log
+*.sqlite
+*.db
+.vscode/
+.idea/
+
