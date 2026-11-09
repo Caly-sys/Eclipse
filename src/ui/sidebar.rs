@@ -45,8 +45,9 @@ pub fn render_sidebar(
     ui.set_max_width(240.0);
 
     ui.vertical(|ui| {
-        // Independent vertical scroll area with padding (12.0, 10.0) so top items never clip
+        // Independent vertical scroll area with unique ID salt so sidebar scrolling never couples with main content
         ScrollArea::vertical()
+            .id_salt("sidebar_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 3.0);

@@ -172,19 +172,20 @@ pub fn render_track_table(
     art_manager: &mut AlbumArtManager,
     on_toggle_fav: &mut Option<i64>,
 ) {
-    let total_width = ui.available_width().max(600.0);
+    let right_padding = 24.0;
+    let total_width = (ui.available_width() - right_padding).max(520.0);
     let col_num_w = 40.0;
-    let col_added_w = 90.0;
-    let col_plays_w = 70.0;
+    let col_added_w = 85.0;
+    let col_plays_w = 65.0;
     let col_time_w = 75.0;
-    let fixed_w = col_num_w + col_added_w + col_plays_w + col_time_w;
     let gap = 10.0;
     let total_gaps = gap * 5.0;
-    let remaining_w = (total_width - fixed_w - total_gaps).max(440.0);
+    let fixed_w = col_num_w + col_added_w + col_plays_w + col_time_w;
+    let remaining_w = (total_width - fixed_w - total_gaps).max(200.0);
 
     let total_fr = 4.0;
-    let col_title_w = ((remaining_w * 2.5) / total_fr).max(260.0);
-    let col_album_w = ((remaining_w * 1.5) / total_fr).max(180.0);
+    let col_title_w = remaining_w * 2.5 / total_fr;
+    let col_album_w = remaining_w * 1.5 / total_fr;
 
     let x1 = col_num_w + gap;
     let x2 = x1 + col_title_w + gap;
@@ -238,7 +239,7 @@ pub fn render_track_table(
         theme.text_muted,
     );
     ui.painter().text(
-        pos2(header_rect.max.x - 14.0, header_rect.center().y),
+        pos2(header_rect.max.x - 4.0, header_rect.center().y),
         Align2::RIGHT_CENTER,
         "TIME",
         FontId::proportional(11.0),
@@ -247,8 +248,9 @@ pub fn render_track_table(
 
     ui.add_space(4.0);
 
-    // Track Rows in ScrollArea
+    // Track Rows in ScrollArea (independent playlist_scroll ID salt so it never couples with sidebar)
     ScrollArea::vertical()
+        .id_salt("playlist_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
@@ -363,10 +365,10 @@ pub fn render_track_table(
                     plays_ui.label(RichText::new(format!("{}", track.play_count)).size(12.0).color(Color32::from_rgb(161, 161, 170)));
                 });
 
-                // Col 5: TIME (right-aligned duration + favorite button)
+                // Col 5: TIME (right-aligned duration + favorite button, fits cleanly inside total_width)
                 let time_rect = Rect::from_min_max(
                     pos2(row_rect.min.x + x5, row_rect.min.y),
-                    pos2(row_rect.max.x - 14.0, row_rect.max.y),
+                    pos2(row_rect.max.x - 4.0, row_rect.max.y),
                 );
                 let mut fav_clicked = false;
                 ui.allocate_new_ui(UiBuilder::new().max_rect(time_rect).layout(Layout::right_to_left(egui::Align::Center)), |time_ui| {
@@ -398,6 +400,9 @@ pub fn render_track_table(
                     *selected_track_id = Some(track.id);
                 }
             }
+
+            // Independent bottom padding so all tracks can scroll freely to the end
+            ui.add_space(96.0);
         });
 }
 

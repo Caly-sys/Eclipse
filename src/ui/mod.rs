@@ -302,25 +302,27 @@ impl App for EclipseApp {
                                 let mut next_tab = self.current_tab;
                                 let mut on_create_sidebar_playlist = false;
 
-                                ui.allocate_ui_with_layout(
-                                    vec2(sidebar_width, workspace_height - 12.0),
-                                    Layout::top_down(egui::Align::Min),
-                                    |ui| {
-                                        sidebar_frame.show(ui, |ui| {
-                                            sidebar::render_sidebar(
-                                                ui,
-                                                &mut next_tab,
-                                                &self.playlists,
-                                                &self.theme,
-                                                self.tracks.len(),
-                                                self.playlists.len(),
-                                                &mut on_create_sidebar_playlist,
-                                                self.cfg.streaming.show_spotify,
-                                                self.cfg.streaming.show_youtube_music,
-                                            );
-                                        });
-                                    },
-                                );
+                                ui.push_id("sidebar_panel", |ui| {
+                                    ui.allocate_ui_with_layout(
+                                        vec2(sidebar_width, workspace_height - 12.0),
+                                        Layout::top_down(egui::Align::Min),
+                                        |ui| {
+                                            sidebar_frame.show(ui, |ui| {
+                                                sidebar::render_sidebar(
+                                                    ui,
+                                                    &mut next_tab,
+                                                    &self.playlists,
+                                                    &self.theme,
+                                                    self.tracks.len(),
+                                                    self.playlists.len(),
+                                                    &mut on_create_sidebar_playlist,
+                                                    self.cfg.streaming.show_spotify,
+                                                    self.cfg.streaming.show_youtube_music,
+                                                );
+                                            });
+                                        },
+                                    );
+                                });
 
                                 if next_tab != self.current_tab {
                                     self.navigate_to(next_tab);
@@ -347,10 +349,11 @@ impl App for EclipseApp {
                                 let content_frame = egui::Frame::none()
                                     .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32));
 
-                                ui.allocate_ui_with_layout(
-                                    vec2(content_width, workspace_height - 12.0),
-                                    Layout::top_down(egui::Align::Min),
-                                    |ui| {
+                                ui.push_id("main_content_panel", |ui| {
+                                    ui.allocate_ui_with_layout(
+                                        vec2(content_width, workspace_height - 12.0),
+                                        Layout::top_down(egui::Align::Min),
+                                        |ui| {
                                         content_frame.show(ui, |ui| {
                                             match self.current_tab {
                                 NavTab::Home => {
@@ -606,6 +609,7 @@ impl App for EclipseApp {
                         });
                     },
                 );
+            });
 
                 if let Some(tab) = on_navigate {
                     self.navigate_to(tab);
