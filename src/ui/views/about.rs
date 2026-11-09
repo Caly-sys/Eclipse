@@ -87,6 +87,30 @@ pub fn render_about(ui: &mut Ui, theme: &Theme) {
 
             ui.add_space(16.0);
 
+            // Acknowledgements Card
+            let ack_card = theme.card_frame(10.0);
+            ack_card.show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("ACKNOWLEDGEMENTS").size(11.0).color(theme.text_muted).strong());
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(
+                            "Umbra Rust is an independent Rust reimplementation inspired by Umbra, originally created by Mersad Shahidi (@Bitologist).\n\nThe original project inspired the interface design, music-player concept, and overall user experience. The Rust implementation is independently developed and is not officially affiliated with the original author.",
+                        )
+                        .size(11.5)
+                        .color(theme.text_secondary),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new("Original project: https://github.com/sadult/umbra · MIT License")
+                            .size(11.0)
+                            .color(theme.accent),
+                    );
+                });
+            });
+
+            ui.add_space(16.0);
+
             ui.horizontal(|ui| {
                 ui.label(RichText::new("License: MIT").size(11.5).color(theme.text_muted));
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {

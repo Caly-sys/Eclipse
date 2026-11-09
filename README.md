@@ -2,8 +2,6 @@
 
 A high-performance, local-first lossless music player for Windows rewritten in **pure Rust** with a calm, dark purple glass aesthetic.
 
-![Umbra Target Aesthetic](docs/reference/target-umbra.png)
-
 ---
 
 ## ✦ Highlights
@@ -34,6 +32,43 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 - **Frameless Window Management**:
   - Custom titlebar drag region, double-click maximize/restore, minimize, and close.
   - 7px border margin hit-testing for 8-direction OS window resizing and bottom-right glass grip handle.
+
+---
+
+## ✦ Usage
+
+### 1. Launching Umbra
+- Run `./run.bat` or `./umbra.exe` directly.
+- The player launches in a frameless glass window. Drag anywhere on the empty titlebar to move the window, or drag borders/corners to resize.
+
+### 2. Scanning Your Music Library
+- On the **Home** dashboard, click **Scan Folder** in the Quick Actions banner, or navigate to **Settings** (`⚙ Settings` in sidebar) → **Library Monitored Folders** and click **Add Folder**.
+- Select the folder containing your audio files (`FLAC`, `MP3`, `WAV`, `OGG`, `AAC`, `M4A`).
+- Umbra will crawl your files, extract metadata (titles, artists, albums, codecs, sample rates) via `lofty`, cache embedded cover art asynchronously, and store the indexed library in SQLite (`%APPDATA%\Umbra\umbra.db`).
+
+### 3. Browsing Your Music
+- **Home**: Dashboard showing library statistics, quick actions, Recently Played shelf, and top played tracks.
+- **Songs**: High-density sortable list with track titles, artists, albums, duration, and high-contrast lossless format badges (`FLAC` in warm amber, lossy in lilac).
+- **Albums**: Responsive auto-wrapping grid of square album covers. Click an album to open its detail view and tracklist.
+- **Artists**: Grid of artists with track counts.
+- **Folders**: Hierarchical tree navigation through your indexed folders on disk.
+- **Smart Playlists**: Instant views for `Recently Played`, `Most Played`, `Recently Added`, `Favorites`, `Never Played`, and `Random Discovery`.
+- **Search (`Ctrl + K`)**: Instant global search across tracks, artists, and albums.
+
+### 4. Playback & Queue Controls
+- Double-click any song or click **Play All** on an album or view to start playback. This populates the active queue.
+- **Play / Pause**: Click the large circular transport button or press `Space`.
+- **Next / Previous**: Skip between tracks with transport buttons. If in shuffle mode, tracks play in random non-repeating order while keeping the current song pinned.
+- **Repeat Modes**: Cycle between Repeat Off, Repeat All (loops playlist), and Repeat One (loops active track).
+- **Seeking**: Click or drag directly on the seekbar for smooth scrub preview.
+- **Volume**: Use the volume slider or mouse scroll wheel over the volume area.
+- **Queue Drawer**: Click the queue icon button in the player bar to view the upcoming queue, jump directly to any track, or view song details.
+
+### 5. Synced Lyrics & Audio Analyzer
+- Switch to the **Now Playing** tab (or click the album art thumbnail in the bottom player bar) to enter the 3-column view:
+  - **Left**: Large rounded cover art with ambient glow and track metadata badges.
+  - **Center**: Synced `.lrc` lyrics with real-time autoscrolling. The active line glows bright; past and future lines fade gently. Click any lyric line to jump directly to that timestamp.
+  - **Right**: Real-time hardware Audio Analyzer card showing format specifications, live Left/Right channel stereo peak meters, integrated LUFS, crest factor dynamic range, and a live 20Hz–20kHz logarithmic spectrum visualizer (switchable between Bars, Mirror, and Oscilloscope).
 
 ---
 
@@ -110,6 +145,20 @@ src/
     ├── shortcuts.rs        # Global hotkey event listener
     └── views/              # Home, Now Playing, Songs, Albums, Artists, Playlists, Folders, Settings, About
 ```
+
+---
+
+## Acknowledgements
+
+Umbra Rust is an independent Rust reimplementation inspired by [Umbra](https://github.com/sadult/umbra), originally created by **Mersad Shahidi (@Bitologist)**.
+
+The original project inspired the interface design, music-player concept, and overall user experience.
+
+The Rust implementation is independently developed and is not officially affiliated with the original author.
+
+Original project: https://github.com/sadult/umbra
+
+Original licence: MIT License.
 
 ---
 

@@ -2,7 +2,7 @@
 
 /// Central Design Tokens module for Umbra.
 /// Defines colors, surfaces, borders, typography, and standard frame geometries
-/// matching the purple glass aesthetic from `docs/reference/target-umbra.png`.
+/// defining the signature dark purple glass aesthetic.
 #[derive(Debug, Clone)]
 pub struct Theme {
     pub name: String,
