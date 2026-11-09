@@ -4,6 +4,29 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 
 ---
 
+## ✦ Preview
+
+### Home Dashboard
+*Bento grid layout featuring "Pick up where you left off", real-time listening metrics, on-repeat tracks, and horizontal album shelf.*
+
+![Eclipse Home Dashboard](IMG/ss1.png)
+
+<br/>
+
+### Albums Library
+*Responsive auto-wrapping grid with high-resolution embedded cover art decoding, clean typography, and 1:1 aspect ratios.*
+
+![Eclipse Albums Grid](IMG/ss2.png)
+
+<br/>
+
+### Playlist & Multi-Column Track Table
+*Custom playlists with hero header, duration metrics, and clean multi-column table displaying format badges, artist, album, and relative timestamps.*
+
+![Eclipse Playlist View](IMG/ss3.png)
+
+---
+
 ## ✦ Highlights
 
 - **Rust Audio Engine**: Powered by `rodio` and `symphonia` with real-time PCM audio stream tapping. Zero audio stuttering with an 8192-sample non-blocking buffer.
