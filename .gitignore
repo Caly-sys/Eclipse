@@ -7,3 +7,20 @@
 .vscode/
 .idea/
 
+# Agent workflows, task coordination & internal handoffs
+PLAN.md
+plan.md
+AGENTS.md
+agents.md
+BUGS.md
+bugs.md
+TASKS.md
+tasks.md
+DESIGN.md
+design.md
+agents/
+.agent/
+.agents/
+handoffs/
+.gemini/
+
