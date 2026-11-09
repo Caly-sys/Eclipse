@@ -45,11 +45,12 @@ impl Lyrics {
     }
 
     pub fn parse(content: &str, source: &str) -> Self {
+        let trimmed_content = content.trim();
         let mut lines = Vec::new();
         let mut has_timestamp = false;
         let mut global_offset_ms: i64 = 0;
 
-        for raw_line in content.lines() {
+        for raw_line in trimmed_content.lines() {
             let line = raw_line.trim();
             if line.is_empty() {
                 continue;
@@ -123,6 +124,11 @@ impl Lyrics {
             lines.sort_by_key(|l| l.timestamp_ms);
         }
 
+        // Strip trailing blank lines
+        while lines.last().is_some_and(|l| l.text.trim().is_empty()) {
+            lines.pop();
+        }
+
         Self {
             lines,
             is_synced: has_timestamp,
@@ -131,20 +137,35 @@ impl Lyrics {
     }
 
     pub fn load_local(track_path: &Path) -> Option<Self> {
+        Self::load_with_cache(track_path)
+    }
+
+    pub fn load_with_cache(track_path: &Path) -> Option<Self> {
         // 1. Check sidecar .lrc file: path.with_extension("lrc")
         let lrc_path = track_path.with_extension("lrc");
         if lrc_path.exists() {
             if let Ok(content) = fs::read_to_string(&lrc_path) {
-                return Some(Self::parse(&content, "Local .lrc"));
+                if !content.trim().is_empty() {
+                    return Some(Self::parse(&content, "Local .lrc"));
+                }
             }
         }
 
-        // 2. Check embedded LYRICS / USLT tag
+        // 2. Check local lyrics cache folder (%APPDATA%\Umbra\lyrics_cache)
+        if let Some(content) = crate::lyrics::lrclib::load_from_cache(track_path) {
+            if !content.trim().is_empty() {
+                return Some(Self::parse(&content, "Lyrics Cache"));
+            }
+        }
+
+        // 3. Check embedded LYRICS / USLT tag
         if let Ok(tagged_file) = lofty::probe::Probe::open(track_path).and_then(|p| p.read()) {
             if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
                 if let Some(item) = tag.get(&lofty::tag::ItemKey::Lyrics) {
                     if let Some(lyrics_str) = item.value().text() {
-                        return Some(Self::parse(lyrics_str, "Embedded Tag"));
+                        if !lyrics_str.trim().is_empty() {
+                            return Some(Self::parse(lyrics_str, "Embedded Tag"));
+                        }
                     }
                 }
             }
@@ -155,26 +176,36 @@ impl Lyrics {
 }
 
 fn parse_timestamp(tag: &str) -> Option<u64> {
-    // Supports formats: mm:ss.xx, mm:ss:xx, mm:ss
-    let parts: Vec<&str> = tag.split(':').collect();
+    let clean = tag.trim();
+    let parts: Vec<&str> = clean.split(':').collect();
     if parts.len() < 2 {
         return None;
     }
 
-    let mins: u64 = parts[0].parse().ok()?;
-    let rest = parts[1];
+    let mins: u64 = parts[0].trim().parse().ok()?;
+    let rest = parts[1].trim();
 
     let (secs, ms) = if let Some((s_str, ms_str)) = rest.split_once('.') {
-        let s: u64 = s_str.parse().ok()?;
-        let ms: u64 = match ms_str.len() {
-            1 => ms_str.parse::<u64>().ok()? * 100,
-            2 => ms_str.parse::<u64>().ok()? * 10,
-            _ => ms_str.chars().take(3).collect::<String>().parse().ok()?,
+        let s: u64 = s_str.trim().parse().ok()?;
+        let digits: String = ms_str.chars().filter(|c| c.is_ascii_digit()).collect();
+        let ms: u64 = match digits.len() {
+            0 => 0,
+            1 => digits.parse::<u64>().ok()? * 100,
+            2 => digits.parse::<u64>().ok()? * 10,
+            3 => digits.parse::<u64>().ok()?,
+            _ => digits[..3].parse::<u64>().ok()?,
         };
         (s, ms)
     } else if parts.len() == 3 {
         let s: u64 = rest.parse().ok()?;
-        let ms: u64 = parts[2].parse::<u64>().ok()? * 10;
+        let cs_digits: String = parts[2].trim().chars().filter(|c| c.is_ascii_digit()).collect();
+        let ms: u64 = match cs_digits.len() {
+            0 => 0,
+            1 => cs_digits.parse::<u64>().ok()? * 100,
+            2 => cs_digits.parse::<u64>().ok()? * 10,
+            3 => cs_digits.parse::<u64>().ok()?,
+            _ => cs_digits[..3].parse::<u64>().ok()?,
+        };
         (s, ms)
     } else {
         let s: u64 = rest.parse().ok()?;
@@ -228,5 +259,53 @@ mod tests {
         assert!(!lrc.is_synced);
         assert_eq!(lrc.lines.len(), 3);
         assert_eq!(lrc.lines[0].text, "Just plain text");
+    }
+
+    #[test]
+    fn test_parse_timestamp_formats() {
+        // [mm:ss.xx]
+        let content_xx = "[01:23.45] Two-digit centiseconds";
+        let lrc_xx = Lyrics::parse(content_xx, "test");
+        assert_eq!(lrc_xx.lines[0].timestamp_ms, 83450);
+
+        // [mm:ss.xxx]
+        let content_xxx = "[01:23.456] Three-digit milliseconds";
+        let lrc_xxx = Lyrics::parse(content_xxx, "test");
+        assert_eq!(lrc_xxx.lines[0].timestamp_ms, 83456);
+
+        // [mm:ss]
+        let content_ss = "[01:23] Seconds only";
+        let lrc_ss = Lyrics::parse(content_ss, "test");
+        assert_eq!(lrc_ss.lines[0].timestamp_ms, 83000);
+
+        // [mm:ss:xx] (colon centiseconds)
+        let content_colon = "[01:23:45] Colon format";
+        let lrc_colon = Lyrics::parse(content_colon, "test");
+        assert_eq!(lrc_colon.lines[0].timestamp_ms, 83450);
+    }
+
+    #[test]
+    fn test_parse_chronological_sort() {
+        let content = r#"
+[00:30.00] Third line
+[00:10.00] First line
+[00:20.00] Second line
+"#;
+        let lrc = Lyrics::parse(content, "test");
+        assert_eq!(lrc.lines.len(), 3);
+        assert_eq!(lrc.lines[0].text, "First line");
+        assert_eq!(lrc.lines[0].timestamp_ms, 10000);
+        assert_eq!(lrc.lines[1].text, "Second line");
+        assert_eq!(lrc.lines[1].timestamp_ms, 20000);
+        assert_eq!(lrc.lines[2].text, "Third line");
+        assert_eq!(lrc.lines[2].timestamp_ms, 30000);
+    }
+
+    #[test]
+    fn test_parse_strips_trailing_blank_lines() {
+        let content = "[00:10.00] First line\n[00:20.00] Second line\n[00:30.00]   \n\n   \n";
+        let lrc = Lyrics::parse(content, "test");
+        assert_eq!(lrc.lines.len(), 2);
+        assert_eq!(lrc.lines[1].text, "Second line");
     }
 }
