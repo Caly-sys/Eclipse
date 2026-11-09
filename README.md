@@ -58,6 +58,73 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 
 ---
 
+## ✦ Installation & Setup
+
+Eclipse is 100% local-first and portable. It requires no administrative installers, registry entries, or background updater daemons.
+
+### Option 1: Standalone Portable Executable (Recommended)
+
+1. Download the latest standalone release binary (`eclipse.exe` or `eclipse-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
+2. Move `eclipse.exe` into any preferred directory (for example `C:\Tools\Eclipse` or `%LOCALAPPDATA%\Programs\Eclipse`).
+3. Double-click `eclipse.exe` to launch.
+   - **Tip:** Right-click `eclipse.exe` → **Show more options** → **Send to** → **Desktop (create shortcut)** for easy access from your desktop or taskbar.
+
+> [!NOTE]
+> **Windows Defender SmartScreen Notice:**
+> Because Eclipse is a community open-source binary without an expensive commercial code-signing certificate, Windows SmartScreen may display a *"Windows protected your PC"* popup on first launch. Click **More info** → **Run anyway** to start the application.
+
+---
+
+### Option 2: Building from Source
+
+If you prefer compiling directly from the Rust source code:
+
+#### Prerequisites
+- **Operating System:** Windows 10 or 11 (64-bit)
+- **Rust Toolchain:** [rustup.rs](https://rustup.rs/) (Rust 1.80+ recommended, edition 2021)
+- **C++ Build Tools:** Visual Studio Build Tools with C++ workload (standard for MSVC ABI)
+- **Git:** [git-scm.com](https://git-scm.com/)
+
+#### Clone & Compile
+```powershell
+# 1. Clone the repository
+git clone https://github.com/Caly-sys/Eclipse.git
+cd Eclipse
+
+# 2. Build the optimized release binary
+cargo build --release
+
+# 3. Launch Eclipse
+.\target\release\eclipse.exe
+# or use the bundled quick-launch script:
+.\run.bat
+```
+
+#### Running Tests & Code Quality Checks
+```powershell
+# Run all unit and integration tests (102 tests)
+cargo test --all
+
+# Run strict Clippy linter
+cargo clippy --all-targets -- -D warnings
+```
+
+---
+
+### Data & Configuration Paths
+
+Eclipse keeps all user configuration, local SQLite indexing, and cached lyrics isolated inside your user profile:
+
+| Path | Description |
+|---|---|
+| `%APPDATA%\Eclipse\settings.json` | Persistent user settings: audio outputs, DSP crossfade, transitions, volume leveling, monitored folders, and theme preferences. |
+| `%APPDATA%\Eclipse\library.db` | High-performance SQLite database storing indexed tracks, album metadata, listening stats, and playlists. |
+| `%APPDATA%\Eclipse\lyrics_cache\` | Offline disk cache for plain and synchronized `.lrc` lyrics fetched from LRCLIB. |
+
+To completely reset the player to a fresh state, simply exit the application and delete the `%APPDATA%\Eclipse` directory.
+
+---
+
 ## ✦ Usage
 
 ### 1. Launching Eclipse
@@ -107,34 +174,6 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 | `R` | Cycle Repeat Mode (`Off` → `All` → `One`) |
 | `Ctrl + K` | Focus Global Search |
 | `F11` | Toggle Fullscreen |
-
----
-
-## ✦ Building & Running
-
-### Prerequisites
-- [Rust toolchain](https://rustup.rs/) (1.80+ recommended, edition 2021)
-- Windows 10 or 11
-
-### Quick Start
-```powershell
-# Run in development mode
-cargo run
-
-# Build optimized release binary
-cargo build --release
-
-# Run release build
-.\run.bat
-# or directly:
-.\eclipse.exe
-```
-
-### Running Tests
-```powershell
-cargo test --all
-cargo clippy --all-targets -- -D warnings
-```
 
 ---
 
