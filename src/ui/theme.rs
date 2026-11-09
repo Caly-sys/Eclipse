@@ -179,12 +179,32 @@ impl Theme {
 
     /// Application canvas frame
     pub fn panel_frame(&self) -> Frame {
+        self.panel_frame_with_state(true)
+    }
+
+    /// Application canvas frame adapting to floating (rounded corners with luminous border)
+    /// or maximized/fullscreen (flush square edges)
+    pub fn panel_frame_with_state(&self, is_floating: bool) -> Frame {
+        let (rounding, stroke, inner_margin) = if is_floating {
+            (
+                Rounding::same(12.0_f32),
+                Stroke::new(1.0_f32, self.border_accent),
+                Margin::same(10.0_f32),
+            )
+        } else {
+            (
+                Rounding::ZERO,
+                Stroke::NONE,
+                Margin::same(8.0_f32),
+            )
+        };
+
         Frame {
-            inner_margin: Margin::same(10.0_f32),
+            inner_margin,
             outer_margin: Margin::ZERO,
-            rounding: Rounding::ZERO,
+            rounding,
             fill: self.bg,
-            stroke: Stroke::NONE,
+            stroke,
             shadow: egui::epaint::Shadow::NONE,
         }
     }
@@ -231,6 +251,13 @@ mod tests {
 
         let panel = theme.panel_frame();
         assert_eq!(panel.fill, theme.bg);
+        assert_eq!(panel.rounding, Rounding::same(12.0));
+        assert_eq!(panel.stroke, Stroke::new(1.0_f32, theme.border_accent));
+
+        let panel_max = theme.panel_frame_with_state(false);
+        assert_eq!(panel_max.fill, theme.bg);
+        assert_eq!(panel_max.rounding, Rounding::ZERO);
+        assert_eq!(panel_max.stroke, Stroke::NONE);
     }
 
     #[test]

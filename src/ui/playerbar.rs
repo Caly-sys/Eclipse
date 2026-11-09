@@ -515,8 +515,9 @@ fn render_resize_grip(ui: &mut Ui, theme: &Theme) {
     let is_dragged = resp.dragged();
 
     let is_maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+    let is_fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
 
-    if !is_maximized {
+    if !is_maximized && !is_fullscreen {
         if is_hovered || is_dragged {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeSouthEast);
         }

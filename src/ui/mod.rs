@@ -225,10 +225,12 @@ impl App for UmbraApp {
         let mut on_back = false;
         let mut on_forward = false;
 
-        // Apply dark custom background
-        let central_frame = egui::Frame::none()
-            .fill(self.theme.bg)
-            .inner_margin(egui::Margin::same(10.0_f32));
+        // Apply dark custom background with rounded corners when not fullscreen / not maximized
+        let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        let is_floating = !is_maximized && !is_fullscreen;
+
+        let central_frame = self.theme.panel_frame_with_state(is_floating);
 
         egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 8.0);

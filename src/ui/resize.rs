@@ -50,7 +50,8 @@ pub fn detect_resize_direction(
 /// updates and native window resize initiation for the frameless window.
 pub fn handle_window_resize(ctx: &Context) {
     let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-    if is_maximized {
+    let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+    if is_maximized || is_fullscreen {
         return;
     }
 
@@ -197,5 +198,33 @@ mod tests {
             vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(_)))
         });
         assert!(!has_resize_cmd, "Must NOT send BeginResize when window is maximized");
+    }
+
+    #[test]
+    fn test_handle_window_resize_disabled_when_fullscreen() {
+        let ctx = Context::default();
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        raw_input.viewports.entry(egui::ViewportId::ROOT).or_default().fullscreen = Some(true);
+        raw_input.events.push(egui::Event::PointerMoved(pos2(3.0, 350.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(3.0, 350.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+
+        let full_output = ctx.run(raw_input, |ctx| {
+            handle_window_resize(ctx);
+        });
+
+        assert_ne!(full_output.platform_output.cursor_icon, CursorIcon::ResizeWest);
+
+        let has_resize_cmd = full_output.viewport_output.values().any(|vp| {
+            vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(_)))
+        });
+        assert!(!has_resize_cmd, "Must NOT send BeginResize when window is fullscreen");
     }
 }
