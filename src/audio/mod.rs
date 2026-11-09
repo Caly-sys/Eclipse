@@ -4,7 +4,7 @@ pub mod visualizer;
 pub use engine::AudioEngine;
 pub use visualizer::{AudioTapBuffer, Visualizer};
 
-use crate::config::{AppConfig, RepeatMode};
+use crate::config::{AppConfig, AudioSettings, RepeatMode};
 use crate::library::model::Track;
 use crate::lyrics::{LrclibRecord, Lyrics};
 use rand::seq::SliceRandom;
@@ -42,7 +42,7 @@ impl PlayerController {
 
         let visualizer = Visualizer::new(cfg.visualizer_style, cfg.visualizer_bands, engine.tap_buffer());
 
-        Self {
+        let mut controller = Self {
             engine,
             visualizer,
             queue: Vec::new(),
@@ -59,7 +59,43 @@ impl PlayerController {
             manual_search_rx: ms_rx,
             manual_search_tx: ms_tx,
             shuffled_indices: Vec::new(),
-        }
+        };
+
+        controller.apply_audio_settings(&cfg.audio);
+        controller
+    }
+
+    pub fn apply_audio_settings(&mut self, settings: &AudioSettings) {
+        self.engine.set_output_config(
+            &settings.output_device,
+            settings.buffer_ms,
+            settings.exclusive_mode,
+        );
+        self.engine.set_fade_pause_resume_ms(settings.fade_pause_resume_ms);
+        self.engine.set_crossfade_sec(settings.crossfade_sec);
+        self.engine.set_gapless(settings.gapless_playback);
+
+        let (rg_track, rg_album) = if let Some(track) = self.current_track() {
+            engine::read_replaygain_from_file(Path::new(&track.path))
+        } else {
+            (None, None)
+        };
+
+        self.engine.set_volume_leveling(
+            &settings.volume_leveling,
+            settings.smart_target_lufs,
+            None,
+            rg_track,
+            rg_album,
+        );
+    }
+
+    pub fn play_pause(&mut self) {
+        self.engine.toggle_play_pause();
+    }
+
+    pub fn toggle_playback(&mut self) {
+        self.engine.toggle_play_pause();
     }
 
     pub fn current_track(&self) -> Option<&Track> {
@@ -92,6 +128,17 @@ impl PlayerController {
         self.current_index = Some(index);
         let track = self.queue[index].clone();
         let path = Path::new(&track.path);
+
+        let (rg_track, rg_album) = engine::read_replaygain_from_file(path);
+        let mode = self.engine.volume_leveling_mode().to_string();
+        let target_lufs = self.engine.smart_target_lufs();
+        self.engine.set_volume_leveling(
+            &mode,
+            target_lufs,
+            None,
+            rg_track,
+            rg_album,
+        );
 
         if let Err(e) = self.engine.play_file(path, track.duration_secs) {
             eprintln!("Playback error: {}", e);
@@ -303,6 +350,39 @@ impl PlayerController {
         self.shuffled_indices = indices;
     }
 
+    pub fn peek_next_index(&self) -> Option<usize> {
+        if self.queue.is_empty() {
+            return None;
+        }
+
+        if self.shuffle {
+            if self.shuffled_indices.is_empty() {
+                return None;
+            }
+            if let Some(curr) = self.current_index {
+                if let Some(pos) = self.shuffled_indices.iter().position(|&x| x == curr) {
+                    if pos + 1 < self.shuffled_indices.len() {
+                        return Some(self.shuffled_indices[pos + 1]);
+                    } else if self.repeat == RepeatMode::All {
+                        return self.shuffled_indices.first().copied();
+                    }
+                }
+            } else {
+                return self.shuffled_indices.first().copied();
+            }
+        } else if let Some(curr) = self.current_index {
+            if curr + 1 < self.queue.len() {
+                return Some(curr + 1);
+            } else if self.repeat == RepeatMode::All {
+                return Some(0);
+            }
+        } else {
+            return Some(0);
+        }
+
+        None
+    }
+
     pub fn update(&mut self) {
         // Poll background lyrics
         if let Ok(res) = self.lyrics_rx.try_recv() {
@@ -321,6 +401,22 @@ impl PlayerController {
                 Err(err) => {
                     self.manual_search_results = None;
                     self.manual_search_error = Some(err);
+                }
+            }
+        }
+
+        // Advance crossfade transition if active
+        self.engine.update_crossfade();
+
+        // Gapless pre-queueing when approaching EOF
+        if self.engine.is_gapless()
+            && self.engine.crossfade_sec() == 0.0
+            && !self.engine.has_prequeued()
+            && self.engine.is_approaching_eof(Duration::from_millis(1500))
+        {
+            if let Some(next_idx) = self.peek_next_index() {
+                if let Some(next_track) = self.queue.get(next_idx) {
+                    let _ = self.engine.prequeue_file(Path::new(&next_track.path));
                 }
             }
         }
@@ -496,5 +592,68 @@ mod tests {
         assert!(lyrics.is_synced);
         assert_eq!(lyrics.lines[0].text, "Custom lyrics test");
         assert_eq!(lyrics.lines[0].timestamp_ms, 15000);
+    }
+
+    #[test]
+    fn test_apply_audio_settings() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let settings = AudioSettings {
+            output_device: "System default".to_string(),
+            buffer_ms: 240,
+            exclusive_mode: true,
+            fade_pause_resume_ms: 300,
+            crossfade_sec: 4.0,
+            gapless_playback: false,
+            volume_leveling: "smart_lufs".to_string(),
+            smart_target_lufs: -16.0,
+        };
+
+        player.apply_audio_settings(&settings);
+
+        assert_eq!(player.engine.buffer_ms(), 240);
+        assert!(player.engine.exclusive_mode());
+        assert_eq!(player.engine.fade_pause_resume_ms(), 300);
+        assert_eq!(player.engine.crossfade_sec(), 4.0);
+        assert!(!player.engine.is_gapless());
+        assert_eq!(player.engine.volume_leveling_mode(), "smart_lufs");
+        assert_eq!(player.engine.smart_target_lufs(), -16.0);
+    }
+
+    #[test]
+    fn test_player_play_pause_and_toggle_playback() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        assert!(!player.engine.is_paused());
+        player.toggle_playback();
+        player.play_pause();
+    }
+
+    #[test]
+    fn test_peek_next_index_progression() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+        player.repeat = RepeatMode::Off;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+        ];
+        player.load_queue(tracks, 0);
+
+        assert_eq!(player.peek_next_index(), Some(1));
+
+        player.current_index = Some(1);
+        assert_eq!(player.peek_next_index(), Some(2));
+
+        player.current_index = Some(2);
+        assert_eq!(player.peek_next_index(), None);
+
+        player.repeat = RepeatMode::All;
+        assert_eq!(player.peek_next_index(), Some(0));
     }
 }

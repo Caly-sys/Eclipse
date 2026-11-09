@@ -28,6 +28,7 @@ pub enum NavTab {
     About,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_sidebar(
     ui: &mut Ui,
     current_tab: &mut NavTab,
@@ -36,6 +37,8 @@ pub fn render_sidebar(
     total_tracks: usize,
     total_playlists: usize,
     on_create_playlist: &mut bool,
+    show_spotify: bool,
+    show_youtube: bool,
 ) {
     // Left sidebar fixed width 240px
     ui.set_min_width(240.0);
@@ -75,11 +78,16 @@ pub fn render_sidebar(
                 ui.add_space(8.0);
 
                 // Section 3: STREAM
-                section_header(ui, "STREAM", theme);
-                disabled_stream_item(ui, Icon::Spotify, Color32::from_rgb(30, 215, 96), "Spotify", "Disabled", theme);
-                disabled_stream_item(ui, Icon::YouTube, Color32::from_rgb(255, 68, 68), "YouTube Music", "Disabled", theme);
-
-                ui.add_space(8.0);
+                if show_spotify || show_youtube {
+                    section_header(ui, "STREAM", theme);
+                    if show_spotify {
+                        disabled_stream_item(ui, Icon::Spotify, Color32::from_rgb(30, 215, 96), "Spotify", "Disabled", theme);
+                    }
+                    if show_youtube {
+                        disabled_stream_item(ui, Icon::YouTube, Color32::from_rgb(255, 68, 68), "YouTube Music", "Disabled", theme);
+                    }
+                    ui.add_space(8.0);
+                }
 
                 // Section 4: PLAYLISTS with '+' button
                 ui.horizontal(|ui| {
@@ -505,6 +513,8 @@ mod tests {
                     150,
                     3,
                     &mut on_create,
+                    true,
+                    true,
                 );
 
                 assert_eq!(current_tab, NavTab::Home);

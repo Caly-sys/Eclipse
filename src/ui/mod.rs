@@ -61,7 +61,8 @@ impl UmbraApp {
         let cfg = AppConfig::load();
         let theme = Theme::from_name(&cfg.theme, Some(cfg.accent_color));
         let db = Database::open().expect("Failed to open Umbra database");
-        let player = PlayerController::new(&cfg);
+        let mut player = PlayerController::new(&cfg);
+        player.apply_audio_settings(&cfg.audio);
 
         let (scan_tx, scan_rx) = channel();
 
@@ -297,6 +298,8 @@ impl App for UmbraApp {
                                 self.tracks.len(),
                                 self.playlists.len(),
                                 &mut on_create_sidebar_playlist,
+                                self.cfg.streaming.show_spotify,
+                                self.cfg.streaming.show_youtube_music,
                             );
                         });
                     },
@@ -558,6 +561,7 @@ impl App for UmbraApp {
                                         &mut on_add_folder,
                                         &mut on_theme_changed,
                                     );
+                                    self.player.apply_audio_settings(&self.cfg.audio);
                                 }
                                 NavTab::About => {
                                     render_about(ui, &self.theme);
