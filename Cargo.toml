@@ -1,8 +1,8 @@
 ﻿[package]
-name = "umbra"
+name = "eclipse"
 version = "1.2.0"
 edition = "2021"
-description = "Umbra — music, in the dark. A local-first lossless music player rewritten in Rust."
+description = "Eclipse — music, in the dark. A local-first lossless music player rewritten in Rust."
 authors = ["sadult", "Hype AMD"]
 
 [dependencies]

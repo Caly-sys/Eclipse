@@ -328,13 +328,27 @@ impl Default for AppConfig {
 }
 
 pub fn app_data_dir() -> PathBuf {
-    let dir = std::env::var_os("APPDATA")
+    let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(dirs_home)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Umbra");
-    let _ = fs::create_dir_all(&dir);
-    dir
+        .unwrap_or_else(|| PathBuf::from("."));
+    let eclipse_dir = base.join("Eclipse");
+    let umbra_dir = base.join("Umbra");
+
+    // Seamless migration from legacy Umbra directory if Eclipse doesn't exist yet
+    if !eclipse_dir.exists() && umbra_dir.exists() {
+        let _ = fs::create_dir_all(&eclipse_dir);
+        for item in ["settings.json", "config.json", "library.db"] {
+            let src = umbra_dir.join(item);
+            let dst = eclipse_dir.join(item);
+            if src.is_file() && !dst.exists() {
+                let _ = fs::copy(&src, &dst);
+            }
+        }
+    } else {
+        let _ = fs::create_dir_all(&eclipse_dir);
+    }
+    eclipse_dir
 }
 
 fn dirs_home() -> Option<PathBuf> {
@@ -653,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_save_and_load_from_path() {
-        let temp_dir = std::env::temp_dir().join("umbra_test_config");
+        let temp_dir = std::env::temp_dir().join("eclipse_test_config");
         let temp_file = temp_dir.join("test_settings.json");
 
         let mut cfg = AppConfig::default();

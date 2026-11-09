@@ -1,6 +1,6 @@
 ﻿use egui::{Color32, Frame, Margin, Rounding, Stroke};
 
-/// Central Design Tokens module for Umbra.
+/// Central Design Tokens module for Eclipse.
 /// Defines colors, surfaces, borders, typography, and standard frame geometries
 /// defining the signature dark purple glass aesthetic.
 #[derive(Debug, Clone)]

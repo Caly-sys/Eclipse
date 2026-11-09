@@ -65,7 +65,7 @@ pub fn render_titlebar(
 
         // Bold Uppercase Wordmark
         ui.label(
-            RichText::new("UMBRA")
+            RichText::new("ECLIPSE")
                 .color(theme.text_primary)
                 .size(15.5)
                 .strong(),

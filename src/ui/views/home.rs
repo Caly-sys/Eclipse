@@ -33,7 +33,7 @@ pub fn render_home(
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            RichText::new("UMBRA MUSIC")
+                            RichText::new("ECLIPSE MUSIC")
                                 .size(24.0)
                                 .color(theme.text_primary)
                                 .strong(),

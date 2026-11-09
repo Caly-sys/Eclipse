@@ -314,7 +314,7 @@ pub fn render_settings(
             ui.add_space(12.0);
 
             // 2. Horizontal pill tab bar (7 tabs)
-            let tab_id = egui::Id::new("umbra_settings_active_tab");
+            let tab_id = egui::Id::new("eclipse_settings_active_tab");
             let mut current_tab = ui
                 .ctx()
                 .data_mut(|d| *d.get_temp_mut_or_insert_with(tab_id, SettingsTab::default));
@@ -538,7 +538,7 @@ fn render_appearance_tab(
 }
 
 fn render_audio_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
-    let devices_id = egui::Id::new("umbra_cached_audio_devices");
+    let devices_id = egui::Id::new("eclipse_cached_audio_devices");
     let devices = ui.ctx().data_mut(|d| {
         d.get_temp_mut_or_insert_with(devices_id, list_audio_devices)
             .clone()
@@ -674,7 +674,7 @@ fn render_audio_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
         ui,
         theme,
         "Volume leveling",
-        "ReplayGain from tags, or Smart: Umbra measures each track (EBU R128) as you listen.",
+        "ReplayGain from tags, or Smart: Eclipse measures each track (EBU R128) as you listen.",
         |ui| {
             let options = [
                 ("off", "Off"),
@@ -889,7 +889,7 @@ fn render_library_tab(
                     ui.add_space(2.0);
                     ui.label(
                         RichText::new(
-                            "Umbra scans these directories for lossless and compressed audio.",
+                            "Eclipse scans these directories for lossless and compressed audio.",
                         )
                         .size(11.5)
                         .color(theme.text_secondary),
@@ -1015,7 +1015,7 @@ fn render_library_tab(
         ui,
         theme,
         "Scan on startup",
-        "Automatically index newly added tracks when Umbra launches.",
+        "Automatically index newly added tracks when Eclipse launches.",
         |ui| {
             if pill_toggle_switch(ui, &mut cfg.library.scan_on_startup, theme).changed() {
                 cfg.scan_on_startup = cfg.library.scan_on_startup;
@@ -1238,7 +1238,7 @@ mod tests {
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let theme = Theme::from_name("Eclipse", None);
-                let tab_id = egui::Id::new("umbra_settings_active_tab");
+                let tab_id = egui::Id::new("eclipse_settings_active_tab");
 
                 for tab in SettingsTab::ALL {
                     ui.ctx().data_mut(|d| d.insert_temp(tab_id, tab));

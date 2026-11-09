@@ -1,4 +1,4 @@
-//! Pure vector icon rendering system for Umbra using `egui::Painter`.
+//! Pure vector icon rendering system for Eclipse using `egui::Painter`.
 //! Lucide / Feather aesthetic: 16px-18px native size, stroke width ~1.75, crisp at any DPI.
 //! 100% vector - ZERO Unicode emojis or font-dependent text glyphs.
 

@@ -151,7 +151,7 @@ impl Lyrics {
             }
         }
 
-        // 2. Check local lyrics cache folder (%APPDATA%\Umbra\lyrics_cache)
+        // 2. Check local lyrics cache folder (%APPDATA%\Eclipse\lyrics_cache)
         if let Some(content) = crate::lyrics::lrclib::load_from_cache(track_path) {
             if !content.trim().is_empty() {
                 return Some(Self::parse(&content, "Lyrics Cache"));

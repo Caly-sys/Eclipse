@@ -1,4 +1,4 @@
-# Umbra — music, in the dark.
+# Eclipse — music, in the dark.
 
 A high-performance, local-first lossless music player for Windows rewritten in **pure Rust** with a calm, dark purple glass aesthetic.
 
@@ -20,7 +20,7 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 - **Responsive Layout & Dynamic Grids**:
   - Fixed 240px left sidebar with smooth independent scrolling and full-width library counter.
   - Responsive auto-wrapping grid (`minmax(165px, 1fr)`) for Albums, Artists, and Genres with strict 1:1 square cover art aspect ratios.
-  - Full Umbra Home dashboard with Quick Actions (`Play All`, `Shuffle Library`, `Scan Folder`), 4-card statistics grid, and Recently Played shelf.
+  - Full Eclipse Home dashboard with Quick Actions (`Play All`, `Shuffle Library`, `Scan Folder`), 4-card statistics grid, and Recently Played shelf.
   - 3-column docked Player Bar with album art snippet, transport controls, continuous scrubbing seekbar, and mini spectrum visualizer.
 - **Full Queue Progression**:
   - Sequential playback, non-repeating shuffle permutation, and repeat modes (`Off`, `All`, `One`).
@@ -37,14 +37,14 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 
 ## ✦ Usage
 
-### 1. Launching Umbra
-- Run `./run.bat` or `./umbra.exe` directly.
+### 1. Launching Eclipse
+- Run `./run.bat` or `./eclipse.exe` directly.
 - The player launches in a frameless glass window. Drag anywhere on the empty titlebar to move the window, or drag borders/corners to resize.
 
 ### 2. Scanning Your Music Library
 - On the **Home** dashboard, click **Scan Folder** in the Quick Actions banner, or navigate to **Settings** (`⚙ Settings` in sidebar) → **Library Monitored Folders** and click **Add Folder**.
 - Select the folder containing your audio files (`FLAC`, `MP3`, `WAV`, `OGG`, `AAC`, `M4A`).
-- Umbra will crawl your files, extract metadata (titles, artists, albums, codecs, sample rates) via `lofty`, cache embedded cover art asynchronously, and store the indexed library in SQLite (`%APPDATA%\Umbra\umbra.db`).
+- Eclipse will crawl your files, extract metadata (titles, artists, albums, codecs, sample rates) via `lofty`, cache embedded cover art asynchronously, and store the indexed library in SQLite (`%APPDATA%\Eclipse\library.db`).
 
 ### 3. Browsing Your Music
 - **Home**: Dashboard showing library statistics, quick actions, Recently Played shelf, and top played tracks.
@@ -104,7 +104,7 @@ cargo build --release
 # Run release build
 .\run.bat
 # or directly:
-.\umbra.exe
+.\eclipse.exe
 ```
 
 ### Running Tests
@@ -120,7 +120,7 @@ cargo clippy --all-targets -- -D warnings
 ```
 src/
 ├── main.rs                 # Application entry point & frameless viewport configuration
-├── config.rs               # Persistent user preferences (%APPDATA%\Umbra\config.json)
+├── config.rs               # Persistent user preferences (%APPDATA%\Eclipse\settings.json)
 ├── audio/
 │   ├── engine.rs           # Rodio sink wrapper & non-blocking TapSource PCM interceptor
 │   ├── visualizer.rs       # 2048-sample Hann FFT, log dBFS bins, scope & stereo meters
@@ -150,7 +150,7 @@ src/
 
 ## Acknowledgements
 
-Umbra Rust is an independent Rust reimplementation inspired by [Umbra](https://github.com/sadult/umbra), originally created by **Mersad Shahidi (@Bitologist)**.
+Eclipse is an independent Rust reimplementation inspired by [Umbra](https://github.com/sadult/umbra), originally created by **Mersad Shahidi (@Bitologist)**.
 
 The original project inspired the interface design, music-player concept, and overall user experience.
 

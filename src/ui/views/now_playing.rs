@@ -111,7 +111,7 @@ pub fn render_now_playing(
 
                         ui.add_space(10.0);
 
-                        // Format Badges matching target-umbra.png
+                        // Format Badges matching design spec
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
 

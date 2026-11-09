@@ -26,7 +26,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::Instant;
 
-pub struct UmbraApp {
+pub struct EclipseApp {
     pub cfg: AppConfig,
     pub theme: Theme,
     pub db: Database,
@@ -53,14 +53,16 @@ pub struct UmbraApp {
     status_msg: Option<(String, Instant)>,
 }
 
-impl UmbraApp {
+pub type UmbraApp = EclipseApp;
+
+impl EclipseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let fonts = fonts::setup_custom_fonts();
         cc.egui_ctx.set_fonts(fonts);
 
         let cfg = AppConfig::load();
         let theme = Theme::from_name(&cfg.theme, Some(cfg.accent_color));
-        let db = Database::open().expect("Failed to open Umbra database");
+        let db = Database::open().expect("Failed to open Eclipse database");
         let mut player = PlayerController::new(&cfg);
         player.apply_audio_settings(&cfg.audio);
 
@@ -171,7 +173,7 @@ impl UmbraApp {
     }
 }
 
-impl App for UmbraApp {
+impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // High frame rate during playback for smooth spectrum visualizer
         if self.player.engine.is_playing() || self.is_scanning {
@@ -270,7 +272,7 @@ impl App for UmbraApp {
 
             // 2. MAIN WORKSPACE (Sidebar + Viewport + Queue drawer)
             // Dynamically calculate workspace height leaving exact space for docked bottom playerbar
-            let playerbar_id = egui::Id::new("umbra_docked_playerbar_height");
+            let playerbar_id = egui::Id::new("eclipse_docked_playerbar_height");
             let playerbar_h: f32 = ctx.data(|d| d.get_temp(playerbar_id)).unwrap_or(68.0);
             let workspace_height = (ui.available_height() - playerbar_h - ui.spacing().item_spacing.y).max(100.0);
 

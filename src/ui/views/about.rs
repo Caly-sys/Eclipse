@@ -31,7 +31,7 @@ pub fn render_about(ui: &mut Ui, theme: &Theme) {
             ui.add_space(14.0);
 
             ui.label(
-                RichText::new("UMBRA MUSIC PLAYER")
+                RichText::new("ECLIPSE MUSIC PLAYER")
                     .size(24.0)
                     .color(theme.text_primary)
                     .strong(),
@@ -95,7 +95,7 @@ pub fn render_about(ui: &mut Ui, theme: &Theme) {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(
-                            "Umbra Rust is an independent Rust reimplementation inspired by Umbra, originally created by Mersad Shahidi (@Bitologist).\n\nThe original project inspired the interface design, music-player concept, and overall user experience. The Rust implementation is independently developed and is not officially affiliated with the original author.",
+                            "Eclipse is an independent Rust reimplementation inspired by Umbra, originally created by Mersad Shahidi (@Bitologist).\n\nThe original project inspired the interface design, music-player concept, and overall user experience. The Rust implementation is independently developed and is not officially affiliated with the original author.",
                         )
                         .size(11.5)
                         .color(theme.text_secondary),
