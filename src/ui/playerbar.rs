@@ -19,8 +19,9 @@ pub fn render_playerbar(
     on_toggle_fav: &mut Option<i64>,
     art_manager: &mut AlbumArtManager,
 ) -> egui::Response {
-    let mut frame = theme.glass_frame(12.0);
-    frame.inner_margin = egui::Margin::symmetric(14.0, 8.0);
+    let frame = egui::Frame::none()
+        .fill(Color32::from_rgb(17, 17, 19))
+        .inner_margin(egui::Margin::symmetric(16.0, 8.0));
 
     let inner = frame.show(ui, |ui| {
         let total_w = ui.available_width();
@@ -53,16 +54,16 @@ pub fn render_playerbar(
                             ui.painter().rect_stroke(
                                 rect,
                                 Rounding::same(8.0),
-                                Stroke::new(1.0_f32, theme.border_accent),
+                                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)),
                             );
                             painted_cover = true;
                         }
 
                         if !painted_cover {
-                            ui.painter().rect_filled(rect, Rounding::same(8.0), theme.card);
+                            ui.painter().rect_filled(rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 24));
                             ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0_f32, theme.border));
                             let icon_rect = Rect::from_center_size(rect.center(), vec2(22.0, 22.0));
-                            paint_icon(ui.painter(), Icon::Disc, icon_rect, theme.accent);
+                            paint_icon(ui.painter(), Icon::Disc, icon_rect, theme.text_muted);
                         }
 
                         if cover_resp.hovered() {
@@ -88,7 +89,7 @@ pub fn render_playerbar(
                                 let title_label = ui.add(
                                     egui::Label::new(
                                         RichText::new(title_str)
-                                            .color(theme.text_primary)
+                                            .color(Color32::from_rgb(244, 244, 245))
                                             .size(13.0)
                                             .strong(),
                                     )
@@ -102,15 +103,23 @@ pub fn render_playerbar(
                                 }
 
                                 ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+                                    ui.spacing_mut().item_spacing = vec2(5.0, 0.0);
                                     let artist_str = truncate_str(track.display_artist(), char_limit.saturating_sub(4));
                                     ui.label(
                                         RichText::new(artist_str)
-                                            .color(theme.text_secondary)
+                                            .color(Color32::from_rgb(161, 161, 170))
                                             .size(11.5),
                                     );
 
                                     format_badge(ui, &track.format, track.is_lossless(), theme);
+
+                                    // Subtle dark format spec badge (e.g. 24/48, 16/44)
+                                    if track.sample_rate > 0 {
+                                        let khz = track.sample_rate / 1000;
+                                        let bit_depth = if track.is_lossless() { 24 } else { 16 };
+                                        let spec_badge = format!("{}/{}", bit_depth, khz);
+                                        format_badge(ui, &spec_badge, false, theme);
+                                    }
                                 });
                             },
                         );
@@ -118,7 +127,7 @@ pub fn render_playerbar(
                         // Favorite Heart Button (Clean Vector)
                         let heart_icon = if is_fav { Icon::Heart } else { Icon::HeartOutline };
                         let heart_color = if is_fav {
-                            theme.accent
+                            Color32::WHITE
                         } else {
                             theme.text_muted
                         };
@@ -129,7 +138,7 @@ pub fn render_playerbar(
                     } else {
                         // Empty placeholder
                         let (rect, _) = ui.allocate_exact_size(vec2(48.0, 48.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, Rounding::same(8.0), theme.surface);
+                        ui.painter().rect_filled(rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 24));
                         ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0_f32, theme.border));
                         let icon_rect = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
                         paint_icon(ui.painter(), Icon::Music, icon_rect, theme.text_muted);
@@ -157,7 +166,7 @@ pub fn render_playerbar(
                         ui.spacing_mut().item_spacing = vec2(12.0, 0.0);
 
                         // Shuffle Button
-                        let shuffle_color = if player.shuffle { theme.accent } else { theme.text_muted };
+                        let shuffle_color = if player.shuffle { Color32::WHITE } else { theme.text_muted };
                         if icon_button(ui, Icon::Shuffle, 15.0, shuffle_color)
                             .on_hover_text("Shuffle (S)")
                             .clicked()
@@ -166,49 +175,43 @@ pub fn render_playerbar(
                         }
 
                         // Previous Button
-                        if icon_button(ui, Icon::SkipBack, 15.0, theme.text_primary)
+                        if icon_button(ui, Icon::SkipBack, 15.0, Color32::from_rgb(228, 228, 231))
                             .on_hover_text("Previous (B / Left)")
                             .clicked()
                         {
                             player.prev();
                         }
 
-                        // Big Circular Glowing Play / Pause Button
+                        // Big Circular Solid White Play / Pause Button (40x40px)
                         let is_playing = player.engine.is_playing();
-                        let (play_rect, play_resp) = ui.allocate_exact_size(vec2(38.0, 38.0), egui::Sense::click());
+                        let (play_rect, play_resp) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::click());
 
                         if play_resp.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
 
-                        // Outer ambient glowing halo
-                        let halo_radius = if play_resp.hovered() { 22.0 } else { 19.5 };
+                        let play_fill = if play_resp.is_pointer_button_down_on() {
+                            Color32::from_rgb(220, 220, 220)
+                        } else if play_resp.hovered() {
+                            Color32::from_rgb(240, 240, 242)
+                        } else {
+                            Color32::WHITE
+                        };
+
                         ui.painter().circle_filled(
                             play_rect.center(),
-                            halo_radius,
-                            theme.accent_glow,
+                            20.0,
+                            play_fill,
                         );
 
-                        // Circular button body
-                        ui.painter().circle_filled(
-                            play_rect.center(),
-                            17.0,
-                            theme.accent,
-                        );
-                        ui.painter().circle_stroke(
-                            play_rect.center(),
-                            17.0,
-                            Stroke::new(1.0_f32, Color32::WHITE),
-                        );
-
-                        // Center icon in charcoal dark
+                        // Center icon in deep charcoal dark #0a0a0c
                         let center_icon = if is_playing { Icon::Pause } else { Icon::Play };
-                        let icon_box = Rect::from_center_size(play_rect.center(), vec2(16.0, 16.0));
+                        let icon_box = Rect::from_center_size(play_rect.center(), vec2(17.0, 17.0));
                         paint_icon(
                             ui.painter(),
                             center_icon,
                             icon_box,
-                            Color32::from_rgb(11, 9, 20),
+                            Color32::from_rgb(10, 10, 12),
                         );
 
                         if play_resp.clicked() {
@@ -220,7 +223,7 @@ pub fn render_playerbar(
                         }
 
                         // Next Button
-                        if icon_button(ui, Icon::SkipForward, 15.0, theme.text_primary)
+                        if icon_button(ui, Icon::SkipForward, 15.0, Color32::from_rgb(228, 228, 231))
                             .on_hover_text("Next (N / Right)")
                             .clicked()
                         {
@@ -230,8 +233,8 @@ pub fn render_playerbar(
                         // Repeat Button
                         let (rep_icon, rep_color) = match player.repeat {
                             RepeatMode::Off => (Icon::Repeat, theme.text_muted),
-                            RepeatMode::All => (Icon::Repeat, theme.accent),
-                            RepeatMode::One => (Icon::RepeatOne, theme.accent),
+                            RepeatMode::All => (Icon::Repeat, Color32::WHITE),
+                            RepeatMode::One => (Icon::RepeatOne, Color32::WHITE),
                         };
                         if icon_button(ui, rep_icon, 15.0, rep_color)
                             .on_hover_text("Repeat (R)")
@@ -282,7 +285,7 @@ pub fn render_playerbar(
                     render_resize_grip(ui, theme);
 
                     // View Toggle: Now Playing / Analyzer Toggle
-                    let np_color = if *toggle_now_playing { theme.accent } else { theme.text_secondary };
+                    let np_color = if *toggle_now_playing { Color32::WHITE } else { theme.text_secondary };
                     if icon_button(ui, Icon::BarChart, 15.0, np_color)
                         .on_hover_text("Audio Analyzer (F11)")
                         .clicked()
@@ -291,7 +294,7 @@ pub fn render_playerbar(
                     }
 
                     // View Toggle: Queue Drawer Toggle
-                    let queue_color = if *show_queue { theme.accent } else { theme.text_secondary };
+                    let queue_color = if *show_queue { Color32::WHITE } else { theme.text_secondary };
                     if icon_button(ui, Icon::Queue, 15.0, queue_color)
                         .on_hover_text("Play Queue (Q)")
                         .clicked()
@@ -300,7 +303,7 @@ pub fn render_playerbar(
                     }
 
                     // View Toggle: Mini Player & Desktop Overlay (PiP)
-                    let pip_color = if *show_pip_overlay { theme.accent } else { theme.text_secondary };
+                    let pip_color = if *show_pip_overlay { Color32::WHITE } else { theme.text_secondary };
                     if icon_button(ui, Icon::PictureInPicture, 15.0, pip_color)
                         .on_hover_text("Mini Player & Desktop Overlay (PiP)")
                         .clicked()
@@ -332,7 +335,7 @@ pub fn render_playerbar(
                         Icon::VolumeHigh
                     };
 
-                    let vol_btn_color = if is_muted { theme.accent_warm } else { theme.text_secondary };
+                    let vol_btn_color = if is_muted { Color32::from_rgb(220, 38, 38) } else { theme.text_secondary };
                     if icon_button(ui, vol_icon, 15.0, vol_btn_color)
                         .on_hover_text("Mute / Unmute (M)")
                         .clicked()
@@ -344,13 +347,22 @@ pub fn render_playerbar(
                     render_mini_visualizer(
                         ui,
                         &player.visualizer.band_values,
-                        theme.accent,
+                        Color32::WHITE,
                         vec2(48.0, 22.0),
                     );
                 },
             );
         });
     });
+
+    // Seamless top border: 1px solid rgba(255, 255, 255, 0.06)
+    ui.painter().line_segment(
+        [
+            pos2(inner.response.rect.min.x, inner.response.rect.min.y),
+            pos2(inner.response.rect.max.x, inner.response.rect.min.y),
+        ],
+        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)),
+    );
 
     inner.response
 }
@@ -380,7 +392,7 @@ fn render_custom_seekbar(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    let bar_height = if is_hovered || is_dragged { 6.0 } else { 4.0 };
+    let bar_height = if is_hovered || is_dragged { 4.5 } else { 3.0 };
     let bar_rect = Rect::from_center_size(rect.center(), vec2(rect.width(), bar_height));
     let rounding = Rounding::same(bar_height / 2.0);
 
@@ -402,32 +414,25 @@ fn render_custom_seekbar(
 
     let progress_ratio = (display_pos / max_dur).clamp(0.0, 1.0) as f32;
 
-    // Translucent lavender background rail track
-    let track_bg = Color32::from_rgba_premultiplied(180, 140, 255, 30);
+    // Track background: #27272a
+    let track_bg = Color32::from_rgb(39, 39, 42);
     ui.painter().rect_filled(bar_rect, rounding, track_bg);
 
-    // Neon violet filled progress rail
+    // Solid white progress rail: #ffffff
     let fill_width = bar_rect.width() * progress_ratio;
     if fill_width > 0.0 {
         let fill_rect = Rect::from_min_size(bar_rect.min, vec2(fill_width, bar_height));
-        ui.painter().rect_filled(fill_rect, rounding, theme.accent);
+        ui.painter().rect_filled(fill_rect, rounding, Color32::WHITE);
     }
 
-    // Glowing scrubber knob on hover or drag
+    // Clean white scrubber knob on hover or drag
     if is_hovered || is_dragged {
         let knob_x = bar_rect.min.x + fill_width;
         let knob_pos = pos2(knob_x, bar_rect.center().y);
-        let knob_radius = 6.0;
+        let knob_radius = 5.0;
 
-        // Outer neon violet halo
-        ui.painter().circle_filled(
-            knob_pos,
-            knob_radius + 3.0,
-            theme.accent_glow,
-        );
-        // Crisp white knob body with neon violet border
         ui.painter().circle_filled(knob_pos, knob_radius, Color32::WHITE);
-        ui.painter().circle_stroke(knob_pos, knob_radius, Stroke::new(1.5_f32, theme.accent));
+        ui.painter().circle_stroke(knob_pos, knob_radius, Stroke::new(1.0_f32, Color32::from_rgb(10, 10, 12)));
 
         // Time preview tooltip on hover
         if let Some(hover_pos) = resp.hover_pos() {
@@ -472,7 +477,7 @@ fn render_custom_volume_slider(
         }
     }
 
-    let bar_height = if is_hovered || is_dragged { 5.0 } else { 3.5 };
+    let bar_height = if is_hovered || is_dragged { 4.5 } else { 3.0 };
     let bar_rect = Rect::from_center_size(rect.center(), vec2(rect.width(), bar_height));
     let rounding = Rounding::same(bar_height / 2.0);
 
@@ -491,23 +496,23 @@ fn render_custom_volume_slider(
         vol
     };
 
-    // Translucent rail track
-    let track_bg = Color32::from_rgba_premultiplied(180, 140, 255, 30);
+    // Track background: #27272a
+    let track_bg = Color32::from_rgb(39, 39, 42);
     ui.painter().rect_filled(bar_rect, rounding, track_bg);
 
-    // Neon violet filled volume rail
+    // Solid white volume rail: #ffffff
     let fill_width = bar_rect.width() * effective_vol;
     if fill_width > 0.0 {
         let fill_rect = Rect::from_min_size(bar_rect.min, vec2(fill_width, bar_height));
-        ui.painter().rect_filled(fill_rect, rounding, theme.accent);
+        ui.painter().rect_filled(fill_rect, rounding, Color32::WHITE);
     }
 
     // Volume knob on hover/drag
     if is_hovered || is_dragged {
         let knob_x = bar_rect.min.x + fill_width;
         let knob_pos = pos2(knob_x, bar_rect.center().y);
-        ui.painter().circle_filled(knob_pos, 4.5, Color32::WHITE);
-        ui.painter().circle_stroke(knob_pos, 4.5, Stroke::new(1.0_f32, theme.accent));
+        ui.painter().circle_filled(knob_pos, 4.0, Color32::WHITE);
+        ui.painter().circle_stroke(knob_pos, 4.0, Stroke::new(1.0_f32, Color32::from_rgb(10, 10, 12)));
 
         resp.on_hover_ui(|ui| {
             ui.label(
@@ -520,7 +525,7 @@ fn render_custom_volume_slider(
 }
 
 /// Subtle glass resize grip handle in the bottom-right corner of the docked playerbar.
-fn render_resize_grip(ui: &mut Ui, theme: &Theme) {
+fn render_resize_grip(ui: &mut Ui, _theme: &Theme) {
     let (rect, mut resp) = ui.allocate_exact_size(vec2(12.0, 20.0), egui::Sense::click_and_drag());
     let is_hovered = resp.hovered();
     let is_dragged = resp.dragged();
@@ -547,11 +552,11 @@ fn render_resize_grip(ui: &mut Ui, theme: &Theme) {
     // Render 3 diagonal grip lines /// in the corner
     let painter = ui.painter();
     let color = if is_maximized {
-        Color32::from_rgba_premultiplied(180, 140, 255, 20)
+        Color32::from_rgba_premultiplied(255, 255, 255, 15)
     } else if is_hovered || is_dragged {
-        theme.accent
+        Color32::WHITE
     } else {
-        Color32::from_rgba_premultiplied(180, 140, 255, 75)
+        Color32::from_rgba_premultiplied(255, 255, 255, 45)
     };
 
     let p = rect.right_bottom() - vec2(1.0, 3.0);

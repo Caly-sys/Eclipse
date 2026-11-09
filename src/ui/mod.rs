@@ -223,6 +223,7 @@ impl App for EclipseApp {
         let mut on_create_playlist = None;
         let mut on_delete_playlist = None;
         let mut toggle_now_playing = false;
+        let mut on_navigate = None;
 
         let can_back = self.can_go_back();
         let can_fwd = self.can_go_forward();
@@ -349,6 +350,7 @@ impl App for EclipseApp {
                                         &mut on_play_track,
                                         &mut self.art_manager,
                                         &mut on_trigger_scan,
+                                        &mut on_navigate,
                                     );
                                 }
                                 NavTab::NowPlaying => {
@@ -362,6 +364,7 @@ impl App for EclipseApp {
                                         &mut self.songs_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
                                     );
                                 }
@@ -419,6 +422,7 @@ impl App for EclipseApp {
                                         &mut self.songs_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
                                     );
                                 }
@@ -439,6 +443,7 @@ impl App for EclipseApp {
                                         &mut self.songs_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
                                     );
                                 }
@@ -458,6 +463,7 @@ impl App for EclipseApp {
                                         &mut self.songs_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
                                     );
                                 }
@@ -473,6 +479,7 @@ impl App for EclipseApp {
                                         &mut self.songs_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
                                     );
                                 }
@@ -490,6 +497,7 @@ impl App for EclipseApp {
                                         &mut self.songs_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
                                     );
                                 }
@@ -511,10 +519,15 @@ impl App for EclipseApp {
                                         &mut self.songs_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
                                     );
                                 }
                                 NavTab::Playlists => {
+                                    if self.playlists_state.selected_playlist_id.is_none() && !self.playlists.is_empty() {
+                                        self.playlists_state.selected_playlist_id = Some(self.playlists[0].id);
+                                    }
+
                                     let playlist_tracks = if let Some(pl_id) = self.playlists_state.selected_playlist_id {
                                         self.db.get_playlist_tracks(pl_id).unwrap_or_default()
                                     } else {
@@ -528,31 +541,38 @@ impl App for EclipseApp {
                                         &mut self.playlists_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
+                                        &mut on_toggle_fav,
                                         &mut on_create_playlist,
                                         &mut on_delete_playlist,
                                     );
                                 }
                                 NavTab::Playlist(id) => {
+                                    self.playlists_state.selected_playlist_id = Some(id);
                                     let playlist_tracks = self.db.get_playlist_tracks(id).unwrap_or_default();
-                                    let pl_name = self
+                                    let pl = self
                                         .playlists
                                         .iter()
                                         .find(|p| p.id == id)
-                                        .map(|p| p.name.clone())
-                                        .unwrap_or_else(|| format!("Playlist {}", id));
-                                    let pl_desc = format!("{} tracks in this custom playlist", playlist_tracks.len());
+                                        .cloned()
+                                        .unwrap_or_else(|| Playlist {
+                                            id,
+                                            name: format!("Playlist {}", id),
+                                            created: 0.0,
+                                            description: String::new(),
+                                            track_count: playlist_tracks.len(),
+                                        });
 
-                                    render_songs_view(
+                                    render_playlist_detail(
                                         ui,
-                                        &pl_name,
-                                        &pl_desc,
-                                        Icon::Playlist,
+                                        &pl,
                                         &playlist_tracks,
-                                        &self.search_query,
-                                        &mut self.songs_state,
+                                        &mut self.playlists_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut on_delete_playlist,
                                     );
                                 }
                                 NavTab::Settings => {
@@ -573,6 +593,10 @@ impl App for EclipseApp {
                         });
                     },
                 );
+
+                if let Some(tab) = on_navigate {
+                    self.navigate_to(tab);
+                }
 
                 if on_trigger_scan {
                     self.trigger_scan();

@@ -56,6 +56,7 @@ pub enum Icon {
     BarChart,
     Headphones,
     PictureInPicture,
+    MoreHorizontal,
 }
 
 /// Paint an icon onto any egui `Painter` within the target `Rect`.
@@ -625,6 +626,13 @@ pub fn paint_icon_with_stroke(
             let r_inner = Rect::from_min_max(p(12.0, 11.0), p(19.0, 17.0));
             painter.rect_filled(r_inner, Rounding::same(1.5 * s), color);
         }
+
+        Icon::MoreHorizontal => {
+            let r = 1.6 * s;
+            painter.circle_filled(p(5.0, 12.0), r, color);
+            painter.circle_filled(p(12.0, 12.0), r, color);
+            painter.circle_filled(p(19.0, 12.0), r, color);
+        }
     }
 }
 
@@ -740,6 +748,7 @@ mod tests {
             Icon::BarChart,
             Icon::Headphones,
             Icon::PictureInPicture,
+            Icon::MoreHorizontal,
         ];
 
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(24.0, 24.0));

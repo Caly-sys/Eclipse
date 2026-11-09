@@ -30,21 +30,21 @@ impl Theme {
 
         match name {
             "Obsidian" => {
-                let accent = accent_override.unwrap_or(Color32::from_rgb(179, 136, 255));
+                let accent = accent_override.unwrap_or(Color32::WHITE);
                 Self {
                     name: "Obsidian".into(),
-                    bg: Color32::from_rgb(10, 10, 14),
-                    surface: Color32::from_rgba_premultiplied(18, 18, 26, 200),
-                    surface_hover: Color32::from_rgba_premultiplied(30, 30, 42, 210),
-                    card: Color32::from_rgba_premultiplied(22, 22, 32, 175),
-                    border: Color32::from_rgba_premultiplied(255, 255, 255, 24),
-                    border_accent: Color32::from_rgba_premultiplied(179, 136, 255, 80),
-                    text_primary: Color32::from_rgb(240, 240, 248),
-                    text_secondary: Color32::from_rgb(160, 160, 180),
-                    text_muted: Color32::from_rgb(100, 100, 120),
+                    bg: Color32::from_rgb(10, 10, 12),
+                    surface: Color32::from_rgb(17, 17, 19),
+                    surface_hover: Color32::from_rgb(28, 28, 31),
+                    card: Color32::from_rgb(22, 22, 24),
+                    border: Color32::from_rgba_premultiplied(255, 255, 255, 15),
+                    border_accent: Color32::from_rgba_premultiplied(255, 255, 255, 25),
+                    text_primary: Color32::from_rgb(244, 244, 245),
+                    text_secondary: Color32::from_rgb(161, 161, 170),
+                    text_muted: Color32::from_rgb(113, 113, 122),
                     accent,
-                    accent_glow: Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 90),
-                    accent_warm: Color32::from_rgb(255, 178, 92),
+                    accent_glow: Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 25),
+                    accent_warm: Color32::from_rgb(244, 244, 245),
                 }
             }
             "Glacier" => {
@@ -119,23 +119,23 @@ impl Theme {
                     accent_warm: Color32::from_rgb(255, 178, 92),
                 }
             }
-            // Signature Default: Eclipse (Deep Purple Glass Theme)
+            // Signature Default: Eclipse (Umbra Obsidian Theme)
             _ => {
-                let accent = accent_override.unwrap_or(Color32::from_rgb(179, 136, 255));
+                let accent = accent_override.unwrap_or(Color32::WHITE);
                 Self {
                     name: "Eclipse".into(),
-                    bg: Color32::from_rgb(11, 9, 20),
-                    surface: Color32::from_rgba_premultiplied(20, 16, 34, 190),
-                    surface_hover: Color32::from_rgba_premultiplied(38, 30, 65, 200),
-                    card: Color32::from_rgba_premultiplied(28, 22, 48, 165),
-                    border: Color32::from_rgba_premultiplied(180, 140, 255, 36),
-                    border_accent: Color32::from_rgba_premultiplied(180, 140, 255, 90),
-                    text_primary: Color32::from_rgb(244, 240, 255),
-                    text_secondary: Color32::from_rgb(178, 168, 207),
-                    text_muted: Color32::from_rgb(109, 100, 136),
+                    bg: Color32::from_rgb(10, 10, 12),
+                    surface: Color32::from_rgb(17, 17, 19),
+                    surface_hover: Color32::from_rgb(28, 28, 31),
+                    card: Color32::from_rgb(22, 22, 24),
+                    border: Color32::from_rgba_premultiplied(255, 255, 255, 15),
+                    border_accent: Color32::from_rgba_premultiplied(255, 255, 255, 25),
+                    text_primary: Color32::from_rgb(244, 244, 245),
+                    text_secondary: Color32::from_rgb(161, 161, 170),
+                    text_muted: Color32::from_rgb(113, 113, 122),
                     accent,
-                    accent_glow: Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 90),
-                    accent_warm: Color32::from_rgb(255, 178, 92),
+                    accent_glow: Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 25),
+                    accent_warm: Color32::from_rgb(244, 244, 245),
                 }
             }
         }
@@ -188,7 +188,7 @@ impl Theme {
         let (rounding, stroke, inner_margin) = if is_floating {
             (
                 Rounding::same(12.0_f32),
-                Stroke::new(1.0_f32, self.border_accent),
+                Stroke::new(1.0_f32, self.border),
                 Margin::same(10.0_f32),
             )
         } else {
@@ -217,18 +217,18 @@ mod tests {
     #[test]
     fn test_default_eclipse_theme_tokens() {
         let theme = Theme::from_name("Eclipse", None);
-        assert_eq!(theme.bg, Color32::from_rgb(11, 9, 20));
-        assert_eq!(theme.surface, Color32::from_rgba_premultiplied(20, 16, 34, 190));
-        assert_eq!(theme.card, Color32::from_rgba_premultiplied(28, 22, 48, 165));
-        assert_eq!(theme.surface_hover, Color32::from_rgba_premultiplied(38, 30, 65, 200));
-        assert_eq!(theme.border, Color32::from_rgba_premultiplied(180, 140, 255, 36));
-        assert_eq!(theme.border_accent, Color32::from_rgba_premultiplied(180, 140, 255, 90));
-        assert_eq!(theme.accent, Color32::from_rgb(179, 136, 255));
-        assert_eq!(theme.accent_glow, Color32::from_rgba_premultiplied(179, 136, 255, 90));
-        assert_eq!(theme.accent_warm, Color32::from_rgb(255, 178, 92));
-        assert_eq!(theme.text_primary, Color32::from_rgb(244, 240, 255));
-        assert_eq!(theme.text_secondary, Color32::from_rgb(178, 168, 207));
-        assert_eq!(theme.text_muted, Color32::from_rgb(109, 100, 136));
+        assert_eq!(theme.bg, Color32::from_rgb(10, 10, 12));
+        assert_eq!(theme.surface, Color32::from_rgb(17, 17, 19));
+        assert_eq!(theme.surface_hover, Color32::from_rgb(28, 28, 31));
+        assert_eq!(theme.card, Color32::from_rgb(22, 22, 24));
+        assert_eq!(theme.border, Color32::from_rgba_premultiplied(255, 255, 255, 15));
+        assert_eq!(theme.border_accent, Color32::from_rgba_premultiplied(255, 255, 255, 25));
+        assert_eq!(theme.accent, Color32::WHITE);
+        assert_eq!(theme.accent_glow, Color32::from_rgba_premultiplied(255, 255, 255, 25));
+        assert_eq!(theme.accent_warm, Color32::from_rgb(244, 244, 245));
+        assert_eq!(theme.text_primary, Color32::from_rgb(244, 244, 245));
+        assert_eq!(theme.text_secondary, Color32::from_rgb(161, 161, 170));
+        assert_eq!(theme.text_muted, Color32::from_rgb(113, 113, 122));
     }
 
     #[test]
@@ -252,7 +252,7 @@ mod tests {
         let panel = theme.panel_frame();
         assert_eq!(panel.fill, theme.bg);
         assert_eq!(panel.rounding, Rounding::same(12.0));
-        assert_eq!(panel.stroke, Stroke::new(1.0_f32, theme.border_accent));
+        assert_eq!(panel.stroke, Stroke::new(1.0_f32, theme.border));
 
         let panel_max = theme.panel_frame_with_state(false);
         assert_eq!(panel_max.fill, theme.bg);
@@ -265,6 +265,6 @@ mod tests {
         let custom = [100, 200, 250];
         let theme = Theme::from_name("Eclipse", Some(custom));
         assert_eq!(theme.accent, Color32::from_rgb(100, 200, 250));
-        assert_eq!(theme.accent_glow, Color32::from_rgba_premultiplied(100, 200, 250, 90));
+        assert_eq!(theme.accent_glow, Color32::from_rgba_premultiplied(100, 200, 250, 25));
     }
 }

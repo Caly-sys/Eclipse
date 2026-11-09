@@ -55,7 +55,7 @@ pub fn render_sidebar(
                 ui.add_space(6.0);
 
                 // Section 1: LIBRARY
-                section_header(ui, "LIBRARY", theme);
+                section_header(ui, "LIBRARY", Some(total_tracks), theme);
                 nav_button(ui, current_tab, NavTab::Home, Icon::Home, "Home", theme);
                 nav_button(ui, current_tab, NavTab::NowPlaying, Icon::Disc, "Now Playing", theme);
                 nav_button(ui, current_tab, NavTab::Songs, Icon::Music, "Songs", theme);
@@ -67,7 +67,7 @@ pub fn render_sidebar(
                 ui.add_space(8.0);
 
                 // Section 2: SMART PLAYLISTS
-                section_header(ui, "SMART", theme);
+                section_header(ui, "SMART", Some(6), theme);
                 nav_button(ui, current_tab, NavTab::RecentlyPlayed, Icon::Clock, "Recently Played", theme);
                 nav_button(ui, current_tab, NavTab::MostPlayed, Icon::Fire, "Most Played", theme);
                 nav_button(ui, current_tab, NavTab::RecentlyAdded, Icon::Sparkle, "Recently Added", theme);
@@ -79,38 +79,46 @@ pub fn render_sidebar(
 
                 // Section 3: STREAM
                 if show_spotify || show_youtube {
-                    section_header(ui, "STREAM", theme);
+                    section_header(ui, "STREAM", None, theme);
                     if show_spotify {
-                        disabled_stream_item(ui, Icon::Spotify, Color32::from_rgb(30, 215, 96), "Spotify", "Disabled", theme);
+                        disabled_stream_item(ui, Icon::Spotify, "Spotify", theme);
                     }
                     if show_youtube {
-                        disabled_stream_item(ui, Icon::YouTube, Color32::from_rgb(255, 68, 68), "YouTube Music", "Disabled", theme);
+                        disabled_stream_item(ui, Icon::YouTube, "YouTube Music", theme);
                     }
                     ui.add_space(8.0);
                 }
 
-                // Section 4: PLAYLISTS with '+' button
+                // Section 4: PLAYLISTS with count & '+' button
                 ui.horizontal(|ui| {
-                    section_header_label(ui, "PLAYLISTS", theme);
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("PLAYLISTS")
+                            .size(10.5)
+                            .color(theme.text_muted)
+                            .strong(),
+                    );
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        let (plus_rect, plus_resp) = ui.allocate_exact_size(vec2(22.0, 20.0), egui::Sense::click());
+                        let (plus_rect, plus_resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
                         let plus_bg = if plus_resp.hovered() {
                             theme.surface_hover
                         } else {
-                            theme.card
+                            Color32::TRANSPARENT
                         };
                         let plus_stroke = if plus_resp.hovered() {
-                            Stroke::new(1.0_f32, theme.border_accent)
-                        } else {
                             Stroke::new(1.0_f32, theme.border)
-                        };
-                        ui.painter().rect_filled(plus_rect, Rounding::same(5.0), plus_bg);
-                        ui.painter().rect_stroke(plus_rect, Rounding::same(5.0), plus_stroke);
-                        let icon_rect = Rect::from_center_size(plus_rect.center(), vec2(12.0, 12.0));
-                        let icon_color = if plus_resp.hovered() {
-                            theme.accent
                         } else {
-                            theme.text_secondary
+                            Stroke::NONE
+                        };
+                        ui.painter().rect_filled(plus_rect, Rounding::same(4.0), plus_bg);
+                        if plus_stroke != Stroke::NONE {
+                            ui.painter().rect_stroke(plus_rect, Rounding::same(4.0), plus_stroke);
+                        }
+                        let icon_rect = Rect::from_center_size(plus_rect.center(), vec2(11.0, 11.0));
+                        let icon_color = if plus_resp.hovered() {
+                            theme.text_primary
+                        } else {
+                            theme.text_muted
                         };
                         paint_icon(ui.painter(), Icon::Plus, icon_rect, icon_color);
 
@@ -120,6 +128,13 @@ pub fn render_sidebar(
                         if plus_resp.clicked() {
                             *on_create_playlist = true;
                         }
+
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!("{}", total_playlists))
+                                .size(10.5)
+                                .color(theme.text_muted),
+                        );
                     });
                 });
 
@@ -132,7 +147,7 @@ pub fn render_sidebar(
                 ui.add_space(8.0);
 
                 // Section 5: PREFERENCES & INFO
-                section_header(ui, "PREFERENCES", theme);
+                section_header(ui, "PREFERENCES", None, theme);
                 nav_button(ui, current_tab, NavTab::Settings, Icon::Settings, "Settings", theme);
                 nav_button(ui, current_tab, NavTab::About, Icon::Info, "About", theme);
 
@@ -145,13 +160,13 @@ pub fn render_sidebar(
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
                         let (icon_rect, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
-                        paint_icon(ui.painter(), Icon::Library, icon_rect, theme.accent);
+                        paint_icon(ui.painter(), Icon::Library, icon_rect, theme.text_muted);
 
                         ui.vertical(|ui| {
                             ui.label(
                                 RichText::new(format!("{} Tracks", total_tracks))
                                     .size(11.5)
-                                    .color(theme.text_secondary)
+                                    .color(theme.text_primary)
                                     .strong(),
                             );
                             ui.label(
@@ -168,27 +183,36 @@ pub fn render_sidebar(
     });
 }
 
-fn section_header(ui: &mut Ui, label: &str, theme: &Theme) {
-    ui.add_space(4.0);
-    section_header_label(ui, label, theme);
-    ui.add_space(2.0);
-}
+fn section_header(ui: &mut Ui, label: &str, count: Option<usize>, theme: &Theme) {
+    ui.add_space(6.0);
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 16.0), egui::Sense::hover());
+    let font = egui::FontId::proportional(10.5);
 
-fn section_header_label(ui: &mut Ui, label: &str, theme: &Theme) {
-    ui.label(
-        RichText::new(label)
-            .size(10.0)
-            .color(theme.text_muted)
-            .strong(),
+    ui.painter().text(
+        egui::pos2(rect.min.x + 8.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        theme.text_muted,
     );
+
+    if let Some(c) = count {
+        ui.painter().text(
+            egui::pos2(rect.max.x - 8.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            c.to_string(),
+            font,
+            theme.text_muted,
+        );
+    }
+    ui.add_space(2.0);
 }
 
 fn disabled_stream_item(
     ui: &mut Ui,
     icon: Icon,
-    icon_color: Color32,
     label: &str,
-    badge: &str,
     theme: &Theme,
 ) {
     let width = ui.available_width();
@@ -200,82 +224,18 @@ fn disabled_stream_item(
         ui.ctx().set_cursor_icon(egui::CursorIcon::NotAllowed);
     }
 
-    // 1. Right compact pill badge: font-size 10px, padding 2px 6px, border-radius 4px
-    let badge_font = egui::FontId::proportional(10.0);
-    let badge_text_w = ui
-        .painter()
-        .layout_no_wrap(badge.to_string(), badge_font.clone(), theme.text_muted)
-        .rect
-        .width();
-    let badge_padding_x = 6.0;
-    let badge_w = badge_text_w + badge_padding_x * 2.0;
-    let badge_h = 18.0;
-    let badge_rect = Rect::from_min_size(
-        egui::pos2(rect.max.x - badge_w - 6.0, rect.center().y - badge_h / 2.0),
-        vec2(badge_w, badge_h),
-    );
-
-    let badge_bg = Color32::from_rgba_premultiplied(180, 140, 255, 18);
-    let badge_stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(180, 140, 255, 35));
-    ui.painter().rect_filled(badge_rect, Rounding::same(4.0), badge_bg);
-    ui.painter().rect_stroke(badge_rect, Rounding::same(4.0), badge_stroke);
-    ui.painter().text(
-        badge_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        badge,
-        badge_font,
-        Color32::from_rgba_premultiplied(170, 160, 195, 200),
-    );
-
-    // 2. Clean vector stream icon on left
     let icon_rect = Rect::from_center_size(
-        egui::pos2(rect.min.x + 16.0, rect.center().y),
+        egui::pos2(rect.min.x + 18.0, rect.center().y),
         vec2(16.0, 16.0),
     );
-    // Dim icon slightly to indicate disabled state
-    let muted_icon_color = Color32::from_rgba_premultiplied(
-        icon_color.r() / 2,
-        icon_color.g() / 2,
-        icon_color.b() / 2,
-        180,
-    );
-    paint_icon(ui.painter(), icon, icon_rect, muted_icon_color);
+    paint_icon(ui.painter(), icon, icon_rect, theme.text_muted);
 
-    // 3. Label between icon and badge with clean truncation
-    let text_left = rect.min.x + 32.0;
-    let max_text_width = (badge_rect.min.x - text_left - 8.0).max(20.0);
-    let label_font = egui::FontId::proportional(12.5);
-
-    let full_text_w = ui
-        .painter()
-        .layout_no_wrap(label.to_string(), label_font.clone(), theme.text_muted)
-        .rect
-        .width();
-
-    let display_label = if full_text_w > max_text_width {
-        let mut truncated = String::new();
-        for c in label.chars() {
-            let candidate = format!("{}…", truncated);
-            let w = ui
-                .painter()
-                .layout_no_wrap(candidate, label_font.clone(), theme.text_muted)
-                .rect
-                .width();
-            if w > max_text_width {
-                break;
-            }
-            truncated.push(c);
-        }
-        format!("{}…", truncated)
-    } else {
-        label.to_string()
-    };
-
+    let text_left = rect.min.x + 36.0;
     ui.painter().text(
         egui::pos2(text_left, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        display_label,
-        label_font,
+        label,
+        egui::FontId::proportional(13.0),
         theme.text_muted,
     );
 }
@@ -300,21 +260,22 @@ fn playlist_nav_button(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    // Active pill contrast:
-    // Glowing accent background: rgba(168, 85, 247, 0.18) -> alpha ~46
-    // Purple border: rgba(192, 132, 252, 0.40) -> alpha ~102
-    // Text: #f3e8ff crisp light lavender
-    // Indicator bar: prominent 3px left vertical accent bar indicator #c084fc
+    // Active pill Umbra Obsidian tokens:
+    // Highlight: rgba(255, 255, 255, 0.06) -> Color32::from_rgba_premultiplied(255, 255, 255, 15)
+    // Border: 1px rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
+    // Text: #f4f4f5 Primary
+    // Icon: #ffffff White
+    // Indicator: 3px vertical white bar on left edge
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(168, 85, 247, 46),
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(192, 132, 252, 102)),
-            Color32::from_rgb(243, 232, 255),
-            Color32::from_rgb(192, 132, 252),
+            Color32::from_rgba_premultiplied(255, 255, 255, 15),
+            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
+            Color32::from_rgb(244, 244, 245),
+            Color32::WHITE,
         )
     } else if is_hovered {
         (
-            Color32::from_rgba_premultiplied(180, 140, 255, 20),
+            Color32::from_rgba_premultiplied(255, 255, 255, 10),
             Stroke::new(1.0_f32, theme.border),
             theme.text_primary,
             theme.text_primary,
@@ -333,13 +294,13 @@ fn playlist_nav_button(
         ui.painter().rect_stroke(rect, Rounding::same(8.0), stroke);
     }
 
-    // Prominent 3px left vertical accent bar indicator (#c084fc)
+    // 3px vertical white indicator bar on left edge of active route
     if is_selected {
         let bar_rect = Rect::from_min_size(
-            rect.min + vec2(2.5, 6.0),
-            vec2(3.0, height - 12.0),
+            rect.min + vec2(2.0, 7.0),
+            vec2(3.0, height - 14.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), Color32::from_rgb(192, 132, 252));
+        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), Color32::WHITE);
     }
 
     // Vector playlist icon
@@ -427,21 +388,22 @@ fn nav_button(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    // Active pill contrast:
-    // Glowing accent background: rgba(168, 85, 247, 0.18) -> alpha ~46
-    // Purple border: rgba(192, 132, 252, 0.40) -> alpha ~102
-    // Text: #f3e8ff crisp light lavender
-    // Indicator bar: prominent 3px left vertical accent bar indicator #c084fc
+    // Active pill Umbra Obsidian tokens:
+    // Highlight: rgba(255, 255, 255, 0.06) -> Color32::from_rgba_premultiplied(255, 255, 255, 15)
+    // Border: 1px rgba(255, 255, 255, 0.08) -> Color32::from_rgba_premultiplied(255, 255, 255, 20)
+    // Text: #f4f4f5 Primary
+    // Icon: #ffffff White
+    // Indicator: 3px vertical white bar on left edge
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(168, 85, 247, 46),
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(192, 132, 252, 102)),
-            Color32::from_rgb(243, 232, 255),
-            Color32::from_rgb(192, 132, 252),
+            Color32::from_rgba_premultiplied(255, 255, 255, 15),
+            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
+            Color32::from_rgb(244, 244, 245),
+            Color32::WHITE,
         )
     } else if is_hovered {
         (
-            Color32::from_rgba_premultiplied(180, 140, 255, 20),
+            Color32::from_rgba_premultiplied(255, 255, 255, 10),
             Stroke::new(1.0_f32, theme.border),
             theme.text_primary,
             theme.text_primary,
@@ -460,13 +422,13 @@ fn nav_button(
         ui.painter().rect_stroke(rect, Rounding::same(8.0), stroke);
     }
 
-    // Prominent 3px left vertical accent bar indicator (#c084fc)
+    // 3px vertical white indicator bar on left edge of active route
     if is_selected {
         let bar_rect = Rect::from_min_size(
-            rect.min + vec2(2.5, 6.0),
-            vec2(3.0, height - 12.0),
+            rect.min + vec2(2.0, 7.0),
+            vec2(3.0, height - 14.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), Color32::from_rgb(192, 132, 252));
+        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), Color32::WHITE);
     }
 
     // Clean vector icon (16px)

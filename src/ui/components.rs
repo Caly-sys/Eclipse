@@ -1,4 +1,5 @@
 ﻿use crate::config::VisualizerStyle;
+use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::theme::Theme;
 use egui::{
     pos2, vec2, Color32, Painter, Pos2, Rect, Response, Rounding, Sense, Stroke, Ui,
@@ -6,19 +7,19 @@ use egui::{
 
 pub fn glass_button(ui: &mut Ui, label: &str, is_active: bool, theme: &Theme) -> Response {
     let text_color = if is_active {
-        theme.accent
-    } else {
         theme.text_primary
+    } else {
+        theme.text_secondary
     };
 
     let fill_color = if is_active {
-        theme.accent_glow
+        Color32::from_rgba_premultiplied(255, 255, 255, 18)
     } else {
         theme.card
     };
 
     let stroke = if is_active {
-        Stroke::new(1.0_f32, theme.border_accent)
+        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 25))
     } else {
         Stroke::new(1.0_f32, theme.border)
     };
@@ -31,8 +32,8 @@ pub fn glass_button(ui: &mut Ui, label: &str, is_active: bool, theme: &Theme) ->
     )
     .fill(fill_color)
     .stroke(stroke)
-    .rounding(Rounding::same(8.0_f32))
-    .min_size(vec2(0.0, 32.0));
+    .rounding(Rounding::same(14.0_f32))
+    .min_size(vec2(0.0, 30.0));
 
     ui.add(button)
 }
@@ -40,15 +41,98 @@ pub fn glass_button(ui: &mut Ui, label: &str, is_active: bool, theme: &Theme) ->
 pub fn accent_button(ui: &mut Ui, label: &str, theme: &Theme) -> Response {
     let button = egui::Button::new(
         egui::RichText::new(label)
-            .color(Color32::from_rgb(11, 9, 20))
-            .size(13.5)
+            .color(Color32::from_rgb(10, 10, 12))
+            .size(13.0)
             .strong(),
     )
     .fill(theme.accent)
-    .rounding(Rounding::same(8.0_f32))
-    .min_size(vec2(0.0, 32.0));
+    .rounding(Rounding::same(14.0_f32))
+    .min_size(vec2(0.0, 30.0));
 
     ui.add(button)
+}
+
+/// Solid white #ffffff pill button with #0a0a0c text and icon.
+pub fn white_pill_button(ui: &mut Ui, label: &str, icon: Option<Icon>) -> Response {
+    let font_id = egui::FontId::proportional(12.5);
+    let text_color = Color32::from_rgb(10, 10, 12);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font_id, text_color);
+    let icon_w = if icon.is_some() { 18.0 } else { 0.0 };
+    let padding_x = 14.0;
+    let height = 30.0;
+    let width = galley.rect.width() + icon_w + (padding_x * 2.0);
+
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let bg_color = if resp.is_pointer_button_down_on() {
+        Color32::from_rgb(220, 220, 220)
+    } else if resp.hovered() {
+        Color32::from_rgb(238, 238, 240)
+    } else {
+        Color32::WHITE
+    };
+
+    ui.painter().rect_filled(rect, Rounding::same(15.0), bg_color);
+
+    let mut cur_x = rect.min.x + padding_x;
+    let center_y = rect.center().y;
+
+    if let Some(ic) = icon {
+        let icon_rect = Rect::from_center_size(pos2(cur_x + 7.0, center_y), vec2(14.0, 14.0));
+        paint_icon(ui.painter(), ic, icon_rect, text_color);
+        cur_x += icon_w;
+    }
+
+    let text_pos = pos2(cur_x, center_y - galley.rect.height() / 2.0);
+    ui.painter().galley(text_pos, galley, text_color);
+
+    resp
+}
+
+/// Subtle dark secondary #222226 pill button with #e4e4e7 text and 1px rgba(255, 255, 255, 0.08) border.
+pub fn dark_pill_button(ui: &mut Ui, label: &str, icon: Option<Icon>) -> Response {
+    let font_id = egui::FontId::proportional(12.5);
+    let text_color = Color32::from_rgb(228, 228, 231);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font_id, text_color);
+    let icon_w = if icon.is_some() { 18.0 } else { 0.0 };
+    let padding_x = 14.0;
+    let height = 30.0;
+    let width = galley.rect.width() + icon_w + (padding_x * 2.0);
+
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let bg_color = if resp.is_pointer_button_down_on() {
+        Color32::from_rgb(26, 26, 30)
+    } else if resp.hovered() {
+        Color32::from_rgb(42, 42, 47)
+    } else {
+        Color32::from_rgb(34, 34, 38)
+    };
+
+    let border_color = Color32::from_rgba_premultiplied(255, 255, 255, 20);
+
+    ui.painter().rect_filled(rect, Rounding::same(15.0), bg_color);
+    ui.painter().rect_stroke(rect, Rounding::same(15.0), Stroke::new(1.0_f32, border_color));
+
+    let mut cur_x = rect.min.x + padding_x;
+    let center_y = rect.center().y;
+
+    if let Some(ic) = icon {
+        let icon_rect = Rect::from_center_size(pos2(cur_x + 7.0, center_y), vec2(14.0, 14.0));
+        paint_icon(ui.painter(), ic, icon_rect, text_color);
+        cur_x += icon_w;
+    }
+
+    let text_pos = pos2(cur_x, center_y - galley.rect.height() / 2.0);
+    ui.painter().galley(text_pos, galley, text_color);
+
+    resp
 }
 
 pub fn icon_button(ui: &mut Ui, icon: &str, size: f32, theme: &Theme) -> Response {
@@ -88,12 +172,11 @@ pub fn pill_badge(ui: &mut Ui, text: &str, fill: Color32, text_color: Color32) {
     });
 }
 
-/// High-contrast, bold format badge for audio files (FLAC, MP3, WAV, AAC, etc.).
-/// Lossless formats (FLAC, WAV, ALAC, AIFF) render with bold warm amber text,
-/// a luminous background pill, and a crisp translucent border.
-/// Lossy formats (MP3, AAC, OGG, OPUS) render with crisp high-contrast lilac text,
-/// frosted glass pill fill, and a defined border so format tags are immediately legible.
-pub fn format_badge(ui: &mut Ui, format: &str, is_lossless: bool, theme: &Theme) {
+/// Tiny, elegant, dark bordered pill for audio formats.
+/// Fill: #18181b (Color32::from_rgb(24, 24, 27))
+/// Border: 1px solid rgba(255, 255, 255, 0.08)
+/// Text: #a1a1aa for standard, #f4f4f5 for Hi-Res/lossless.
+pub fn format_badge(ui: &mut Ui, format: &str, is_lossless: bool, _theme: &Theme) {
     let fmt_str = if format.trim().is_empty() {
         "AUDIO"
     } else {
@@ -101,34 +184,26 @@ pub fn format_badge(ui: &mut Ui, format: &str, is_lossless: bool, theme: &Theme)
     }
     .to_uppercase();
 
-    let (text_color, fill_color, stroke_color, font_size) = if is_lossless {
-        (
-            theme.accent_warm, // Warm amber #ffb25c
-            Color32::from_rgba_unmultiplied(theme.accent_warm.r(), theme.accent_warm.g(), theme.accent_warm.b(), 56), // ~22% fill
-            Color32::from_rgba_unmultiplied(theme.accent_warm.r(), theme.accent_warm.g(), theme.accent_warm.b(), 166), // ~65% crisp border
-            11.5_f32,
-        )
+    let text_color = if is_lossless {
+        Color32::from_rgb(244, 244, 245)
     } else {
-        (
-            Color32::from_rgb(235, 228, 255), // Bright high-contrast lilac #ebe4ff
-            Color32::from_rgba_unmultiplied(38, 30, 62, 215), // Frosted glass dark fill
-            Color32::from_rgba_unmultiplied(180, 140, 255, 90), // ~35% crisp border
-            11.0_f32,
-        )
+        Color32::from_rgb(161, 161, 170)
     };
+    let fill_color = Color32::from_rgb(24, 24, 27);
+    let stroke_color = Color32::from_rgba_premultiplied(255, 255, 255, 20);
 
     ui.scope(|ui| {
-        let padding = vec2(7.5, 2.5);
+        let padding = vec2(6.0, 2.0);
         let galley = ui.painter().layout_no_wrap(
             fmt_str,
-            egui::FontId::proportional(font_size),
+            egui::FontId::proportional(10.5),
             text_color,
         );
         let desired_size = galley.size() + padding * 2.0;
         let (rect, _) = ui.allocate_exact_size(desired_size, Sense::hover());
 
-        ui.painter().rect_filled(rect, Rounding::same(6.0_f32), fill_color);
-        ui.painter().rect_stroke(rect, Rounding::same(6.0_f32), Stroke::new(1.0_f32, stroke_color));
+        ui.painter().rect_filled(rect, Rounding::same(4.0_f32), fill_color);
+        ui.painter().rect_stroke(rect, Rounding::same(4.0_f32), Stroke::new(1.0_f32, stroke_color));
         ui.painter().galley(rect.min + padding, galley, text_color);
     });
 }
@@ -295,6 +370,20 @@ mod tests {
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 pill_badge(ui, "24-BIT 48 KHZ", Color32::BLACK, Color32::WHITE);
+            });
+        });
+    }
+
+    #[test]
+    fn test_pill_buttons_rendering() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let resp_white = white_pill_button(ui, "Play All", Some(Icon::Play));
+                assert!(resp_white.rect.width() > 30.0);
+
+                let resp_dark = dark_pill_button(ui, "Shuffle", Some(Icon::Shuffle));
+                assert!(resp_dark.rect.width() > 30.0);
             });
         });
     }

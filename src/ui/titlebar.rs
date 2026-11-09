@@ -47,27 +47,27 @@ pub fn render_titlebar(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
 
-        // App Logo Icon Badge with Ambient Purple Glow
+        // App Logo Icon Badge: Clean monochrome / dark glass
         ui.add_space(2.0);
         let (logo_rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::hover());
         ui.painter().circle_filled(
             logo_rect.center(),
             11.0,
-            theme.accent_glow,
+            Color32::from_rgb(22, 22, 24),
         );
         ui.painter().circle_stroke(
             logo_rect.center(),
             11.0,
-            Stroke::new(1.0_f32, theme.border_accent),
+            Stroke::new(1.0_f32, theme.border),
         );
         let logo_icon_rect = Rect::from_center_size(logo_rect.center(), vec2(13.0, 13.0));
-        paint_icon(ui.painter(), Icon::Sparkle, logo_icon_rect, theme.accent);
+        paint_icon(ui.painter(), Icon::Sparkle, logo_icon_rect, Color32::WHITE);
 
-        // Bold Uppercase Wordmark
+        // Bold Uppercase Spaced Wordmark
         ui.label(
-            RichText::new("ECLIPSE")
+            RichText::new("E C L I P S E D")
                 .color(theme.text_primary)
-                .size(15.5)
+                .size(13.5)
                 .strong(),
         );
 
@@ -82,8 +82,8 @@ pub fn render_titlebar(
                 )
             } else {
                 (
-                    Color32::from_rgba_premultiplied(16, 12, 28, 90),
-                    Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(180, 140, 255, 12)),
+                    Color32::from_rgb(14, 14, 16),
+                    Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 10)),
                     theme.text_muted,
                     egui::Sense::hover(),
                 )
@@ -145,12 +145,12 @@ pub fn render_titlebar(
                 } else {
                     // Pill shortcut badge Ctrl K
                     let badge_frame = egui::Frame::none()
-                        .fill(Color32::from_rgba_premultiplied(180, 140, 255, 25))
-                        .stroke(Stroke::new(1.0_f32, theme.border))
-                        .rounding(Rounding::same(6.0))
-                        .inner_margin(egui::Margin::symmetric(5.0, 1.0));
+                        .fill(Color32::from_rgb(24, 24, 27))
+                        .stroke(Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)))
+                        .rounding(Rounding::same(4.0))
+                        .inner_margin(egui::Margin::symmetric(5.0, 1.5));
                     badge_frame.show(ui, |ui| {
-                        ui.label(RichText::new("Ctrl K").size(9.5).color(theme.text_muted));
+                        ui.label(RichText::new("Ctrl K").size(9.5).color(theme.text_secondary));
                     });
                 }
             });
@@ -165,7 +165,7 @@ pub fn render_titlebar(
             theme.surface
         };
         let scan_stroke = if scan_resp.hovered() {
-            Stroke::new(1.0_f32, theme.border_accent)
+            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 30))
         } else {
             Stroke::new(1.0_f32, theme.border)
         };
@@ -176,7 +176,7 @@ pub fn render_titlebar(
             egui::pos2(scan_rect.min.x + 14.0, scan_rect.center().y),
             vec2(12.0, 12.0),
         );
-        let scan_color = if scan_resp.hovered() { theme.accent } else { theme.text_secondary };
+        let scan_color = if scan_resp.hovered() { theme.text_primary } else { theme.text_secondary };
         paint_icon(ui.painter(), Icon::Refresh, scan_icon_rect, scan_color);
 
         ui.painter().text(
@@ -230,7 +230,7 @@ pub fn render_titlebar(
             let (max_bg, max_stroke, max_color) = if max_resp.hovered() {
                 (
                     theme.surface_hover,
-                    Stroke::new(1.0_f32, theme.border_accent),
+                    Stroke::new(1.0_f32, theme.border),
                     theme.text_primary,
                 )
             } else {
@@ -255,7 +255,7 @@ pub fn render_titlebar(
             let (min_bg, min_stroke, min_color) = if min_resp.hovered() {
                 (
                     theme.surface_hover,
-                    Stroke::new(1.0_f32, theme.border_accent),
+                    Stroke::new(1.0_f32, theme.border),
                     theme.text_primary,
                 )
             } else {
@@ -276,4 +276,36 @@ pub fn render_titlebar(
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_titlebar_renders_without_panic() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let mut search_query = String::new();
+                let mut on_scan = false;
+                let mut focus_search = false;
+                let mut on_back = false;
+                let mut on_forward = false;
+
+                render_titlebar(
+                    ui,
+                    &theme,
+                    &mut search_query,
+                    &mut on_scan,
+                    &mut focus_search,
+                    true,
+                    false,
+                    &mut on_back,
+                    &mut on_forward,
+                );
+            });
+        });
+    }
 }

@@ -16,6 +16,6 @@ pub use folders::{render_folders, FoldersViewState};
 pub use genres::{render_genres, GenresViewState};
 pub use home::render_home;
 pub use now_playing::render_now_playing;
-pub use playlists::{render_playlists, PlaylistsViewState};
+pub use playlists::{render_playlist_detail, render_playlists, PlaylistsViewState};
 pub use settings::render_settings;
-pub use songs::{render_songs, render_songs_view, SongsViewState};
+pub use songs::{render_songs, render_songs_view, render_track_table, SongsViewState};
