@@ -58,6 +58,34 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 
 ---
 
+## ✦ System Requirements
+
+### 1. Hardware & Operating System
+| Component | Minimum Specification | Recommended Specification |
+|---|---|---|
+| **Operating System** | Windows 10 (version 1809+, 64-bit) | Windows 11 (64-bit, 22H2 or newer) |
+| **Processor** | Dual-core 1.6 GHz x86_64 CPU (with SSE2) | Modern Quad-core Intel Core i3 / AMD Ryzen 3 or faster |
+| **Memory (RAM)** | 512 MB available RAM | 2 GB+ RAM (Eclipse averages ~120–250 MB under active playback) |
+| **Storage** | 35 MB free disk space for the executable | SSD storage for local lossless audio files & cover art cache |
+| **Graphics** | DirectX 11 / OpenGL 3.3 compatible GPU or iGPU | Intel UHD 620+, AMD Vega / Radeon, or NVIDIA GTX 900+ |
+| **Audio Output** | Standard WASAPI / DirectSound audio device | Dedicated DAC / AMP or Hi-Fi stereo interface (supports up to 192kHz/24-bit) |
+
+---
+
+### 2. Runtime Dependencies & Prerequisites
+Eclipse is distributed as a **100% self-contained, statically linked binary** with zero external C-runtime installer requirements. Depending on the features you use, the following prerequisites apply:
+
+| Feature | Requirement | Notes |
+|---|---|---|
+| **Local Lossless Audio** | **Zero dependencies** | Works 100% offline. No internet, accounts, or background services required. |
+| **Microsoft Edge WebView2 Runtime** | Pre-installed on Windows 11 and updated Windows 10 | Required for the official YouTube embedded player window (ADR-003). If not present on your system, install the official [Microsoft Evergreen Bootstrapper](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). |
+| **Visual C++ Runtime** | **None** (Statically linked) | CRT is statically linked into `eclipse.exe` (`+crt-static`), eliminating `VCRUNTIME140.dll missing` errors on clean Windows installs. |
+| **Spotify Public Link Importer** | Internet connection | Public embed/oEmbed parser (`open.spotify.com`). **Zero login, zero Spotify Developer account, and zero Client ID required.** |
+| **YouTube Streaming Search & Playback** | Internet connection + Free API Key | A free Google Cloud YouTube Data API v3 key configured in **Settings > Streaming**. |
+| **LRCLIB Synced Lyrics** | Internet connection | Automatically queries LRCLIB for plain and synchronized `.lrc` lyrics with persistent offline disk caching. |
+
+---
+
 ## ✦ Installation & Setup
 
 Eclipse is 100% local-first and portable. It requires no administrative installers, registry entries, or background updater daemons.
