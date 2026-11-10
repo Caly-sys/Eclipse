@@ -15,13 +15,6 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 
 <br/>
 
-### Spotify Public Link Importer
-*Zero-login public link importer with local library matcher, custom playlist saver, and embedded YouTube streaming.*
-
-![Eclipse Spotify Importer](IMG/ss5_spotify_importer.jpg)
-
-<br/>
-
 ### Albums Library
 *Auto-wrapping grid with high-resolution embedded cover art decoding and square aspect ratios.*
 
