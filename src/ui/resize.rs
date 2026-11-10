@@ -55,9 +55,31 @@ pub fn handle_window_resize(ctx: &Context) {
         return;
     }
 
+    // Skip resize handling if an active egui widget has pointer focus or is being hovered/dragged
+    if ctx.wants_pointer_input() {
+        return;
+    }
+
     let screen_rect = ctx.screen_rect();
     if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()) {
+        // Playerbar height docked at the bottom of the window
+        let playerbar_h = 72.0;
+        let is_over_playerbar = pos.y >= screen_rect.max.y - playerbar_h;
+        // Protect the playerbar center controls (seekbar and transport buttons) from South edge resize
+        let center_margin = (screen_rect.width() * 0.2).clamp(120.0, 240.0);
+        let is_playerbar_center = pos.x > screen_rect.min.x + center_margin && pos.x < screen_rect.max.x - center_margin;
+
+        // Skip resize handling entirely if pointer is over the playerbar center
+        if is_over_playerbar && is_playerbar_center {
+            return;
+        }
+
         if let Some((direction, cursor)) = detect_resize_direction(screen_rect, pos, RESIZE_MARGIN) {
+            // South edge resize is skipped if within the center zone
+            if direction == ResizeDirection::South && is_playerbar_center {
+                return;
+            }
+
             ctx.set_cursor_icon(cursor);
 
             if ctx.input(|i| i.pointer.primary_down() && (i.pointer.is_decidedly_dragging() || i.pointer.primary_pressed())) {
@@ -226,5 +248,284 @@ mod tests {
             vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(_)))
         });
         assert!(!has_resize_cmd, "Must NOT send BeginResize when window is fullscreen");
+    }
+
+    #[test]
+    fn test_handle_window_resize_playerbar_center_exempt() {
+        let ctx = Context::default();
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        // Pointer right in the center of the bottom border where the seekbar is located
+        raw_input.events.push(egui::Event::PointerMoved(pos2(500.0, 698.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(500.0, 698.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+
+        let full_output = ctx.run(raw_input, |ctx| {
+            handle_window_resize(ctx);
+        });
+
+        assert_ne!(
+            full_output.platform_output.cursor_icon,
+            CursorIcon::ResizeSouth,
+            "Must NOT set ResizeSouth cursor over playerbar center"
+        );
+
+        let has_resize_cmd = full_output.viewport_output.values().any(|vp| {
+            vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(_)))
+        });
+        assert!(!has_resize_cmd, "Must NOT send BeginResize when clicking in playerbar center");
+    }
+
+    #[test]
+    fn test_handle_window_resize_bottom_outside_center_resizes() {
+        let ctx = Context::default();
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        // Pointer at bottom border, but outside the playerbar center (e.g. x = 50.0, margin is 7.0)
+        // 50.0 is outside corner (x <= 7.0) and outside center (x > 200.0)
+        raw_input.events.push(egui::Event::PointerMoved(pos2(50.0, 698.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(50.0, 698.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+
+        let full_output = ctx.run(raw_input, |ctx| {
+            handle_window_resize(ctx);
+        });
+
+        assert_eq!(
+            full_output.platform_output.cursor_icon,
+            CursorIcon::ResizeSouth,
+            "Must set ResizeSouth cursor on bottom border outside playerbar center"
+        );
+
+        let has_resize_cmd = full_output.viewport_output.values().any(|vp| {
+            vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::South)))
+        });
+        assert!(has_resize_cmd, "Must send BeginResize(South) on bottom border outside playerbar center");
+    }
+
+    #[test]
+    fn test_handle_window_resize_corners_work() {
+        let ctx = Context::default();
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        // Bottom-left corner (x = 2.0, y = 698.0)
+        raw_input.events.push(egui::Event::PointerMoved(pos2(2.0, 698.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(2.0, 698.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+
+        let full_output = ctx.run(raw_input, |ctx| {
+            handle_window_resize(ctx);
+        });
+
+        assert_eq!(full_output.platform_output.cursor_icon, CursorIcon::ResizeSouthWest);
+        let has_resize_cmd = full_output.viewport_output.values().any(|vp| {
+            vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::SouthWest)))
+        });
+        assert!(has_resize_cmd, "Must send BeginResize(SouthWest) on bottom-left corner");
+    }
+
+    #[test]
+    fn test_handle_window_resize_suppressed_when_wants_pointer_input() {
+        let ctx = Context::default();
+        let mut raw_input1 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        raw_input1.events.push(egui::Event::PointerMoved(pos2(3.0, 350.0)));
+
+        // Frame 1: register the widget under the pointer
+        let _ = ctx.run(raw_input1, |ctx| {
+            egui::Area::new(egui::Id::new("overlay_btn"))
+                .fixed_pos(pos2(0.0, 300.0))
+                .show(ctx, |ui| {
+                    let _ = ui.allocate_exact_size(vec2(50.0, 100.0), egui::Sense::click_and_drag());
+                });
+        });
+
+        // Frame 2: mouse click on the widget
+        let mut raw_input2 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        raw_input2.events.push(egui::Event::PointerButton {
+            pos: pos2(3.0, 350.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+
+        let full_output = ctx.run(raw_input2, |ctx| {
+            egui::Area::new(egui::Id::new("overlay_btn"))
+                .fixed_pos(pos2(0.0, 300.0))
+                .show(ctx, |ui| {
+                    let _ = ui.allocate_exact_size(vec2(50.0, 100.0), egui::Sense::click_and_drag());
+                });
+            handle_window_resize(ctx);
+        });
+
+        // When a widget occupies the pointer, resize must be skipped
+        let has_resize_cmd = full_output.viewport_output.values().any(|vp| {
+            vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(_)))
+        });
+        assert!(!has_resize_cmd, "Must NOT send BeginResize when ctx wants pointer input");
+    }
+
+    #[test]
+    fn test_handle_window_resize_all_corners() {
+        let ctx = Context::default();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
+
+        // 1. NorthWest (2.0, 2.0)
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::PointerMoved(pos2(2.0, 2.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(2.0, 2.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let out = ctx.run(raw_input, handle_window_resize);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeNorthWest);
+        assert!(out.viewport_output.values().any(|vp| vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::NorthWest)))));
+
+        // 2. NorthEast top-edge corner (998.0, 1.0)
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::PointerMoved(pos2(998.0, 1.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(998.0, 1.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let out = ctx.run(raw_input, handle_window_resize);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeNorthEast);
+        assert!(out.viewport_output.values().any(|vp| vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::NorthEast)))));
+
+        // 3. SouthEast corner (998.0, 698.0)
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::PointerMoved(pos2(998.0, 698.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(998.0, 698.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let out = ctx.run(raw_input, handle_window_resize);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeSouthEast);
+        assert!(out.viewport_output.values().any(|vp| vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::SouthEast)))));
+    }
+
+    #[test]
+    fn test_handle_window_resize_all_edges() {
+        let ctx = Context::default();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
+
+        // 1. North Edge (500.0, 2.0)
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::PointerMoved(pos2(500.0, 2.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(500.0, 2.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let out = ctx.run(raw_input, handle_window_resize);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeNorth);
+        assert!(out.viewport_output.values().any(|vp| vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::North)))));
+
+        // 2. East Edge (998.0, 350.0)
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::PointerMoved(pos2(998.0, 350.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(998.0, 350.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let out = ctx.run(raw_input, handle_window_resize);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeEast);
+        assert!(out.viewport_output.values().any(|vp| vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::East)))));
+
+        // 3. South Edge Right of Center (950.0, 698.0)
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::PointerMoved(pos2(950.0, 698.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: pos2(950.0, 698.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let out = ctx.run(raw_input, handle_window_resize);
+        assert_eq!(out.platform_output.cursor_icon, CursorIcon::ResizeSouth);
+        assert!(out.viewport_output.values().any(|vp| vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(ResizeDirection::South)))));
+    }
+
+    #[test]
+    fn test_handle_window_resize_playerbar_center_deep_check() {
+        let ctx = Context::default();
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
+
+        // Sample points across playerbar center (x from 250.0 to 750.0, y from 630.0 to 699.0)
+        let test_points = [
+            pos2(300.0, 650.0),
+            pos2(500.0, 660.0), // seekbar area
+            pos2(500.0, 695.0), // bottom border
+            pos2(500.0, 698.0), // bottom-most border margin
+            pos2(700.0, 680.0),
+        ];
+
+        for &pt in &test_points {
+            let mut raw_input = egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            raw_input.events.push(egui::Event::PointerMoved(pt));
+            raw_input.events.push(egui::Event::PointerButton {
+                pos: pt,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            });
+            let out = ctx.run(raw_input, handle_window_resize);
+            assert_ne!(out.platform_output.cursor_icon, CursorIcon::ResizeSouth, "Point {:?} must NOT have ResizeSouth cursor", pt);
+            let has_resize = out.viewport_output.values().any(|vp| vp.commands.iter().any(|cmd| matches!(cmd, ViewportCommand::BeginResize(_))));
+            assert!(!has_resize, "Point {:?} must NOT emit BeginResize command", pt);
+        }
     }
 }

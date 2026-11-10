@@ -4,11 +4,13 @@
 //! 100% pure vector graphics - ZERO Unicode emojis.
 
 use crate::audio::PlayerController;
+use crate::streams::controller::StreamController;
 use crate::ui::art::AlbumArtManager;
 use crate::ui::icons::{icon_button, paint_icon, Icon};
+use crate::ui::playerbar::{current_playback_time, seek_to, SeekbarDragState};
 use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, Stroke, Ui};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Truncate string to `max_chars` with an ellipsis if longer.
 fn truncate_str(s: &str, max_chars: usize) -> String {
@@ -188,6 +190,7 @@ pub fn render_desktop_lyrics(
 pub fn render_pip_card(
     ui: &mut Ui,
     player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     show_pip: &mut bool,
@@ -352,7 +355,7 @@ pub fn render_pip_card(
 
                         // Mini Seekbar: compact seek line (80-120px wide, height 3.5px, filled rail with knob)
                         let seekbar_w = 90.0_f32;
-                        render_mini_seekbar(ui, player, theme, seekbar_w);
+                        render_mini_seekbar(ui, player, stream_controller, theme, seekbar_w);
 
                         // Heart button (Icon::Heart / Icon::HeartOutline, size 14.0px, toggles favorite)
                         let is_fav = current_track.as_ref().map(|t| t.favorite).unwrap_or(false);
@@ -389,6 +392,7 @@ pub fn render_pip_card(
 fn render_mini_seekbar(
     ui: &mut Ui,
     player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
     theme: &Theme,
     desired_width: f32,
 ) {
@@ -397,12 +401,20 @@ fn render_mini_seekbar(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    let pos_secs = player.engine.position().as_secs_f64();
-    let dur_secs = player
-        .current_track()
-        .map(|t| t.duration_secs)
-        .unwrap_or(0.0)
-        .max(0.001);
+    let (pos_secs, dur_secs) = current_playback_time(player, stream_controller);
+    let max_dur = dur_secs.max(0.001);
+
+    let pip_seek_id = egui::Id::new("pip_mini_seekbar");
+    let mut drag_state = ui.data(|d| d.get_temp::<SeekbarDragState>(pip_seek_id)).unwrap_or_default();
+
+    if let (Some(committed_secs), Some(commit_time)) = (drag_state.last_committed_secs, drag_state.last_committed_time) {
+        if commit_time.elapsed() < Duration::from_millis(350) && (pos_secs - committed_secs).abs() > 0.4 {
+            // Hold preview position until engine catches up
+        } else {
+            drag_state.last_committed_secs = None;
+            drag_state.last_committed_time = None;
+        }
+    }
 
     let rail_h = 3.5;
     let rail_rect = Rect::from_center_size(rect.center(), vec2(rect.width(), rail_h));
@@ -415,18 +427,52 @@ fn render_mini_seekbar(
         Color32::from_rgba_premultiplied(255, 255, 255, 38),
     );
 
-    let mut current_pos = pos_secs;
-    if resp.clicked() || resp.dragged() {
+    // Continuous visual scrubbing during drag
+    if resp.drag_started() || resp.dragged() {
+        drag_state.is_dragging = true;
         if let Some(pointer_pos) = resp.interact_pointer_pos() {
             let frac = ((pointer_pos.x - rail_rect.min.x) / rail_rect.width()).clamp(0.0, 1.0);
-            let seek_target = frac as f64 * dur_secs;
-            current_pos = seek_target;
-            player.engine.seek(Duration::from_secs_f64(seek_target));
+            let target = (frac as f64 * max_dur).clamp(0.0, max_dur);
+            drag_state.scrub_secs = target;
         }
+        ui.ctx().request_repaint();
     }
 
+    // Commit seek on release or click
+    if resp.drag_stopped() {
+        let target = drag_state.scrub_secs;
+        seek_to(player, stream_controller, target);
+        drag_state.is_dragging = false;
+        drag_state.last_committed_secs = Some(target);
+        drag_state.last_committed_time = Some(Instant::now());
+        ui.ctx().request_repaint();
+    } else if resp.clicked() {
+        if let Some(pointer_pos) = resp.interact_pointer_pos() {
+            let frac = ((pointer_pos.x - rail_rect.min.x) / rail_rect.width()).clamp(0.0, 1.0);
+            let target = (frac as f64 * max_dur).clamp(0.0, max_dur);
+            seek_to(player, stream_controller, target);
+            drag_state.is_dragging = false;
+            drag_state.scrub_secs = target;
+            drag_state.last_committed_secs = Some(target);
+            drag_state.last_committed_time = Some(Instant::now());
+            ui.ctx().request_repaint();
+        }
+    } else if !resp.dragged() && drag_state.is_dragging {
+        drag_state.is_dragging = false;
+    }
+
+    ui.data_mut(|d| d.insert_temp(pip_seek_id, drag_state));
+
+    let display_pos = if drag_state.is_dragging {
+        drag_state.scrub_secs
+    } else if let Some(committed_secs) = drag_state.last_committed_secs {
+        committed_secs
+    } else {
+        pos_secs
+    };
+
     // Filled progress rail
-    let progress = (current_pos / dur_secs).clamp(0.0, 1.0) as f32;
+    let progress = (display_pos / max_dur).clamp(0.0, 1.0) as f32;
     let fill_w = rail_rect.width() * progress;
     if fill_w > 0.0 {
         let filled_rect = Rect::from_min_size(rail_rect.min, vec2(fill_w, rail_h));
@@ -440,9 +486,11 @@ fn render_mini_seekbar(
 }
 
 /// Render the combined overlay content: desktop synced lyrics placed above the mini-player card.
+#[allow(clippy::too_many_arguments)]
 pub fn render_pip_overlay_content(
     ui: &mut Ui,
     player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     show_pip: &mut bool,
@@ -454,14 +502,16 @@ pub fn render_pip_overlay_content(
             render_desktop_lyrics(ui, player, theme);
             ui.add_space(8.0);
         }
-        render_pip_card(ui, player, theme, art_manager, show_pip, on_toggle_fav);
+        render_pip_card(ui, player, stream_controller, theme, art_manager, show_pip, on_toggle_fav);
     });
 }
 
 /// Display the floating native Picture-in-Picture viewport window.
+#[allow(clippy::too_many_arguments)]
 pub fn show_pip_viewport(
     ctx: &egui::Context,
     player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     show_pip: &mut bool,
@@ -518,6 +568,7 @@ pub fn show_pip_viewport(
                     render_pip_overlay_content(
                         ui,
                         player,
+                        stream_controller,
                         theme,
                         art_manager,
                         show_pip,
@@ -587,6 +638,7 @@ mod tests {
                 let resp = render_pip_card(
                     ui,
                     &mut player,
+                    None,
                     &theme,
                     &mut art_manager,
                     &mut show_pip,
@@ -621,6 +673,7 @@ mod tests {
                 render_pip_card(
                     ui,
                     &mut player,
+                    None,
                     &theme,
                     &mut art_manager,
                     &mut show_pip,
@@ -647,6 +700,7 @@ mod tests {
                 render_pip_overlay_content(
                     ui,
                     &mut player,
+                    None,
                     &theme,
                     &mut art_manager,
                     &mut show_pip,
@@ -658,6 +712,7 @@ mod tests {
                 render_pip_overlay_content(
                     ui,
                     &mut player,
+                    None,
                     &theme,
                     &mut art_manager,
                     &mut show_pip,
@@ -666,5 +721,111 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn test_pip_mini_seekbar_stream() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let stream_ctrl = StreamController::new(vec![]);
+
+                let stream_track = crate::streams::provider::StreamTrack::new(
+                    "sp-pip",
+                    "PiP Stream",
+                    "Artist",
+                    "Album",
+                    210.0,
+                    None,
+                    "spotify:track:pip",
+                    "spotify",
+                );
+                player.switch_to_stream("spotify", Some(stream_track));
+
+                render_mini_seekbar(ui, &mut player, Some(&stream_ctrl), &theme, 90.0);
+            });
+        });
+    }
+
+    #[test]
+    fn test_pip_mini_seekbar_click_and_drag() {
+        let ctx = egui::Context::default();
+        let theme = Theme::from_name("Eclipse", None);
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let stream_ctrl = StreamController::new(vec![]);
+
+        let stream_track = crate::streams::provider::StreamTrack::new(
+            "sp-pip-click",
+            "Track",
+            "Artist",
+            "Album",
+            200.0,
+            None,
+            "spotify:track:click",
+            "spotify",
+        );
+        player.switch_to_stream("spotify", Some(stream_track));
+
+        let pt = pos2(45.0, 8.0); // 50% on 90.0px seekbar
+
+        // Frame 0: Warmup
+        let mut input0 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0))),
+            time: Some(0.0),
+            ..Default::default()
+        };
+        input0.events.push(egui::Event::PointerMoved(pt));
+        let _ = ctx.run(input0, |ctx| {
+            egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
+                render_mini_seekbar(ui, &mut player, Some(&stream_ctrl), &theme, 90.0);
+            });
+        });
+
+        // Frame 1: Pointer pressed
+        let mut input1 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0))),
+            time: Some(1.0),
+            ..Default::default()
+        };
+        input1.events.push(egui::Event::PointerButton {
+            pos: pt,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(input1, |ctx| {
+            egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
+                render_mini_seekbar(ui, &mut player, Some(&stream_ctrl), &theme, 90.0);
+            });
+        });
+
+        // Frame 2: Pointer released -> clicked()
+        let mut input2 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 500.0))),
+            time: Some(1.05),
+            ..Default::default()
+        };
+        input2.events.push(egui::Event::PointerButton {
+            pos: pt,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(input2, |ctx| {
+            egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
+                render_mini_seekbar(ui, &mut player, Some(&stream_ctrl), &theme, 90.0);
+            });
+        });
+
+        let pip_seek_id = egui::Id::new("pip_mini_seekbar");
+        let drag_state = ctx.data(|d| d.get_temp::<SeekbarDragState>(pip_seek_id)).unwrap_or_default();
+        assert!(drag_state.last_committed_secs.is_some(), "PiP mini seekbar click must commit seek");
+        let committed = drag_state.last_committed_secs.unwrap();
+        assert!((committed - 100.0).abs() < 2.0, "Expected seek ~100.0s on 200s track, got {}", committed);
+        assert!(!drag_state.is_dragging);
     }
 }

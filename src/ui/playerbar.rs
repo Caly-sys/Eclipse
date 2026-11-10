@@ -7,7 +7,57 @@ use crate::ui::components::{format_badge, pill_badge, render_mini_visualizer};
 use crate::ui::icons::{icon_button, paint_icon, Icon};
 use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, Stroke, Ui};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Scrubbing and seek commitment state persisted across frames.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SeekbarDragState {
+    pub is_dragging: bool,
+    pub scrub_secs: f64,
+    pub last_committed_secs: Option<f64>,
+    pub last_committed_time: Option<Instant>,
+}
+
+/// Helper returning the effective playback position and duration in seconds.
+pub fn current_playback_time(
+    player: &PlayerController,
+    stream_controller: Option<&StreamController>,
+) -> (f64, f64) {
+    if player.playback_source.is_stream() {
+        let pos = stream_controller
+            .and_then(|sc| sc.active_state.as_ref())
+            .map(|s| s.position_secs)
+            .unwrap_or(0.0);
+        let dur = stream_controller
+            .and_then(|sc| sc.active_state.as_ref())
+            .map(|s| s.duration_secs)
+            .filter(|&d| d > 0.0)
+            .or_else(|| player.active_stream_track.as_ref().map(|t| t.duration_secs))
+            .unwrap_or(0.0);
+        (pos, dur)
+    } else {
+        let pos = player.engine.position().as_secs_f64();
+        let dur = player.current_track().map(|t| t.duration_secs).unwrap_or(0.0);
+        (pos, dur)
+    }
+}
+
+/// Unified seek dispatcher: seeks either the local audio engine or the active stream controller.
+pub fn seek_to(
+    player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
+    target_secs: f64,
+) {
+    let target = target_secs.max(0.0);
+    if player.playback_source.is_stream() {
+        let prov_id = player.stream_provider_id().unwrap_or("spotify");
+        if let Some(sc) = stream_controller {
+            sc.seek(prov_id, target);
+        }
+    } else {
+        player.engine.seek(Duration::from_secs_f64(target));
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_playerbar(
@@ -23,7 +73,7 @@ pub fn render_playerbar(
 ) -> egui::Response {
     let frame = egui::Frame::none()
         .fill(Color32::from_rgb(16, 16, 19)) // #101013
-        .inner_margin(egui::Margin::symmetric(20.0, 8.0)); // padding: 0 20px
+        .inner_margin(egui::Margin::symmetric(20.0, 5.0)); // padding: 5px vertical, 20px horizontal
 
     let is_stream = player.playback_source.is_stream();
     let prov_id = player.stream_provider_id().unwrap_or("spotify").to_string();
@@ -247,10 +297,10 @@ pub fn render_playerbar(
             // 2. CENTER COLUMN: Transport Controls & Seekbar with Timestamps
             // =================================================================
             ui.allocate_ui_with_layout(
-                vec2(center_w, 54.0),
+                vec2(center_w, 58.0),
                 Layout::top_down(egui::Align::Center),
                 |ui| {
-                    ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
+                    ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
 
                     // Top Row: Transport Buttons
                     ui.horizontal(|ui| {
@@ -354,29 +404,34 @@ pub fn render_playerbar(
                     });
 
                     // Bottom Row: Current Timestamp, Seekbar, Duration
-                    let (pos, dur) = if is_stream {
-                        let p = stream_controller.active_state.as_ref().map(|s| s.position_secs).unwrap_or(0.0);
-                        let d = stream_controller
-                            .active_state
-                            .as_ref()
-                            .map(|s| s.duration_secs)
-                            .or_else(|| player.active_stream_track.as_ref().map(|t| t.duration_secs))
-                            .unwrap_or(0.0);
-                        (p, d)
+                    let (pos, dur) = current_playback_time(player, if is_stream { Some(&*stream_controller) } else { None });
+
+                    let seekbar_id = egui::Id::new("eclipse_playerbar_seekbar");
+                    let mut drag_state = ui.data(|d| d.get_temp::<SeekbarDragState>(seekbar_id)).unwrap_or_default();
+
+                    // Check if a committed seek preview is still active to prevent snap-back
+                    if let (Some(committed_secs), Some(commit_time)) = (drag_state.last_committed_secs, drag_state.last_committed_time) {
+                        if commit_time.elapsed() < Duration::from_millis(350) && (pos - committed_secs).abs() > 0.4 {
+                            // Hold preview position until engine catches up
+                        } else {
+                            drag_state.last_committed_secs = None;
+                            drag_state.last_committed_time = None;
+                        }
+                    }
+
+                    let display_pos = if drag_state.is_dragging {
+                        drag_state.scrub_secs
+                    } else if let Some(committed_secs) = drag_state.last_committed_secs {
+                        committed_secs
                     } else {
-                        let p = player.engine.position().as_secs_f64();
-                        let d = player
-                            .current_track()
-                            .map(|t| t.duration_secs)
-                            .unwrap_or(0.0);
-                        (p, d)
+                        pos
                     };
 
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
 
                         ui.label(
-                            RichText::new(format_time_secs(pos))
+                            RichText::new(format_time_secs(display_pos))
                                 .color(theme.text_muted)
                                 .size(11.0),
                         );
@@ -384,12 +439,14 @@ pub fn render_playerbar(
                         let seekbar_w = (center_w - 90.0).max(60.0);
                         render_custom_seekbar(
                             ui,
-                            pos,
+                            display_pos,
                             dur,
                             theme,
                             seekbar_w,
                             player,
-                            if is_stream { Some((prov_id.as_str(), &*stream_controller)) } else { None },
+                            if is_stream { Some(&*stream_controller) } else { None },
+                            seekbar_id,
+                            &mut drag_state,
                         );
 
                         ui.label(
@@ -528,16 +585,19 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_custom_seekbar(
     ui: &mut Ui,
-    pos: f64,
+    display_pos: f64,
     dur: f64,
     theme: &Theme,
     desired_width: f32,
     player: &mut PlayerController,
-    stream_info: Option<(&str, &StreamController)>,
+    stream_controller: Option<&StreamController>,
+    seekbar_id: egui::Id,
+    drag_state: &mut SeekbarDragState,
 ) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 18.0), egui::Sense::click_and_drag());
+    let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 16.0), egui::Sense::click_and_drag());
     let is_hovered = resp.hovered();
     let is_dragged = resp.dragged();
 
@@ -551,25 +611,51 @@ fn render_custom_seekbar(
 
     let max_dur = dur.max(0.001);
 
-    // Continuous scrubbing and direct single-click seeking
-    let display_pos = if is_dragged || resp.clicked() {
+    // Continuous visual scrubbing during drag without flooding seek calls
+    if resp.drag_started() || resp.dragged() {
+        drag_state.is_dragging = true;
         if let Some(pointer_pos) = resp.interact_pointer_pos() {
             let ratio = ((pointer_pos.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
-            let target_secs = ratio as f64 * max_dur;
-            if let Some((prov_id, stream_ctrl)) = stream_info {
-                stream_ctrl.seek(prov_id, target_secs);
-            } else {
-                player.engine.seek(Duration::from_secs_f64(target_secs));
-            }
-            target_secs
-        } else {
-            pos
+            let target_secs = (ratio as f64 * max_dur).clamp(0.0, max_dur);
+            drag_state.scrub_secs = target_secs;
         }
+        ui.ctx().request_repaint();
+    }
+
+    // Commit EXACTLY ONE seek on release or single click
+    if resp.drag_stopped() {
+        let target_secs = drag_state.scrub_secs;
+        seek_to(player, stream_controller, target_secs);
+        drag_state.is_dragging = false;
+        drag_state.last_committed_secs = Some(target_secs);
+        drag_state.last_committed_time = Some(Instant::now());
+        ui.ctx().request_repaint();
+    } else if resp.clicked() {
+        if let Some(pointer_pos) = resp.interact_pointer_pos() {
+            let ratio = ((pointer_pos.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
+            let target_secs = (ratio as f64 * max_dur).clamp(0.0, max_dur);
+            seek_to(player, stream_controller, target_secs);
+            drag_state.is_dragging = false;
+            drag_state.scrub_secs = target_secs;
+            drag_state.last_committed_secs = Some(target_secs);
+            drag_state.last_committed_time = Some(Instant::now());
+            ui.ctx().request_repaint();
+        }
+    } else if !resp.dragged() && drag_state.is_dragging {
+        drag_state.is_dragging = false;
+    }
+
+    ui.data_mut(|d| d.insert_temp(seekbar_id, *drag_state));
+
+    let active_pos = if drag_state.is_dragging {
+        drag_state.scrub_secs
+    } else if let Some(committed_secs) = drag_state.last_committed_secs {
+        committed_secs
     } else {
-        pos
+        display_pos
     };
 
-    let progress_ratio = (display_pos / max_dur).clamp(0.0, 1.0) as f32;
+    let progress_ratio = (active_pos / max_dur).clamp(0.0, 1.0) as f32;
 
     // Track background: #27272a
     let track_bg = Color32::from_rgb(39, 39, 42);
@@ -591,18 +677,23 @@ fn render_custom_seekbar(
         ui.painter().circle_filled(knob_pos, knob_radius, Color32::WHITE);
         ui.painter().circle_stroke(knob_pos, knob_radius, Stroke::new(1.0_f32, Color32::from_rgb(10, 10, 12)));
 
-        // Time preview tooltip on hover
-        if let Some(hover_pos) = resp.hover_pos() {
+        // Time preview tooltip on hover or drag
+        let preview_secs = if is_dragged {
+            active_pos
+        } else if let Some(hover_pos) = resp.hover_pos() {
             let hover_ratio = ((hover_pos.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
-            let hover_secs = hover_ratio as f64 * max_dur;
-            resp.on_hover_ui(|ui| {
-                ui.label(
-                    RichText::new(format_time_secs(hover_secs))
-                        .size(11.0)
-                        .color(theme.text_primary),
-                );
-            });
-        }
+            hover_ratio as f64 * max_dur
+        } else {
+            active_pos
+        };
+
+        resp.on_hover_ui(|ui| {
+            ui.label(
+                RichText::new(format_time_secs(preview_secs))
+                    .size(11.0)
+                    .color(theme.text_primary),
+            );
+        });
     }
 }
 
@@ -614,7 +705,7 @@ fn render_custom_volume_slider(
     stream_info: Option<(&str, &StreamController)>,
 ) {
     let desired_width = 72.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 18.0), egui::Sense::click_and_drag());
+    let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 16.0), egui::Sense::click_and_drag());
     let is_hovered = resp.hovered();
     let is_dragged = resp.dragged();
 
@@ -835,5 +926,413 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn test_current_playback_time_local_and_stream() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let stream_ctrl = StreamController::new(vec![]);
+
+        // 1. Empty local queue
+        let (pos, dur) = current_playback_time(&player, Some(&stream_ctrl));
+        assert_eq!(pos, 0.0);
+        assert_eq!(dur, 0.0);
+
+        // 2. Local track in queue
+        let track = Track {
+            id: 10,
+            path: "local.flac".into(),
+            title: "Local Track".into(),
+            artist: "Artist".into(),
+            album: "Album".into(),
+            genre: "Rock".into(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 245.5,
+            format: "FLAC".into(),
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            favorite: false,
+            has_art: false,
+            folder: "".into(),
+            album_artist: "".into(),
+            play_count: 0,
+            file_size: 1024,
+        };
+        player.load_queue(vec![track], 0);
+        let (_pos, dur) = current_playback_time(&player, Some(&stream_ctrl));
+        assert!((dur - 245.5).abs() < 0.001);
+
+        // 3. Switch to stream: active_state duration is 0, so fallback to active_stream_track
+        let stream_track = crate::streams::provider::StreamTrack::new(
+            "stream-id",
+            "Stream Title",
+            "Stream Artist",
+            "Stream Album",
+            195.0,
+            None,
+            "spotify:track:abc",
+            "spotify",
+        );
+        player.switch_to_stream("spotify", Some(stream_track));
+        let (pos, dur) = current_playback_time(&player, Some(&stream_ctrl));
+        assert_eq!(pos, 0.0);
+        assert!((dur - 195.0).abs() < 0.001, "Duration must fall back to active_stream_track when active_state is 0");
+    }
+
+    #[test]
+    fn test_seek_to_dispatcher_local_and_stream() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let stream_ctrl = StreamController::new(vec![]);
+
+        // 1. Local seek: dispatching does not panic and clamps negative target
+        seek_to(&mut player, Some(&stream_ctrl), -10.0);
+        assert_eq!(player.engine.position().as_secs_f64(), 0.0);
+
+        seek_to(&mut player, Some(&stream_ctrl), 45.0);
+
+        // 2. Stream seek: correctly routes to stream controller
+        let stream_track = crate::streams::provider::StreamTrack::new(
+            "yt-1",
+            "YT Song",
+            "YT Artist",
+            "YT Album",
+            300.0,
+            None,
+            "youtube:v:123",
+            "youtube",
+        );
+        player.switch_to_stream("youtube", Some(stream_track));
+        seek_to(&mut player, Some(&stream_ctrl), 120.0);
+        // Verified: stream seek dispatch succeeded without error
+    }
+
+    #[test]
+    fn test_seekbar_drag_state_math_and_persistence() {
+        let mut drag_state = SeekbarDragState::default();
+        assert!(!drag_state.is_dragging);
+        assert_eq!(drag_state.scrub_secs, 0.0);
+        assert!(drag_state.last_committed_secs.is_none());
+
+        // Simulate dragging
+        drag_state.is_dragging = true;
+        drag_state.scrub_secs = 75.5;
+        assert!(drag_state.is_dragging);
+        assert_eq!(drag_state.scrub_secs, 75.5);
+
+        // Simulate commit on release
+        drag_state.is_dragging = false;
+        drag_state.last_committed_secs = Some(75.5);
+        drag_state.last_committed_time = Some(Instant::now());
+
+        assert!(!drag_state.is_dragging);
+        assert_eq!(drag_state.last_committed_secs, Some(75.5));
+        assert!(drag_state.last_committed_time.is_some());
+    }
+
+    #[test]
+    fn test_seekbar_click_to_seek_and_anti_snapback() {
+        let ctx = egui::Context::default();
+        let theme = Theme::from_name("Eclipse", None);
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let seekbar_id = egui::Id::new("eclipse_playerbar_seekbar");
+        let mut drag_state = SeekbarDragState::default();
+
+        let dur = 200.0;
+        let display_pos = 0.0;
+
+        // Frame 0: Layout & pointer position at 50% seek point
+        // Inside CentralPanel with 0 margin, x ranges [0.0, 200.0], y ranges [0.0, 16.0]
+        let pt = pos2(100.0, 8.0);
+        let mut input0 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.0),
+            ..Default::default()
+        };
+        input0.events.push(egui::Event::PointerMoved(pt));
+        let _ = ctx.run(input0, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        // Frame 1: Pointer pressed down on seekbar at 50%
+        let mut input1 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(1.0),
+            ..Default::default()
+        };
+        input1.events.push(egui::Event::PointerButton {
+            pos: pt,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(input1, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        // Frame 2: Pointer released -> clicked() fires!
+        let mut input2 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(1.05),
+            ..Default::default()
+        };
+        input2.events.push(egui::Event::PointerButton {
+            pos: pt,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(input2, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        // Verify click committed target secs (approx 100.0s for 50% of 200s)
+        assert!(drag_state.last_committed_secs.is_some(), "Single click must set last_committed_secs");
+        let committed = drag_state.last_committed_secs.unwrap();
+        assert!((committed - 100.0).abs() < 2.0, "Expected seek ~100.0s, got {}", committed);
+        assert!(!drag_state.is_dragging, "is_dragging must be false after click");
+
+        // Anti-snapback check: committed time is recent (< 350ms)
+        assert!(drag_state.last_committed_time.is_some());
+        let elapsed = drag_state.last_committed_time.unwrap().elapsed();
+        assert!(elapsed < Duration::from_millis(350));
+    }
+
+    #[test]
+    fn test_seekbar_drag_scrubbing_no_per_frame_seeks_and_single_commit() {
+        let ctx = egui::Context::default();
+        let theme = Theme::from_name("Eclipse", None);
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let seekbar_id = egui::Id::new("eclipse_playerbar_seekbar");
+        let mut drag_state = SeekbarDragState::default();
+
+        let dur = 200.0;
+        let display_pos = 0.0;
+        let pt1 = pos2(20.0, 8.0);
+        let pt2 = pos2(100.0, 8.0);
+        let pt3 = pos2(150.0, 8.0);
+
+        // Frame 0: Layout & set initial pointer position at 20px (10%)
+        let mut input0 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.0),
+            ..Default::default()
+        };
+        input0.events.push(egui::Event::PointerMoved(pt1));
+        let _ = ctx.run(input0, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        // Frame 1: Pointer down at 20px
+        let mut input1 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(1.0),
+            ..Default::default()
+        };
+        input1.events.push(egui::Event::PointerButton {
+            pos: pt1,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(input1, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        // Frame 2: Drag moved to 100px (50%)
+        let mut input2 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(1.05),
+            ..Default::default()
+        };
+        input2.events.push(egui::Event::PointerMoved(pt2));
+        let _ = ctx.run(input2, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        // Verify while dragging: is_dragging is true, scrub_secs updated, last_committed_secs is None
+        assert!(drag_state.is_dragging, "Must be in dragging state during drag");
+        assert!((drag_state.scrub_secs - 100.0).abs() < 2.0, "Scrub preview must update to ~100s, got {}", drag_state.scrub_secs);
+        assert!(drag_state.last_committed_secs.is_none(), "NO seek should be committed while actively dragging");
+
+        // Frame 3: Drag moved to 150px (75%)
+        let mut input3 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(1.10),
+            ..Default::default()
+        };
+        input3.events.push(egui::Event::PointerMoved(pt3));
+        let _ = ctx.run(input3, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        assert!(drag_state.is_dragging);
+        assert!((drag_state.scrub_secs - 150.0).abs() < 2.0, "Scrub preview must update to ~150s, got {}", drag_state.scrub_secs);
+        assert!(drag_state.last_committed_secs.is_none());
+
+        // Frame 4: Drag released (button up) -> drag_stopped fires!
+        let mut input4 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(1.15),
+            ..Default::default()
+        };
+        input4.events.push(egui::Event::PointerButton {
+            pos: pt3,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(input4, |ctx| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    render_custom_seekbar(
+                        ui,
+                        display_pos,
+                        dur,
+                        &theme,
+                        200.0,
+                        &mut player,
+                        None,
+                        seekbar_id,
+                        &mut drag_state,
+                    );
+                });
+        });
+
+        // Verify commit on drag release:
+        assert!(!drag_state.is_dragging, "is_dragging must become false on release");
+        assert!(drag_state.last_committed_secs.is_some(), "Exactly one seek committed on release");
+        let committed = drag_state.last_committed_secs.unwrap();
+        assert!((committed - 150.0).abs() < 2.0, "Committed seek position must match scrub_secs (~150s), got {}", committed);
+        assert!(drag_state.last_committed_time.is_some(), "Commit timestamp must be recorded");
+    }
+
+    #[test]
+    fn test_seekbar_anti_snapback_expiration() {
+        let mut drag_state = SeekbarDragState {
+            is_dragging: false,
+            scrub_secs: 120.0,
+            last_committed_secs: Some(120.0),
+            last_committed_time: Some(Instant::now() - Duration::from_millis(400)), // expired (> 350ms)
+        };
+
+        let pos = 10.0; // Stale engine position
+
+        // Simulate lines 413-420 of playerbar.rs
+        if let (Some(committed_secs), Some(commit_time)) = (drag_state.last_committed_secs, drag_state.last_committed_time) {
+            if commit_time.elapsed() < Duration::from_millis(350) && (pos - committed_secs).abs() > 0.4 {
+                // Hold preview
+            } else {
+                drag_state.last_committed_secs = None;
+                drag_state.last_committed_time = None;
+            }
+        }
+
+        assert!(drag_state.last_committed_secs.is_none(), "Committed preview must expire after 350ms");
+        assert!(drag_state.last_committed_time.is_none());
     }
 }

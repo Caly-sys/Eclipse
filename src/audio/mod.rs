@@ -1,4 +1,5 @@
 ﻿pub mod engine;
+pub mod symphonia_decoder;
 pub mod visualizer;
 
 pub use engine::AudioEngine;

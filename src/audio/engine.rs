@@ -1,4 +1,5 @@
-﻿use crate::audio::visualizer::AudioTapBuffer;
+﻿use crate::audio::symphonia_decoder::SymphoniaDecoderSource;
+use crate::audio::visualizer::AudioTapBuffer;
 use lofty::file::TaggedFileExt;
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
@@ -9,6 +10,26 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Decodes an audio file into a sample source.
+/// First attempts high-fidelity decoding and seeking via Symphonia. If that fails
+/// (e.g. For unsupported exotic containers), falls back gracefully to rodio's decoder.
+fn decode_audio_file(path: &Path) -> Result<Box<dyn Source<Item = f32> + Send>, String> {
+    match SymphoniaDecoderSource::open_file(path) {
+        Ok(source) => Ok(Box::new(source)),
+        Err(symphonia_err) => {
+            eprintln!(
+                "Notice: Symphonia decoder could not open '{}' ({}); falling back to rodio decoder",
+                path.display(),
+                symphonia_err
+            );
+            let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
+            let reader = BufReader::new(file);
+            let source = Decoder::new(reader).map_err(|e| format!("Failed to decode audio: {}", e))?;
+            Ok(Box::new(source.convert_samples::<f32>()))
+        }
+    }
+}
 
 pub struct TapSource<S> {
     input: S,
@@ -207,6 +228,9 @@ pub struct AudioEngine {
     replaygain_album_db: Option<f32>,
     normalization_factor: f32,
     normalization_bits: Arc<AtomicU32>,
+
+    // Seek status and error diagnostics
+    last_seek_error: Option<String>,
 }
 
 impl AudioEngine {
@@ -246,6 +270,7 @@ impl AudioEngine {
             replaygain_album_db: None,
             normalization_factor: 1.0,
             normalization_bits: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            last_seek_error: None,
         }
     }
 
@@ -338,10 +363,25 @@ impl AudioEngine {
         pos: Duration,
         was_paused: bool,
     ) -> Result<(), String> {
-        let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let reader = BufReader::new(file);
-        let source = Decoder::new(reader).map_err(|e| format!("Failed to decode audio: {}", e))?;
-        let f32_source = source.convert_samples::<f32>();
+        let mut source = decode_audio_file(path)?;
+
+        if !pos.is_zero() {
+            if let Err(e) = source.try_seek(pos) {
+                eprintln!(
+                    "Warning: source.try_seek to {:?} failed in restore_playback: {:?}. Fast-forwarding samples...",
+                    pos, e
+                );
+                let channels = source.channels().max(1) as u64;
+                let sample_rate = source.sample_rate().max(1) as u64;
+                let samples_to_skip =
+                    (pos.as_secs_f64() * sample_rate as f64 * channels as f64) as usize;
+                for _ in 0..samples_to_skip {
+                    if source.next().is_none() {
+                        break;
+                    }
+                }
+            }
+        }
 
         if let Some(ref handle) = self.stream_handle {
             let new_sink = Sink::try_new(handle)
@@ -351,7 +391,7 @@ impl AudioEngine {
             new_sink.set_volume(effective_vol);
 
             let tapped = TapSource::new_with_normalization(
-                f32_source,
+                source,
                 self.tap_buffer.clone(),
                 self.normalization_bits.clone(),
             );
@@ -373,11 +413,17 @@ impl AudioEngine {
                 self.is_paused = false;
             }
 
+            if let Some(old_sink) = self.sink.take() {
+                old_sink.stop();
+            }
+
             self.sink = Some(new_sink);
             self.track_duration = Duration::from_secs_f64(duration_secs);
             self.current_path = Some(path.to_path_buf());
             self.current_duration_secs = duration_secs;
             self.prequeued = false;
+            self.fade_transition = None;
+            self.last_seek_error = None;
             Ok(())
         } else {
             Err("No audio output device available".to_string())
@@ -496,14 +542,11 @@ impl AudioEngine {
         if self.prequeued {
             return Ok(());
         }
-        let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let reader = BufReader::new(file);
-        let source = Decoder::new(reader).map_err(|e| format!("Failed to decode audio: {}", e))?;
-        let f32_source = source.convert_samples::<f32>();
+        let source = decode_audio_file(path)?;
 
         if let Some(ref sink) = self.sink {
             let tapped = TapSource::new_with_normalization(
-                f32_source,
+                source,
                 self.tap_buffer.clone(),
                 self.normalization_bits.clone(),
             );
@@ -519,7 +562,16 @@ impl AudioEngine {
         if self.track_duration.is_zero() || self.is_paused {
             return false;
         }
-        if let Some(start) = self.start_instant {
+        if self.prequeued {
+            if let Some(ref sink) = self.sink {
+                // If a track was prequeued, sink.len() was 2. When the first track
+                // finishes playing in the audio thread, Done decrements sound_count to 1.
+                return sink.len() <= 1;
+            }
+        }
+        if let Some(ref sink) = self.sink {
+            sink.empty()
+        } else if let Some(start) = self.start_instant {
             start.elapsed() + self.pause_offset >= self.track_duration
         } else {
             false
@@ -534,6 +586,7 @@ impl AudioEngine {
         self.pause_offset = Duration::ZERO;
         self.prequeued = false;
         self.fade_transition = None;
+        self.last_seek_error = None;
     }
 
     pub fn update_crossfade(&mut self) {
@@ -598,10 +651,7 @@ impl AudioEngine {
     }
 
     pub fn play_file(&mut self, path: &Path, duration_secs: f64) -> Result<(), String> {
-        let file = File::open(path).map_err(|e| format!("Failed to open file: {}", e))?;
-        let reader = BufReader::new(file);
-        let source = Decoder::new(reader).map_err(|e| format!("Failed to decode audio: {}", e))?;
-        let f32_source = source.convert_samples::<f32>();
+        let source = decode_audio_file(path)?;
 
         if let Some(ref handle) = self.stream_handle {
             let effective_vol = if self.muted { 0.0 } else { self.volume };
@@ -637,7 +687,7 @@ impl AudioEngine {
             }
 
             let tapped = TapSource::new_with_normalization(
-                f32_source,
+                source,
                 self.tap_buffer.clone(),
                 self.normalization_bits.clone(),
             );
@@ -652,6 +702,7 @@ impl AudioEngine {
             self.pause_offset = Duration::ZERO;
             self.is_paused = false;
             self.prequeued = false;
+            self.last_seek_error = None;
             Ok(())
         } else {
             Err("No audio output device available".to_string())
@@ -754,31 +805,116 @@ impl AudioEngine {
         self.current_duration_secs = 0.0;
         self.prequeued = false;
         self.fade_transition = None;
+        self.last_seek_error = None;
+    }
+
+    pub fn last_seek_error(&self) -> Option<&str> {
+        self.last_seek_error.as_deref()
+    }
+
+    pub fn clear_seek_error(&mut self) {
+        self.last_seek_error = None;
     }
 
     pub fn seek(&mut self, pos: Duration) {
+        // 1. Crossfade interruption: stop outgoing crossfade sink and immediately
+        // restore primary sink volume to target volume to avoid being stuck in an attenuated state.
         if let Some((old_sink, _, _)) = self.crossfade_sink.take() {
             old_sink.stop();
         }
         if let Some(ref sink) = self.sink {
-            let _ = sink.try_seek(pos);
+            let effective_vol = if self.muted { 0.0 } else { self.volume };
+            sink.set_volume(effective_vol);
+        }
+        self.fade_transition = None;
+
+        // 2. Pre-queue flush: if a next track was already prequeued into the sink queue,
+        // seeking in the current track requires discarding the prequeued track so it does not
+        // start unexpectedly. Recreate playback for the current track seeked to `pos`.
+        if self.prequeued {
+            self.prequeued = false;
+            if let Some(path) = self.current_path.clone() {
+                let dur = self.current_duration_secs;
+                let paused = self.is_paused;
+                if let Err(e) = self.restore_playback(&path, dur, pos, paused) {
+                    eprintln!("Warning: failed to restore playback on seek with prequeue: {}", e);
+                    self.last_seek_error = Some(format!("Seek with prequeue failed: {}", e));
+                } else {
+                    self.last_seek_error = None;
+                    if let Ok(mut tap) = self.tap_buffer.lock() {
+                        tap.clear();
+                    }
+                    return;
+                }
+            }
+        }
+
+        // 3. In-place seek attempt on existing active sink (only if sink is not finished/empty)
+        let mut seek_succeeded = false;
+        if let Some(ref sink) = self.sink {
+            if !sink.empty() {
+                match sink.try_seek(pos) {
+                    Ok(()) => {
+                        seek_succeeded = true;
+                        self.last_seek_error = None;
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "Warning: in-place sink.try_seek to {:?} failed: {:?}. Attempting fallback reopen-and-seek...",
+                            pos, err
+                        );
+                    }
+                }
+            }
+        }
+
+        // 4. Robust fallback: if in-place seek failed or no sink was present, recreate the sink
+        // and decode/fast-forward to the target position so seeking never silently fails.
+        if !seek_succeeded {
+            if let Some(path) = self.current_path.clone() {
+                let dur = self.current_duration_secs;
+                let paused = self.is_paused;
+                match self.restore_playback(&path, dur, pos, paused) {
+                    Ok(()) => {
+                        seek_succeeded = true;
+                        self.last_seek_error = None;
+                    }
+                    Err(err) => {
+                        eprintln!("Error: fallback seek failed for '{}': {}", path.display(), err);
+                        self.last_seek_error = Some(format!("Seek failed: {}", err));
+                    }
+                }
+            }
+        }
+
+        // 5. Update position state ONLY after confirmed successful seek
+        if seek_succeeded {
             self.pause_offset = pos;
             if !self.is_paused {
                 self.start_instant = Some(Instant::now());
+            } else {
+                self.start_instant = None;
             }
             if let Ok(mut tap) = self.tap_buffer.lock() {
                 tap.clear();
             }
-            self.fade_transition = None;
         }
     }
 
     pub fn position(&self) -> Duration {
         if self.is_paused {
             self.pause_offset
+        } else if let Some(ref sink) = self.sink {
+            let sink_pos = sink.get_pos();
+            if !sink_pos.is_zero() {
+                sink_pos.min(self.track_duration)
+            } else if let Some(start) = self.start_instant {
+                (self.pause_offset + start.elapsed()).min(self.track_duration)
+            } else {
+                self.pause_offset
+            }
         } else if let Some(start) = self.start_instant {
-            let elapsed = start.elapsed();
-            (self.pause_offset + elapsed).min(self.track_duration)
+            (self.pause_offset + start.elapsed()).min(self.track_duration)
         } else {
             self.pause_offset
         }
@@ -959,5 +1095,386 @@ mod tests {
         assert!(!engine.is_gapless());
         engine.set_gapless(true);
         assert!(engine.is_gapless());
+    }
+
+    #[test]
+    fn test_position_math_and_clamp() {
+        let mut engine = AudioEngine::new();
+        engine.track_duration = Duration::from_secs(180);
+
+        // Initially zero
+        assert_eq!(engine.position(), Duration::ZERO);
+
+        // Paused state
+        engine.is_paused = true;
+        engine.pause_offset = Duration::from_secs(45);
+        assert_eq!(engine.position(), Duration::from_secs(45));
+
+        // When paused, position does not advance with elapsed time
+        assert_eq!(engine.position(), Duration::from_secs(45));
+
+        // Clamping to track duration
+        engine.pause_offset = Duration::from_secs(200);
+        assert_eq!(engine.position(), Duration::from_secs(200)); // offset itself when paused
+        engine.is_paused = false;
+        engine.start_instant = Some(Instant::now());
+        // When playing with offset >= duration, clamps to track_duration
+        assert_eq!(engine.position(), Duration::from_secs(180));
+    }
+
+    #[test]
+    fn test_crossfade_interruption_and_volume_restoration() {
+        let mut engine = AudioEngine::new();
+        engine.volume = 0.85;
+
+        let (_stream, handle) = rodio::OutputStream::try_default().ok().unzip();
+        if let Some(ref h) = handle {
+            let primary_sink = Sink::try_new(h).unwrap();
+            primary_sink.set_volume(0.2); // Simulated crossfade attenuation
+            engine.sink = Some(primary_sink);
+
+            let old_sink = Sink::try_new(h).unwrap();
+            engine.crossfade_sink = Some((old_sink, Instant::now(), Duration::from_secs(5)));
+
+            // Seek should immediately stop the old sink, clear crossfade_sink,
+            // and restore primary sink volume to 0.85.
+            engine.seek(Duration::from_secs(10));
+
+            assert!(engine.crossfade_sink.is_none());
+            if let Some(ref sink) = engine.sink {
+                assert!((sink.volume() - 0.85).abs() < 1e-4);
+            }
+        }
+    }
+
+    #[test]
+    fn test_prequeue_flush_on_seek() {
+        let mut engine = AudioEngine::new();
+        engine.prequeued = true;
+        engine.current_path = None; // No path to recreate
+
+        // Calling seek while prequeued must reset prequeued to false
+        engine.seek(Duration::from_secs(15));
+        assert!(!engine.prequeued);
+    }
+
+    fn generate_test_wav_bytes(num_samples: usize, sample_rate: u32) -> Vec<u8> {
+        let num_channels: u16 = 2;
+        let bits_per_sample: u16 = 16;
+        let block_align: u16 = num_channels * bits_per_sample / 8;
+        let byte_rate: u32 = sample_rate * block_align as u32;
+        let data_size: u32 = num_samples as u32 * block_align as u32;
+        let file_size: u32 = 36 + data_size;
+
+        let mut bytes = Vec::with_capacity(44 + data_size as usize);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&file_size.to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&num_channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&byte_rate.to_le_bytes());
+        bytes.extend_from_slice(&block_align.to_le_bytes());
+        bytes.extend_from_slice(&bits_per_sample.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_size.to_le_bytes());
+
+        for i in 0..num_samples {
+            let sample = ((i as f32 * 440.0 * 2.0 * std::f32::consts::PI / sample_rate as f32).sin()
+                * 10000.0) as i16;
+            bytes.extend_from_slice(&sample.to_le_bytes());
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+
+        bytes
+    }
+
+    #[test]
+    fn test_symphonia_and_engine_seek_generated_wav() {
+        let temp_dir = std::env::temp_dir();
+        let test_wav_path = temp_dir.join("eclipse_test_seek.wav");
+
+        let wav_data = generate_test_wav_bytes(44100 * 10, 44100); // 10 seconds synthetic WAV
+        std::fs::write(&test_wav_path, wav_data).expect("Failed to write test wav");
+
+        // 1. Direct SymphoniaDecoderSource seek test
+        let mut source = SymphoniaDecoderSource::open_file(&test_wav_path).expect("open_file wav");
+        assert_eq!(source.channels(), 2);
+        assert_eq!(source.sample_rate(), 44100);
+
+        let res = source.try_seek(Duration::from_millis(1500));
+        assert!(res.is_ok(), "Seeking generated WAV failed: {:?}", res.err());
+
+        // 2. AudioEngine play and seek comprehensive test
+        let mut engine = AudioEngine::new();
+        engine.set_fade_pause_resume_ms(0);
+        let play_res = engine.play_file(&test_wav_path, 10.0);
+        if play_res.is_ok() {
+            assert!(engine.is_playing());
+
+            // Forward seek
+            engine.seek(Duration::from_secs(4));
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(60));
+            assert!(engine.position() >= Duration::from_secs(4));
+
+            // Backward seek
+            engine.seek(Duration::from_secs(1));
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(60));
+            assert!(engine.position() >= Duration::from_secs(1) && engine.position() < Duration::from_secs(3));
+
+            // Seek to 0s
+            engine.seek(Duration::ZERO);
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(60));
+            assert!(engine.position() < Duration::from_secs(2));
+
+            // Seek near end
+            engine.seek(Duration::from_secs(9));
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(60));
+            assert!(engine.position() >= Duration::from_secs(9));
+
+            // Paused seek
+            engine.pause();
+            assert!(engine.is_paused());
+            engine.seek(Duration::from_secs(5));
+            assert!(engine.is_paused());
+            assert_eq!(engine.position(), Duration::from_secs(5));
+            engine.resume();
+            std::thread::sleep(Duration::from_millis(60));
+            assert!(engine.position() >= Duration::from_secs(5));
+
+            // Rapid repeated seeks
+            for &pt in &[Duration::from_secs(2), Duration::from_secs(7), Duration::from_secs(3), Duration::from_secs(8)] {
+                engine.seek(pt);
+                assert!(engine.last_seek_error().is_none());
+            }
+
+            // Seek on finished track
+            if let Some(ref sink) = engine.sink {
+                sink.stop();
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(engine.is_finished());
+            engine.seek(Duration::from_secs(2));
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(60));
+            assert!(engine.position() >= Duration::from_secs(2));
+            assert!(!engine.is_finished());
+
+            engine.stop();
+        }
+
+        let _ = std::fs::remove_file(&test_wav_path);
+    }
+
+    #[test]
+    fn test_real_flac_seeking_in_audio_engine() {
+        let path = Path::new(r"C:\music\Muse\Aimyon - Marigold.flac");
+        if !path.exists() {
+            return;
+        }
+
+        let mut engine = AudioEngine::new();
+        engine.set_fade_pause_resume_ms(0); // Immediate pause/resume for testing
+        let play_res = engine.play_file(path, 306.0);
+        if play_res.is_ok() {
+            assert!(engine.is_playing());
+
+            // Seek to 60s
+            engine.seek(Duration::from_secs(60));
+            assert!(engine.last_seek_error().is_none());
+            assert_eq!(engine.pause_offset, Duration::from_secs(60));
+
+            // Small delay to let sink advance
+            std::thread::sleep(Duration::from_millis(50));
+            let pos = engine.position();
+            assert!(
+                pos >= Duration::from_secs(60),
+                "Position after seek should be >= 60s, got {:?}",
+                pos
+            );
+
+            // Seek while paused
+            engine.pause();
+            assert!(engine.is_paused());
+            engine.seek(Duration::from_secs(120));
+            assert_eq!(engine.pause_offset, Duration::from_secs(120));
+            assert_eq!(engine.position(), Duration::from_secs(120));
+
+            engine.stop();
+        }
+    }
+
+    #[test]
+    fn test_empirical_audio_seeking_comprehensive() {
+        let flac_paths = [
+            r"C:\music\Muse\Aimyon - Marigold.flac",
+            r"C:\music\Muse\Coldplay - Yellow.flac",
+            r"C:\music\Muse\Eve - Dramaturgy.flac",
+        ];
+
+        for path_str in flac_paths {
+            let path = Path::new(path_str);
+            if !path.exists() {
+                continue;
+            }
+
+            let source_probe = SymphoniaDecoderSource::open_file(path).expect("open_file failed");
+            let total_dur = source_probe.total_duration().unwrap_or(Duration::from_secs(200));
+            let total_dur_secs = total_dur.as_secs_f64();
+
+            println!("\n=== Empirical Seek Verification for {} (dur: {:.2}s) ===", path.display(), total_dur_secs);
+            let mut engine = AudioEngine::new();
+            engine.set_fade_pause_resume_ms(0); // instant transitions for tests
+            let play_res = engine.play_file(path, total_dur_secs);
+            if play_res.is_err() {
+                println!("Skipping path {} due to audio device error: {:?}", path_str, play_res.err());
+                continue;
+            }
+
+            assert!(engine.is_playing());
+
+            // 1. Initial play check
+            std::thread::sleep(Duration::from_millis(60));
+            let init_pos = engine.position();
+            println!("Initial position: {:?}", init_pos);
+
+            // 2. Forward seek (to 45.0s)
+            println!("Seeking forward to 45.0s...");
+            engine.seek(Duration::from_secs(45));
+            assert!(engine.last_seek_error().is_none(), "Seek forward produced error: {:?}", engine.last_seek_error());
+            std::thread::sleep(Duration::from_millis(80));
+            let fwd_pos = engine.position();
+            println!("Position after forward seek: {:?}", fwd_pos);
+            assert!(fwd_pos >= Duration::from_secs(45), "Expected >= 45s, got {:?}", fwd_pos);
+            assert!(fwd_pos < Duration::from_secs(50), "Expected < 50s, got {:?}", fwd_pos);
+
+            // 3. Backward seek (from ~45s back to 10.0s)
+            println!("Seeking backward to 10.0s...");
+            engine.seek(Duration::from_secs(10));
+            assert!(engine.last_seek_error().is_none(), "Seek backward produced error: {:?}", engine.last_seek_error());
+            std::thread::sleep(Duration::from_millis(80));
+            let back_pos = engine.position();
+            println!("Position after backward seek: {:?}", back_pos);
+            assert!(back_pos >= Duration::from_secs(10), "Expected >= 10s, got {:?}", back_pos);
+            assert!(back_pos < Duration::from_secs(15), "Expected < 15s, got {:?}", back_pos);
+
+            // 4. Seek to start (0.0s)
+            println!("Seeking to start (0.0s)...");
+            engine.seek(Duration::ZERO);
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(80));
+            let start_pos = engine.position();
+            println!("Position after seek to 0.0s: {:?}", start_pos);
+            assert!(start_pos < Duration::from_secs(5), "Expected < 5s, got {:?}", start_pos);
+
+            // 5. Seek near end (total_dur - 3.0s)
+            let near_end = Duration::from_secs_f64((total_dur_secs - 3.0).max(1.0));
+            println!("Seeking near end ({:?})...", near_end);
+            engine.seek(near_end);
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(80));
+            let end_pos = engine.position();
+            println!("Position after seek near end: {:?}", end_pos);
+            assert!(end_pos >= near_end, "Expected >= {:?}, got {:?}", near_end, end_pos);
+
+            // 6. Seek while paused & verify paused state is retained
+            println!("Pausing and seeking while paused...");
+            engine.pause();
+            assert!(engine.is_paused(), "Engine should be paused");
+            std::thread::sleep(Duration::from_millis(30));
+
+            engine.seek(Duration::from_secs(65));
+            assert!(engine.is_paused(), "Engine should remain paused after seek");
+            assert_eq!(engine.position(), Duration::from_secs(65), "Position should update to 65s while paused");
+            std::thread::sleep(Duration::from_millis(60));
+            // Ensure paused position does not advance on its own
+            assert_eq!(engine.position(), Duration::from_secs(65), "Paused position must not drift");
+
+            // Resume playback
+            println!("Resuming playback from 65.0s...");
+            engine.resume();
+            assert!(!engine.is_paused());
+            std::thread::sleep(Duration::from_millis(80));
+            let resumed_pos = engine.position();
+            println!("Position after resume: {:?}", resumed_pos);
+            assert!(resumed_pos >= Duration::from_secs(65), "Position after resume should be >= 65s, got {:?}", resumed_pos);
+
+            // 7. Rapid repeated seeks (stress test / scrub simulation)
+            println!("Stress testing rapid repeated seeks...");
+            let scrub_points = [
+                Duration::from_secs(5),
+                Duration::from_secs(12),
+                Duration::from_secs(30),
+                Duration::from_secs(18),
+                Duration::from_secs(85),
+                Duration::from_secs(42),
+                Duration::from_secs(110),
+                Duration::from_secs(2),
+                Duration::from_secs(77),
+                Duration::from_secs(150),
+            ];
+            for &pt in &scrub_points {
+                engine.seek(pt);
+                assert!(engine.last_seek_error().is_none());
+            }
+            // Final seek to 50s
+            engine.seek(Duration::from_secs(50));
+            std::thread::sleep(Duration::from_millis(80));
+            let final_pos = engine.position();
+            println!("Position after rapid scrubbing: {:?}", final_pos);
+            assert!(final_pos >= Duration::from_secs(50) && final_pos < Duration::from_secs(55));
+
+            // 8. Crossfade volume recovery verification
+            println!("Testing crossfade volume recovery...");
+            engine.set_volume(0.8);
+            if let Some(ref sink) = engine.sink {
+                sink.set_volume(0.1); // simulated crossfade dip
+            }
+            let (_dummy_stream, dummy_handle) = rodio::OutputStream::try_default().ok().unzip();
+            if let Some(ref h) = dummy_handle {
+                if let Ok(old_sink) = Sink::try_new(h) {
+                    engine.crossfade_sink = Some((old_sink, Instant::now(), Duration::from_secs(5)));
+                }
+            }
+            engine.seek(Duration::from_secs(20));
+            assert!(engine.crossfade_sink.is_none(), "crossfade_sink should be None after seek");
+            if let Some(ref sink) = engine.sink {
+                assert!((sink.volume() - 0.8).abs() < 1e-4, "Primary sink volume must be restored to 0.8");
+            }
+
+            // 9. Prequeue flush verification
+            println!("Testing prequeue flush on seek...");
+            engine.prequeued = true;
+            engine.seek(Duration::from_secs(25));
+            assert!(!engine.prequeued, "prequeued must be reset to false after seek");
+            std::thread::sleep(Duration::from_millis(80));
+            let prequeue_pos = engine.position();
+            println!("Position after prequeue flush seek: {:?}", prequeue_pos);
+            assert!(prequeue_pos >= Duration::from_secs(25) && prequeue_pos < Duration::from_secs(30));
+
+            // 10. Empty sink seek recovery (seeking after track finished/EOF)
+            println!("Testing seek on empty/finished track...");
+            if let Some(ref sink) = engine.sink {
+                sink.stop(); // simulate EOF / finished track
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            assert!(engine.is_finished());
+            engine.seek(Duration::from_secs(15));
+            assert!(engine.last_seek_error().is_none());
+            std::thread::sleep(Duration::from_millis(80));
+            let restarted_pos = engine.position();
+            println!("Position after seek on finished track: {:?}", restarted_pos);
+            assert!(restarted_pos >= Duration::from_secs(15) && restarted_pos < Duration::from_secs(20));
+            assert!(!engine.is_finished());
+
+            engine.stop();
+            println!("=== Verification for {} PASSED ===", path.display());
+        }
     }
 }

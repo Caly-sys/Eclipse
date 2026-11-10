@@ -1,15 +1,20 @@
 use crate::audio::PlayerController;
 use crate::config::RepeatMode;
 use crate::library::format_time_secs;
+use crate::streams::controller::StreamController;
+use crate::ui::playerbar::{current_playback_time, seek_to};
 use egui::{Context, Key};
-use std::time::Duration;
 
 pub struct ShortcutAction {
     pub status_message: Option<String>,
     pub focus_search: bool,
 }
 
-pub fn handle_shortcuts(ctx: &Context, player: &mut PlayerController) -> ShortcutAction {
+pub fn handle_shortcuts(
+    ctx: &Context,
+    player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
+) -> ShortcutAction {
     // 1. Global shortcuts that work even when an input has focus
     let ctrl_k = ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(Key::K));
 
@@ -28,7 +33,22 @@ pub fn handle_shortcuts(ctx: &Context, player: &mut PlayerController) -> Shortcu
 
     // 2. Playback & navigation shortcuts (only when not typing in a text field)
     if ctx.input(|i| i.key_pressed(Key::Space)) {
-        if player.current_track().is_some() {
+        if player.playback_source.is_stream() {
+            if let Some(sc) = stream_controller {
+                let prov_id = player.stream_provider_id().unwrap_or("spotify");
+                let is_playing = sc.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false);
+                if is_playing {
+                    sc.pause(prov_id);
+                } else {
+                    sc.resume(prov_id);
+                }
+                let msg = if is_playing { "Paused" } else { "Playing" };
+                return ShortcutAction {
+                    status_message: Some(msg.to_string()),
+                    focus_search: ctrl_k,
+                };
+            }
+        } else if player.current_track().is_some() {
             player.engine.toggle_play_pause();
             let msg = if player.engine.is_playing() { "Playing" } else { "Paused" };
             return ShortcutAction {
@@ -45,9 +65,9 @@ pub fn handle_shortcuts(ctx: &Context, player: &mut PlayerController) -> Shortcu
     }
 
     if ctx.input(|i| i.key_pressed(Key::ArrowLeft)) {
-        let cur = player.engine.position().as_secs_f64();
+        let (cur, _) = current_playback_time(player, stream_controller);
         let new_pos = (cur - 5.0).max(0.0);
-        player.engine.seek(Duration::from_secs_f64(new_pos));
+        seek_to(player, stream_controller, new_pos);
         return ShortcutAction {
             status_message: Some(format!("Seek -5s  [{}]", format_time_secs(new_pos))),
             focus_search: ctrl_k,
@@ -55,10 +75,9 @@ pub fn handle_shortcuts(ctx: &Context, player: &mut PlayerController) -> Shortcu
     }
 
     if ctx.input(|i| i.key_pressed(Key::ArrowRight)) {
-        let cur = player.engine.position().as_secs_f64();
-        let dur = player.current_track().map(|t| t.duration_secs).unwrap_or(0.0);
-        let new_pos = (cur + 5.0).min(dur);
-        player.engine.seek(Duration::from_secs_f64(new_pos));
+        let (cur, dur) = current_playback_time(player, stream_controller);
+        let new_pos = if dur > 0.0 { (cur + 5.0).min(dur) } else { cur + 5.0 };
+        seek_to(player, stream_controller, new_pos);
         return ShortcutAction {
             status_message: Some(format!("Seek +5s  [{}]", format_time_secs(new_pos))),
             focus_search: ctrl_k,
@@ -151,7 +170,7 @@ mod tests {
         });
         let _ = ctx.run(input, |_| {});
 
-        let action = handle_shortcuts(&ctx, &mut player);
+        let action = handle_shortcuts(&ctx, &mut player, None);
         assert!(player.shuffle, "Shuffle should be toggled ON");
         assert_eq!(action.status_message.as_deref(), Some("Shuffle: ON"));
 
@@ -166,7 +185,7 @@ mod tests {
         });
         let _ = ctx.run(input, |_| {});
 
-        let action = handle_shortcuts(&ctx, &mut player);
+        let action = handle_shortcuts(&ctx, &mut player, None);
         assert_eq!(player.repeat, RepeatMode::All, "Repeat should cycle to All");
         assert_eq!(action.status_message.as_deref(), Some("Repeat: ALL"));
     }
@@ -189,7 +208,7 @@ mod tests {
         });
         let _ = ctx.run(input, |_| {});
 
-        let action = handle_shortcuts(&ctx, &mut player);
+        let action = handle_shortcuts(&ctx, &mut player, None);
         assert!((player.engine.volume() - 0.55).abs() < 0.001);
         assert_eq!(action.status_message.as_deref(), Some("Volume: 55%"));
 
@@ -204,7 +223,7 @@ mod tests {
         });
         let _ = ctx.run(input, |_| {});
 
-        let action = handle_shortcuts(&ctx, &mut player);
+        let action = handle_shortcuts(&ctx, &mut player, None);
         assert!(player.engine.is_muted());
         assert_eq!(action.status_message.as_deref(), Some("Muted"));
     }
@@ -229,7 +248,7 @@ mod tests {
         });
         let _ = ctx.run(input, |_| {});
 
-        let action = handle_shortcuts(&ctx, &mut player);
+        let action = handle_shortcuts(&ctx, &mut player, None);
         assert!(action.focus_search, "Ctrl+K must trigger search focus");
     }
 
@@ -256,7 +275,159 @@ mod tests {
             });
         });
 
-        let action = handle_shortcuts(&ctx, &mut player);
+        let action = handle_shortcuts(&ctx, &mut player, None);
         assert!(action.status_message.is_none(), "Space should NOT toggle playback when typing");
+    }
+
+    #[test]
+    fn test_shortcuts_arrow_seek_local() {
+        let ctx = Context::default();
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        // Arrow Left at 0: clamps to 0
+        let mut input = RawInput::default();
+        input.events.push(Event::Key {
+            key: Key::ArrowLeft,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        });
+        let _ = ctx.run(input, |_| {});
+
+        let action = handle_shortcuts(&ctx, &mut player, None);
+        assert_eq!(action.status_message.as_deref(), Some("Seek -5s  [00:00]"));
+
+        // Arrow Right at 0: seeks to +5s
+        let mut input = RawInput::default();
+        input.events.push(Event::Key {
+            key: Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        });
+        let _ = ctx.run(input, |_| {});
+
+        let action = handle_shortcuts(&ctx, &mut player, None);
+        assert_eq!(action.status_message.as_deref(), Some("Seek +5s  [00:05]"));
+    }
+
+    #[test]
+    fn test_shortcuts_arrow_seek_stream() {
+        let ctx = Context::default();
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let stream_ctrl = StreamController::new(vec![]);
+
+        let stream_track = crate::streams::provider::StreamTrack::new(
+            "sp-456",
+            "Stream Hit",
+            "Artist",
+            "Album",
+            210.0,
+            None,
+            "spotify:track:456",
+            "spotify",
+        );
+        player.switch_to_stream("spotify", Some(stream_track));
+
+        // Arrow Right seeks +5s on stream
+        let mut input = RawInput::default();
+        input.events.push(Event::Key {
+            key: Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        });
+        let _ = ctx.run(input, |_| {});
+
+        let action = handle_shortcuts(&ctx, &mut player, Some(&stream_ctrl));
+        assert_eq!(action.status_message.as_deref(), Some("Seek +5s  [00:05]"));
+    }
+
+    #[test]
+    fn test_shortcuts_arrow_seek_stream_zero_duration() {
+        let ctx = Context::default();
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let stream_ctrl = StreamController::new(vec![]);
+
+        // Stream track with 0 duration (e.g. live stream)
+        let stream_track = crate::streams::provider::StreamTrack::new(
+            "sp-live",
+            "Live Stream",
+            "Artist",
+            "Album",
+            0.0,
+            None,
+            "spotify:track:live",
+            "spotify",
+        );
+        player.switch_to_stream("spotify", Some(stream_track));
+
+        // Arrow Right seeks +5s without panic or clamp to 0
+        let mut input = RawInput::default();
+        input.events.push(Event::Key {
+            key: Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        });
+        let _ = ctx.run(input, |_| {});
+
+        let action = handle_shortcuts(&ctx, &mut player, Some(&stream_ctrl));
+        assert_eq!(action.status_message.as_deref(), Some("Seek +5s  [00:05]"));
+
+        // Arrow Left seeks -5s clamped to 00:00
+        let mut input = RawInput::default();
+        input.events.push(Event::Key {
+            key: Key::ArrowLeft,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        });
+        let _ = ctx.run(input, |_| {});
+
+        let action = handle_shortcuts(&ctx, &mut player, Some(&stream_ctrl));
+        assert_eq!(action.status_message.as_deref(), Some("Seek -5s  [00:00]"));
+    }
+
+    #[test]
+    fn test_shortcuts_space_bar_toggle_stream() {
+        let ctx = Context::default();
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let stream_ctrl = StreamController::new(vec![]);
+
+        let stream_track = crate::streams::provider::StreamTrack::new(
+            "sp-toggle",
+            "Title",
+            "Artist",
+            "Album",
+            180.0,
+            None,
+            "spotify:track:toggle",
+            "spotify",
+        );
+        player.switch_to_stream("spotify", Some(stream_track));
+
+        // Press Space bar to play stream
+        let mut input = RawInput::default();
+        input.events.push(Event::Key {
+            key: Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::default(),
+        });
+        let _ = ctx.run(input, |_| {});
+
+        let action = handle_shortcuts(&ctx, &mut player, Some(&stream_ctrl));
+        assert_eq!(action.status_message.as_deref(), Some("Playing"));
     }
 }
