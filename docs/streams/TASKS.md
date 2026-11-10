@@ -7,4 +7,4 @@
 | **TASK-R3** | "Save as playlist" & "Find in my library" matcher with CJK/fuzzy normalization | `library-match-agent` | `HANDOFF_READY` | `src/streams/matcher.rs`, `handoffs/TASK-R3.md` |
 | **TASK-R4** | YouTube Data API v3 matcher & official embedded playback with match cache | `playback-agent` | `HANDOFF_READY` | `src/streams/playback.rs`, `handoffs/TASK-R4.md` |
 | **TASK-R5** | Rebuilt Spotify Importer UI matching reference image, YouTube search, and playerbar | `stream-ui-agent` | `HANDOFF_READY` | `src/ui/views/streams.rs`, `src/ui/sidebar.rs`, `handoffs/TASK-R5.md` |
-| **TASK-R6** | End-to-end regression audit, upgrade migration test, 102+ test pass gate, documentation | `qa-reviewer` | `TODO` | `docs/streams/BUGS.md`, `README.md`, `handoffs/TASK-R6.md` |
+| **TASK-R6** | End-to-end regression audit, upgrade migration test, 102+ test pass gate, documentation | `qa-reviewer` | `DONE` | `docs/streams/BUGS.md`, `README.md`, `handoffs/TASK-R6.md` |
