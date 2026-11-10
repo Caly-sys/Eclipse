@@ -162,6 +162,88 @@ To completely reset the player to a fresh state, simply exit the application and
 
 ---
 
+## ✦ Streaming Integrations (Spotify & YouTube Music)
+
+Starting in **v1.2.2**, Eclipse integrates official streaming support for **Spotify** and **YouTube Music** alongside your local lossless library, without proprietary binaries, scrapers, or security vulnerabilities.
+
+### Capabilities Matrix: What Streams Can and Can't Do
+
+| Feature / Capability | Local Lossless Playback | Spotify Stream | YouTube Music Stream |
+|---|---|---|---|
+| **Audio Pipeline** | In-process Rodio/Symphonia 32-bit float engine | Spotify Connect device remote control | Official browser embedded player (ADR-003) |
+| **Audiophile Codecs** | FLAC, ALAC, WAV, MP3, Vorbis, AAC (up to 192kHz/24-bit) | Ogg Vorbis / AAC (via Spotify Connect device) | AAC / Opus (via official YouTube player) |
+| **20Hz–20kHz FFT Spectrum Analyzer** | **Available** (Hann FFT, Stereo RMS/Peak dBFS, Scope) | *Not available* (Informative badge displayed) | *Not available* (Informative badge displayed) |
+| **LRCLIB Synchronized Lyrics** | **Available** (automatic offset tracking) | **Available** (synced to remote track metadata) | **Available** (synced to remote track metadata) |
+| **Scrubber & Transport Control** | Instantaneous low-latency seek & pause/play | **Available** (1Hz poll + 60 FPS interpolated scrubber) | **Available** (60 FPS interpolated scrubber) |
+| **Volume Control** | Bit-perfect in-app Rodio gain & volume leveling | Connect device remote volume | In-app / browser volume |
+| **Credentials Storage** | *None required* (100% local-first) | Windows Credential Manager (`keyring` crate) | Windows Credential Manager (`keyring` crate) |
+| **Account Requirement** | *None* | Spotify Premium (for Connect device control) | Free Google account (free 10,000 units/day API key) |
+
+> [!NOTE]
+> **Why is the Audio Analyzer exclusive to local files?**
+> Eclipse's real-time 2048-sample forward FFT spectrum visualizer, stereo peak meters, and LUFS loudness calculation tap directly into the uncompressed in-memory PCM audio stream decoded by Rodio. Spotify Connect and YouTube playback execute through remote endpoints or browser containers where raw PCM frames are not exposed to the local application. For streams, Eclipse elegantly replaces the visualizer with an informative session badge (`STREAM`).
+
+---
+
+### Spotify Connect Setup Guide
+
+Eclipse uses standard **RFC 7636 PKCE (Proof Key for Code Exchange)** for Spotify authentication. This means **no client secret is required**, and credentials never touch plain-text configuration files.
+
+1. **Open Spotify Developer Dashboard**:
+   - Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard) and log in with your Spotify account.
+2. **Create an Application**:
+   - Click **Create App** in the dashboard.
+   - Enter an **App name** (e.g. `Eclipse Music Player`) and **App description** (e.g. `Local music player stream integration`).
+3. **Configure Redirect URI**:
+   - Under **Redirect URIs**, add the exact local loopback callback:
+     ```
+     http://127.0.0.1:8888/callback
+     ```
+   - Click **Add** to register the URI.
+4. **Select API / SDK**:
+   - Under **Which API/SDKs are you planning to use?**, select **Web API**.
+   - Accept the Spotify Developer Terms of Service and click **Save**.
+5. **Copy Your Client ID**:
+   - Navigate to the app's **Settings** tab and copy the **Client ID** (32-character hexadecimal string).
+6. **Connect in Eclipse**:
+   - Launch Eclipse and click **Spotify** under the `STREAM` section in the left sidebar (or go to `Settings` → `Streaming`).
+   - Paste your **Client ID** into the input field and click **Connect with Spotify**.
+   - Your default browser will open to Spotify's authorization page. Click **Agree**.
+   - Eclipse's background worker intercepts the OAuth code on `127.0.0.1:8888`, retrieves tokens, and securely encrypts them into the **Windows Credential Manager**.
+7. **Playing Tracks**:
+   - Ensure you have an active Spotify Connect device running (such as the official Spotify desktop client, mobile app, or web player).
+   - Search or browse your playlists in Eclipse and click **Play**. Eclipse will automatically stream through your active Spotify Connect device!
+
+---
+
+### YouTube Music Setup Guide
+
+Eclipse uses the official **Google YouTube Data API v3** to search music tracks and playlists, launching official embedded playback in your browser per **ADR-003** with zero scraping or Terms of Service violations.
+
+1. **Open Google Cloud Console**:
+   - Visit [console.cloud.google.com](https://console.cloud.google.com/) and sign in with your Google account.
+2. **Create or Select a Project**:
+   - Click the project dropdown at the top and select **New Project**.
+   - Name it (e.g. `Eclipse Music`) and click **Create**.
+3. **Enable YouTube Data API v3**:
+   - In the navigation menu, select **APIs & Services** → **Library**.
+   - Search for `YouTube Data API v3`.
+   - Click on the result and click **Enable**.
+4. **Generate an API Key**:
+   - Navigate to **APIs & Services** → **Credentials**.
+   - Click **+ CREATE CREDENTIALS** at the top and choose **API key**.
+   - Copy your newly generated API key (starts with `AIzaSy...`).
+   - *(Recommended security step)*: Click **Edit API key**, and under **API restrictions**, select **Restrict key** → check **YouTube Data API v3** → click **Save**.
+5. **Connect in Eclipse**:
+   - In Eclipse, click **YouTube Music** in the sidebar (or go to `Settings` → `Streaming`).
+   - Paste your API key into the field and click **Save API Key & Connect**.
+   - Eclipse securely encrypts and stores the key in the **Windows Credential Manager**.
+6. **Quota & Rate Limits**:
+   - Google grants every Cloud Project a free quota of **10,000 units per day**.
+   - Eclipse optimizes requests by batch-enriching video durations up to 50 items per call, preserving quota for hours of daily browsing.
+
+---
+
 ## ✦ Keyboard Shortcuts
 
 | Shortcut | Action |
