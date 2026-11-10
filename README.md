@@ -134,25 +134,6 @@ cargo build --release
 .\run.bat
 ```
 
----
-
-#### ✦ Running Tests & Code Quality Gates
-
-Eclipse enforces a 100% clean test suite with zero compiler warnings and zero Unicode emoji artifacts:
-
-```powershell
-# Run the complete test suite (156 unit & integration tests)
-cargo test --all
-
-# Run the strict Clippy linter (zero warnings policy)
-cargo clippy --all-targets -- -D warnings
-
-# Run the zero-emoji verification audit (requires Python)
-python tests/verify_no_emojis.py
-```
-
----
-
 #### ✦ Packaging the Portable Distribution ZIP
 
 To create the portable standalone distribution package:
