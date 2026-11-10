@@ -1,27 +1,43 @@
 # Eclipse — music, in the dark.
 
-A high-performance, local-first lossless music player for Windows rewritten in **pure Rust** with a calm, dark purple glass aesthetic.
+A high-performance music player for Windows written in Rust with a calm, dark purple glass aesthetic.
+
+> **Project Status**: **Beta** — Local lossless audio playback is fully functional; streaming features and link importing are in active development.
 
 ---
 
 ## ✦ Preview
 
 ### Home Dashboard
-*Bento grid layout featuring "Pick up where you left off", real-time listening metrics, on-repeat tracks, and horizontal album shelf.*
+*Bento grid layout featuring "Pick up where you left off", listening statistics, on-repeat tracks, and horizontal album shelf.*
 
 ![Eclipse Home Dashboard](IMG/ss1.png)
 
 <br/>
 
+### Now Playing & Real-Time PCM Analyzer
+*Synchronized LRCLIB lyrics with smooth autoscrolling, stereo peak meters, and real-time logarithmic FFT spectrum analyzer.*
+
+![Eclipse Now Playing View](IMG/ss4_now_playing.png)
+
+<br/>
+
+### Spotify Public Link Importer
+*Zero-login public link importer with local library matcher, custom playlist saver, and embedded YouTube streaming.*
+
+![Eclipse Spotify Importer](IMG/ss5_spotify_importer.jpg)
+
+<br/>
+
 ### Albums Library
-*Responsive auto-wrapping grid with high-resolution embedded cover art decoding, clean typography, and 1:1 aspect ratios.*
+*Auto-wrapping grid with high-resolution embedded cover art decoding and square aspect ratios.*
 
 ![Eclipse Albums Grid](IMG/ss2.png)
 
 <br/>
 
 ### Playlist & Multi-Column Track Table
-*Custom playlists with hero header, duration metrics, and clean multi-column table displaying format badges, artist, album, and relative timestamps.*
+*Playlists with hero header, duration metrics, format badges, and relative timestamps.*
 
 ![Eclipse Playlist View](IMG/ss3.png)
 
@@ -29,141 +45,67 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 
 ## ✦ Highlights
 
-- **Local-First Audio Engine**: Bit-perfect lossless decoding (FLAC, ALAC, WAV, MP3, AAC) powered by Rodio and Symphonia.
-- **Hardware-Tapped Audio Analyzer**: Real-time logarithmic FFT visualizer, stereo peak meters, and oscilloscope driven directly by in-memory PCM audio.
+- **Local Audio Engine**: High-fidelity lossless decoding (FLAC, WAV, ALAC, MP3, OGG, AAC) powered by Rodio and Symphonia.
+- **In-Memory Audio Analyzer**: Real-time logarithmic FFT visualizer, stereo peak meters, and oscilloscope driven by in-memory PCM audio buffers.
 - **Synced Lyrics & Dynamic Artwork**: Real-time autoscrolling `.lrc` lyrics from LRCLIB and asynchronous embedded cover art decoding.
-- **Dark Glass Interface**: Frameless, responsive desktop UI built with egui, custom vector iconography, and native CJK font fallbacks.
-- **Zero-Login Stream Importer**: Paste public Spotify links to save playlists, match against local files, or stream via YouTube.
+- **Dark Glass Interface**: Frameless, responsive desktop UI built with egui, custom vector iconography, and native Windows CJK font fallbacks.
+- **Spotify Link Importer**: Paste public Spotify links to save playlists, match against local files, or stream via YouTube.
 
 ---
 
 ## ✦ Installation & Setup
 
-Eclipse is 100% local-first and portable. It requires no administrative installers, registry entries, or background updater daemons.
+Eclipse is portable and self-contained. It requires no administrative installers or background updater daemons.
 
 ### Option 1: Standalone Portable Executable (Recommended)
 
-1. Download the latest standalone release binary (`eclipse.exe` or `eclipse-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
-2. Move `eclipse.exe` into any preferred directory (for example `C:\Tools\Eclipse` or `%LOCALAPPDATA%\Programs\Eclipse`).
+1. Download the latest release package (`eclipse.exe` or `eclipse-v1.2.2-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
+2. Move `eclipse.exe` into any preferred directory (such as `%LOCALAPPDATA%\Programs\Eclipse`).
 3. Double-click `eclipse.exe` to launch.
+
+#### Release SHA-256 Checksums (v1.2.2)
+| File | SHA-256 Checksum |
+|---|---|
+| `eclipse.exe` | `E224A60A3E670528A61819C27330F6D9DA399E396504E46AA3E31714444135F0` |
+| `eclipse-v1.2.2-windows-x64.zip` | `B55A4D806A3975ECCAE5A4F9FEB5A22439F982FC193D9B6BA6C531801A7D82D1` |
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**
-> Because Eclipse is an open-source binary without a commercial code-signing certificate, Windows SmartScreen may display a *"Windows protected your PC"* popup on first launch. Click **More info** → **Run anyway** to start the application.
+> Because Eclipse is an open-source binary without a commercial code-signing certificate, Windows SmartScreen may display a *"Windows protected your PC"* prompt on first launch. Click **More info** → **Run anyway** to start the application.
 
 ---
 
 ### Option 2: Building from Source
 
-If you prefer compiling directly from the Rust source code:
-
-#### ✦ Build Requirements & Toolchain Prerequisites
-
-Before building Eclipse, ensure your Windows development environment has the following tools installed:
-
-| Requirement | Minimum Version | Installation / Command | Purpose |
-|---|---|---|---|
-| **Operating System** | Windows 10 (1809+) or Windows 11 (64-bit) | Pre-installed | Target host OS |
-| **Rust Toolchain** | `1.80.0+` (`stable-x86_64-pc-windows-msvc`) | `winget install Rustlang.Rustup` or [rustup.rs](https://rustup.rs/) | Rust compiler (`rustc`) & package manager (`cargo`) |
-| **Visual Studio C++ Build Tools** | VS 2019 or 2022 (MSVC v142/v143) | `winget install Microsoft.VisualStudio.2022.BuildTools` or [Visual Studio Downloads](https://visualstudio.microsoft.com/visual-cpp-build-tools/) | Provides C++ compiler (`cl.exe`), linker (`link.exe`), and libraries for compiling native C dependencies (`rusqlite`, `cpal`, `wry`) |
-| **Windows 10 / 11 SDK** | 10.0.19041.0 or newer | Bundled with VS C++ Workload | Core Windows API headers and libraries (`kernel32`, `user32`, `dwmapi`, `ole32`) |
-| **Git for Windows** | 2.40+ | `winget install Git.Git` or [git-scm.com](https://git-scm.com/) | Version control and repository cloning |
-| **Python 3.8+** *(Optional)* | 3.8+ | `winget install Python.Python.3.12` | Required only if running the emoji audit test script (`tests/verify_no_emojis.py`) |
-
----
-
-#### ✦ Installing the C++ Build Environment (Quick Setup)
-
-If you do not have Visual Studio installed, you can install the exact required C++ build tools in one command using `winget`:
-
-```powershell
-winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-```
-
-Alternatively, open the **Visual Studio Installer** and verify the following components are checked:
-- **Desktop development with C++** (Workload)
-  - **MSVC v143 - VS 2022 C++ x64/x86 build tools**
-  - **Windows 11 SDK (10.0.22621.0)** or **Windows 10 SDK**
-
-Then verify your Rust toolchain uses the MSVC target:
-```powershell
-rustup default stable-x86_64-pc-windows-msvc
-```
-
----
-
-#### ✦ Clone & Compile
+**Prerequisites:** Rust 1.80+ (`stable-x86_64-pc-windows-msvc`), Visual Studio C++ Build Tools (MSVC with Windows SDK), and Git.
 
 ```powershell
 # 1. Clone the repository
 git clone https://github.com/Caly-sys/Eclipse.git
 cd Eclipse
 
-# 2. Build for development (fast debug build)
-cargo build
-
-# 3. Build optimized standalone release binary
-# (Automatically statically links the C-runtime via .cargo/config.toml)
+# 2. Build optimized release binary (statically links CRT via .cargo/config.toml)
 cargo build --release
 
-# 4. Launch Eclipse
+# 3. Launch Eclipse
 .\target\release\eclipse.exe
-# or use the bundled quick-launch script:
-.\run.bat
 ```
 
----
-
-#### ✦ Running Tests
-
-```powershell
-# Run the test suite
-cargo test --all
-
-# Run the Clippy linter
-cargo clippy --all-targets -- -D warnings
-```
-
----
-#### ✦ Packaging the Portable Distribution ZIP
-
-To create the portable standalone distribution package:
-
-```powershell
-# 1. Ensure the release binary is built
-cargo build --release
-
-# 2. Copy the binary to the root directory
-Copy-Item target\release\eclipse.exe eclipse.exe -Force
-
-# 3. Create the release archive
-Compress-Archive -Path eclipse.exe, run.bat, README.md, LICENSE -DestinationPath eclipse-windows-x64.zip -Force
-```
+For full setup commands, `winget` scripts, test execution, and troubleshooting, see [docs/BUILDING.md](docs/BUILDING.md). For release packaging details, see [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
-#### ✦ Troubleshooting Build Issues
-
-- **`error: linker 'link.exe' not found`**:
-  You are missing the Microsoft C++ Build Tools. Install the **Desktop development with C++** workload in Visual Studio Installer and restart your terminal.
-- **`VCRUNTIME140.dll` missing on other PCs**:
-  Ensure you build with `.cargo/config.toml` containing `rustflags = ["-C", "target-feature=+crt-static"]` (already included in the repo). This statically embeds the C-runtime into the executable.
-- **Slow initial compile**:
-  The first `cargo build` compiles native audio codecs and GUI dependencies (~3–4 minutes). Subsequent incremental builds take 2–5 seconds.
-
----
-
-### Data & Configuration Paths
+## ✦ Data & Configuration Paths
 
 Eclipse keeps all user configuration, local SQLite indexing, and cached lyrics isolated inside your user profile:
 
 | Path | Description |
 |---|---|
-| `%APPDATA%\Eclipse\settings.json` | Persistent user settings: audio outputs, DSP crossfade, transitions, volume leveling, monitored folders, and theme preferences. |
+| `%APPDATA%\Eclipse\settings.json` | Persistent user settings: audio outputs, crossfade, volume leveling, monitored folders, and themes. |
 | `%APPDATA%\Eclipse\library.db` | High-performance SQLite database storing indexed tracks, album metadata, listening stats, and playlists. |
 | `%APPDATA%\Eclipse\lyrics_cache\` | Offline disk cache for plain and synchronized `.lrc` lyrics fetched from LRCLIB. |
 
-To completely reset the player to a fresh state, simply exit the application and delete the `%APPDATA%\Eclipse` directory.
+To reset the player to a fresh state, exit the application and delete the `%APPDATA%\Eclipse` directory.
 
 ---
 
@@ -175,101 +117,115 @@ To completely reset the player to a fresh state, simply exit the application and
 
 ### 2. Scanning Your Music Library
 - On the **Home** dashboard, click **Scan Folder** in the Quick Actions banner, or navigate to **Settings** in the sidebar → **Library Monitored Folders** and click **Add Folder**.
-- Select the folder containing your audio files (`FLAC`, `MP3`, `WAV`, `OGG`, `AAC`, `M4A`).
-- Eclipse will crawl your files, extract metadata (titles, artists, albums, codecs, sample rates) via `lofty`, cache embedded cover art asynchronously, and store the indexed library in SQLite (`%APPDATA%\Eclipse\library.db`).
+- Select the directory containing your audio files (`FLAC`, `WAV`, `ALAC`, `MP3`, `OGG`, `AAC`, `M4A`).
+- Eclipse crawls your files, extracts metadata and embedded cover art asynchronously via `lofty`, and indexes the library in SQLite.
 
 ### 3. Browsing Your Music
 - **Home**: Dashboard showing library statistics, quick actions, Recently Played shelf, and top played tracks.
-- **Songs**: High-density sortable list with track titles, artists, albums, duration, and high-contrast lossless format badges (`FLAC` in warm amber, lossy in lilac).
-- **Albums**: Responsive auto-wrapping grid of square album covers. Click an album to open its detail view and tracklist.
-- **Artists**: Grid of artists with track counts.
-- **Folders**: Hierarchical tree navigation through your indexed folders on disk.
-- **Smart Playlists**: Instant views for `Recently Played`, `Most Played`, `Recently Added`, `Favorites`, `Never Played`, and `Random Discovery`.
+- **Songs**: High-density sortable list with track titles, artists, albums, duration, and format badges (`FLAC`, `WAV`, `ALAC`, `MP3`, `OGG`, `AAC`).
+- **Albums**: Auto-wrapping grid of square album covers. Click an album to open its detail view and tracklist.
+- **Artists & Folders**: Browse by artist discography or navigate disk folder hierarchies directly.
+- **Smart Playlists**: Quick access to `Recently Played`, `Most Played`, `Recently Added`, `Favorites`, `Never Played`, and `Random Discovery`.
 - **Search (`Ctrl + K`)**: Instant global search across tracks, artists, and albums.
 
 ### 4. Playback & Queue Controls
-- Double-click any song or click **Play All** on an album or view to start playback. This populates the active queue.
-- **Play / Pause**: Click the large circular transport button or press `Space`.
-- **Next / Previous**: Skip between tracks with transport buttons. If in shuffle mode, tracks play in random non-repeating order while keeping the current song pinned.
+- Double-click any song or click **Play All** on an album or view to start playback.
+- **Play / Pause**: Click the transport button or press `Space`.
+- **Next / Previous**: Skip between tracks with transport buttons or shortcuts. Shuffle mode uses a non-repeating permutation.
 - **Repeat Modes**: Cycle between Repeat Off, Repeat All (loops playlist), and Repeat One (loops active track).
-- **Seeking**: Click or drag directly on the seekbar for smooth scrub preview.
+- **Seeking**: Click or drag directly on the seekbar for smooth scrubbing.
 - **Volume**: Use the volume slider or mouse scroll wheel over the volume area.
-- **Queue Drawer**: Click the queue icon button in the player bar to view the upcoming queue, jump directly to any track, or view song details.
+- **Queue Drawer**: Click the queue button in the player bar to view upcoming songs, jump to any track, or inspect details.
 
 ### 5. Synced Lyrics & Audio Analyzer
-- Switch to the **Now Playing** tab (or click the album art thumbnail in the bottom player bar) to enter the 3-column view:
-  - **Left**: Large rounded cover art with ambient glow and track metadata badges.
-  - **Center**: Synced `.lrc` lyrics with real-time autoscrolling. The active line glows bright; past and future lines fade gently. Click any lyric line to jump directly to that timestamp.
-  - **Right**: Real-time hardware Audio Analyzer card showing format specifications, live Left/Right channel stereo peak meters, integrated LUFS, crest factor dynamic range, and a live 20Hz–20kHz logarithmic spectrum visualizer (switchable between Bars, Mirror, and Oscilloscope).
+- Switch to the **Now Playing** tab (or click the album art thumbnail in the bottom player bar):
+  - **Left**: Large cover art display with ambient glow and track metadata badges.
+  - **Center**: Synced `.lrc` lyrics with real-time autoscrolling. Click any lyric line to jump directly to that timestamp.
+  - **Right**: Real-time in-memory PCM Audio Analyzer showing format specifications, live Left/Right channel stereo peak meters, and a live logarithmic spectrum visualizer.
 
 ---
 
 ## ✦ Streaming & Spotify Importer
 
-Starting in **v1.2.2**, Eclipse includes a powerful, zero-login **Spotify Public Link Importer** and integrated **YouTube Music** streaming playback alongside your local lossless library.
+Eclipse includes a public **Spotify Link Importer** and integrated **YouTube Music** streaming playback alongside your local library.
 
 ### How It Works
 
-1. **Paste Any Public Spotify Link**:
-   - Copy any public Spotify track, album, or playlist link (e.g. `https://open.spotify.com/playlist/...`, `/album/...`, `/track/...` or `spotify:track:...`).
-   - Paste it directly into the Spotify importer bar in Eclipse.
-2. **Instant Zero-Login Metadata Extraction**:
-   - Eclipse parses the link and fetches track titles, artists, album names, durations, and high-resolution artwork directly from public embeds and oEmbed metadata.
-   - **Zero Login & Zero Developer Account**: No Spotify account, no Spotify Developer app, no Client ID, no Client Secret, and no redirect URIs are required.
-3. **Smart Local Library Matcher**:
-   - Click **Find in my library**: Eclipse automatically compares the imported track titles and artists against your indexed local music files (`.flac`, `.wav`, `.mp3`).
-   - Uses intelligent fuzzy matching with CJK/Unicode normalization, punctuation stripping, and duration tolerance (±4 seconds).
-   - If an imported track already exists in your local library, Eclipse marks it with a bright `LOCAL` badge and will play your pristine bit-perfect lossless file instead of streaming!
-4. **Save As Local Playlist**:
-   - Click **Save all as playlist**: Eclipse instantly saves the imported tracklist into your persistent SQLite library database as a custom Eclipse playlist.
-5. **Matched YouTube Streaming Playback**:
-   - For tracks not found in your local collection, Eclipse matches them to the official YouTube Music / YouTube video catalog and plays them via the official embedded player without scrapers or third-party TOS violations.
+1. **Paste a Public Spotify Link**:
+   - Copy any public Spotify track, album, or playlist link (`https://open.spotify.com/...` or `spotify:...`).
+   - Paste it into the Spotify importer bar in Eclipse.
+2. **Metadata Extraction**:
+   - Eclipse parses the link and retrieves track titles, artists, album names, durations, and cover art URLs from public embed and oEmbed endpoints.
+   - **No Spotify account or developer credentials required.**
+3. **Local Library Matching**:
+   - Click **Find in my library**: Eclipse compares the imported tracks against your indexed local music files.
+   - Uses fuzzy matching with CJK/Unicode normalization, punctuation stripping, and duration tolerance.
+   - If an imported track exists locally, Eclipse marks it with a `LOCAL` badge and plays your local lossless file instead of streaming.
+4. **Save As Custom Playlist**:
+   - Click **Save all as playlist**: Eclipse stores the tracklist directly into your local SQLite database as an Eclipse playlist.
+5. **Matched YouTube Playback**:
+   - For tracks not found in your local collection, Eclipse queries the YouTube Data API v3 and plays matching tracks via YouTube's official embedded web player.
 
 ---
 
-### Capabilities Matrix: What Streams Can and Can't Do
+### Capabilities Matrix
 
 | Feature / Capability | Local Lossless Playback | Spotify Public Link Import | YouTube Music Stream |
 |---|---|---|---|
-| **Audio Pipeline** | In-process Rodio/Symphonia 32-bit float engine | Metadata import + local match / YouTube stream | Official embedded webview player (ADR-003) |
-| **Audiophile Codecs** | FLAC, ALAC, WAV, MP3, Vorbis, AAC (up to 192kHz/24-bit) | Plays local lossless file if matched | AAC / Opus (via official embedded player) |
-| **20Hz–20kHz FFT Spectrum Analyzer** | **Available** (Hann FFT, Stereo RMS/Peak dBFS, Scope) | **Available** when playing local matched file | *Not available for remote streams* (badge displayed) |
-| **LRCLIB Synchronized Lyrics** | **Available** (automatic offset tracking) | **Available** (synced to track title & artist) | **Available** (synced to track title & artist) |
-| **Save as Custom Playlist** | **Available** (instant SQLite persistence) | **Available** (one-click "Save all as playlist") | **Available** |
-| **Account / Login Requirement** | **None** (100% local-first) | **None** (Zero-login public embed parser) | Free Google account (for YouTube API key) |
-| **Credentials Storage** | *None required* | *None required* | Windows Credential Manager (`keyring` crate) |
+| **Audio Pipeline** | In-process Rodio/Symphonia engine | Metadata import + local playback / YouTube stream | Official embedded webview player |
+| **Supported Codecs** | FLAC, WAV, ALAC, MP3, Vorbis (OGG), AAC (M4A) | Plays local file if matched | AAC / Opus (via embedded player) |
+| **FFT Spectrum Analyzer** | **Available** (Real-time in-memory PCM tap) | **Available** when playing local matched file | *Not available for remote streams* (badge displayed) |
+| **Account / Key Requirement** | **None** (100% offline) | **None** (Public embed metadata) | Free Google account (for YouTube API key) |
+| **Credentials Storage** | *None required* | *None required* | Stored in Windows Credential Manager |
 
 > [!NOTE]
-> **Why is the Audio Analyzer exclusive to local files?**
-> Eclipse's real-time 2048-sample forward FFT spectrum visualizer, stereo peak meters, and LUFS loudness calculation tap directly into the uncompressed in-memory PCM audio stream decoded by Rodio. Remote streaming playback executes through official player containers where raw PCM frames are not exposed to the local application. For streams, Eclipse displays an informative session badge (`STREAM`).
+> **Why is the Audio Analyzer exclusive to local files?**  
+> Eclipse's real-time spectrum visualizer and stereo peak meters tap directly into the uncompressed in-memory PCM audio stream decoded by Rodio. Remote streaming playback executes through an embedded player container where raw PCM frames are not exposed to the local application. For streams, Eclipse displays a `STREAM` badge.
 
 ---
 
-### YouTube Music API Key Setup Guide
+### YouTube Music API Key Setup
 
-Eclipse uses the official **Google YouTube Data API v3** to search music tracks and match imported Spotify songs.
+Eclipse uses the Google YouTube Data API v3 to search tracks and resolve stream matches:
 
-1. **Open Google Cloud Console**:
-   - Visit [console.cloud.google.com](https://console.cloud.google.com/) and sign in with your Google account.
-2. **Create or Select a Project**:
-   - Click the project dropdown at the top and select **New Project**.
-   - Name it (e.g. `Eclipse Music`) and click **Create**.
-3. **Enable YouTube Data API v3**:
-   - In the navigation menu, select **APIs & Services** → **Library**.
-   - Search for `YouTube Data API v3`.
-   - Click on the result and click **Enable**.
-4. **Generate an API Key**:
-   - Navigate to **APIs & Services** → **Credentials**.
-   - Click **+ CREATE CREDENTIALS** at the top and choose **API key**.
-   - Copy your newly generated API key (starts with `AIzaSy...`).
-   - *(Recommended security step)*: Click **Edit API key**, and under **API restrictions**, select **Restrict key** → check **YouTube Data API v3** → click **Save**.
-5. **Configure in Eclipse**:
-   - In Eclipse, click **Settings** in the sidebar → **Streaming** tab (or open **YouTube Music** in the sidebar).
-   - Paste your API key into the field and click **Save Key & Connect**.
-   - Eclipse securely encrypts and stores the key in the **Windows Credential Manager** (`CredWriteW`).
-6. **Quota & Rate Limits**:
-   - Google grants every Cloud Project a free quota of **10,000 units per day**.
-   - Eclipse caches search matches in SQLite (`stream_match_cache`) to avoid repeated queries and preserve your quota.
+1. Follow the [Google Cloud YouTube Data API v3 Setup Guide](https://developers.google.com/youtube/v3/getting-started) to create a project and generate an API key.
+2. In Eclipse, open **Settings** in the sidebar → **Streaming** tab, paste your key, and click **Save Key & Connect**. The key is stored in the Windows Credential Manager.
+
+> [!IMPORTANT]
+> **API Quota Consideration:**  
+> Google provides a default free quota of **10,000 units per day**. Each YouTube search query costs **100 units** (approximately ~100 search queries per day). Eclipse caches search matches in SQLite (`stream_match_cache`) to avoid repeated queries on replay, but importing playlists with many unmatched tracks will consume quota accordingly.
+
+---
+
+## ✦ Network & Privacy
+
+Eclipse is designed to respect your privacy and limit network communication to user-initiated actions:
+
+- **Local Playback**: 100% offline. Zero network connections, zero telemetry, and zero analytics.
+- **Spotify Importer**: Makes outbound HTTPS GET requests to `open.spotify.com` to fetch public embed metadata. No user credentials, cookies, or accounts are transmitted.
+- **YouTube Streaming**: Queries Google APIs for search and resolves video embeds. Your YouTube API key is stored securely in the Windows Credential Manager.
+- **LRCLIB Lyrics**: Queries `lrclib.net` over HTTPS using track titles and artists to fetch plain and synchronized lyrics. Results are stored in `%APPDATA%\Eclipse\lyrics_cache\` to minimize repeated queries.
+
+---
+
+## ✦ Known Issues & Limitations
+
+- **WebView2 Runtime Requirement**: Streaming playback relies on the Microsoft Edge WebView2 runtime. It is pre-installed on Windows 11 and modern Windows 10, but stripped Windows installations may need the [Microsoft WebView2 Bootstrapper](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+- **Playlist Truncation**: Public Spotify embed endpoints return a maximum of 100 tracks per playlist. Playlists exceeding 100 tracks will display the first 100 tracks.
+- **Daily Search Quota**: Google Cloud free projects have a 10,000 unit daily limit (~100 search queries). Once exhausted, stream searches pause until Google resets the daily quota.
+- **Stream Audio Analyzer**: Real-time FFT visualization is not supported for remote YouTube streams due to browser sandbox audio isolation.
+
+---
+
+## ✦ Contributing
+
+Contributions, bug reports, and suggestions are welcome!
+
+1. Fork the repository and create a descriptive branch: `git checkout -b feature/my-feature`.
+2. Ensure all tests pass: `cargo test --all`.
+3. Ensure no compiler or linter warnings: `cargo clippy --all-targets -- -D warnings`.
+4. Follow Rust formatting conventions: `cargo fmt --check`.
+5. Open a Pull Request with a clear description of your changes.
 
 ---
 
@@ -293,30 +249,35 @@ Eclipse uses the official **Google YouTube Data API v3** to search music tracks 
 ```
 src/
 ├── main.rs                 # Application entry point & frameless viewport configuration
-├── config.rs               # Persistent user preferences (%APPDATA%\Eclipse\settings.json)
+├── config.rs               # User preferences & paths (%APPDATA%\Eclipse\settings.json)
 ├── audio/
 │   ├── engine.rs           # Rodio sink wrapper & non-blocking TapSource PCM interceptor
-│   ├── visualizer.rs       # 2048-sample Hann FFT, log dBFS bins, scope & stereo meters
+│   ├── visualizer.rs       # In-memory PCM FFT, log dBFS bins, scope & stereo meters
 │   └── mod.rs              # PlayerController & queue management
 ├── library/
 │   ├── db.rs               # SQLite library storage & queries (rusqlite)
-│   ├── scanner.rs          # Directory walker & audio metadata extraction (lofty)
+│   ├── scanner.rs          # Directory walker & metadata extraction (lofty)
 │   └── model.rs            # Track, Album, Artist data structures
 ├── lyrics/
 │   ├── lrc.rs              # Synced LRC parser with timestamp offsets
 │   └── lrclib.rs           # Asynchronous LRCLIB client
+├── streams/
+│   ├── controller.rs       # Background worker actor for streaming tasks
+│   ├── spotify_public.rs   # Public Spotify embed/oEmbed parser (zero login)
+│   ├── matcher.rs          # CJK/Unicode fuzzy matcher against local library
+│   └── playback.rs         # YouTube Data API matcher & embedded webview player
 └── ui/
     ├── icons.rs            # 100% vector icon component library
     ├── theme.rs            # Design tokens & frosted glass styling frames
     ├── components.rs       # Format badges, buttons, and custom widgets
-    ├── playerbar.rs        # 3-column docked bottom player bar & mini visualizer
-    ├── sidebar.rs          # 240px navigation sidebar with high-contrast pills
-    ├── titlebar.rs         # Custom frameless titlebar with window controls & search
-    ├── resize.rs           # Frameless window perimeter hit-testing & resize handling
+    ├── playerbar.rs        # Docked bottom player bar & mini visualizer
+    ├── sidebar.rs          # Navigation sidebar
+    ├── titlebar.rs         # Frameless titlebar with window controls
+    ├── resize.rs           # Frameless window edge hit-testing & resizing
     ├── art.rs              # Asynchronous cover art loader & texture cache
     ├── fonts.rs            # CJK font fallback configuration
     ├── shortcuts.rs        # Global hotkey event listener
-    └── views/              # Home, Now Playing, Songs, Albums, Artists, Playlists, Folders, Settings, About
+    └── views/              # Home, Now Playing, Songs, Albums, Artists, Playlists, Streams, Settings, About
 ```
 
 ---
@@ -325,13 +286,18 @@ src/
 
 Eclipse is an independent Rust reimplementation inspired by [Umbra](https://github.com/sadult/umbra), originally created by **Mersad Shahidi (@Bitologist)**.
 
-The original project inspired the interface design, music-player concept, and overall user experience.
+The original project inspired the interface design, music-player concept, and overall aesthetic. The Rust implementation is independently developed and is not officially affiliated with the original author.
 
-The Rust implementation is independently developed and is not officially affiliated with the original author.
-
-Original project: https://github.com/sadult/umbra
-
+Original project: https://github.com/sadult/umbra  
 Original licence: MIT License.
+
+---
+
+## ✦ Trademarks & Disclaimer
+
+- **Spotify** is a trademark of Spotify AB.
+- **YouTube** and **Google** are trademarks of Google LLC.
+- Eclipse is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Spotify AB or Google LLC.
 
 ---
 
