@@ -7,6 +7,7 @@ pub use visualizer::{AudioTapBuffer, Visualizer};
 use crate::config::{AppConfig, AudioSettings, RepeatMode};
 use crate::library::model::Track;
 use crate::lyrics::{LrclibRecord, Lyrics};
+use crate::streams::{PlaybackSource, StreamTrack};
 use rand::seq::SliceRandom;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -20,6 +21,8 @@ pub struct PlayerController {
     pub current_index: Option<usize>,
     pub shuffle: bool,
     pub repeat: RepeatMode,
+    pub playback_source: PlaybackSource,
+    pub active_stream_track: Option<StreamTrack>,
     pub lyrics: Option<Lyrics>,
     pub is_loading_lyrics: bool,
     pub is_searching_lyrics: bool,
@@ -49,6 +52,8 @@ impl PlayerController {
             current_index: None,
             shuffle: cfg.shuffle,
             repeat: cfg.repeat,
+            playback_source: PlaybackSource::Local,
+            active_stream_track: None,
             lyrics: None,
             is_loading_lyrics: false,
             is_searching_lyrics: false,
@@ -91,11 +96,72 @@ impl PlayerController {
     }
 
     pub fn play_pause(&mut self) {
-        self.engine.toggle_play_pause();
+        if self.playback_source.is_local() {
+            self.engine.toggle_play_pause();
+        }
     }
 
     pub fn toggle_playback(&mut self) {
-        self.engine.toggle_play_pause();
+        if self.playback_source.is_local() {
+            self.engine.toggle_play_pause();
+        }
+    }
+
+    pub fn is_stream_active(&self) -> bool {
+        self.playback_source.is_stream()
+    }
+
+    pub fn stream_provider_id(&self) -> Option<&str> {
+        self.playback_source.provider_id()
+    }
+
+    pub fn switch_to_stream(&mut self, provider_id: &str, track: Option<StreamTrack>) {
+        self.engine.pause();
+        self.playback_source = PlaybackSource::Stream(provider_id.to_string());
+        if let Some(ref t) = track {
+            self.load_lyrics_for_stream(&t.artist, &t.title, &t.album, t.duration_secs);
+        }
+        self.active_stream_track = track;
+    }
+
+    pub fn switch_to_local(&mut self) {
+        self.playback_source = PlaybackSource::Local;
+        self.active_stream_track = None;
+    }
+
+    pub fn set_active_stream_track(&mut self, track: Option<StreamTrack>) {
+        if let Some(ref t) = track {
+            self.load_lyrics_for_stream(&t.artist, &t.title, &t.album, t.duration_secs);
+        }
+        self.active_stream_track = track;
+    }
+
+    pub fn load_lyrics_for_stream(
+        &mut self,
+        artist: &str,
+        title: &str,
+        album: &str,
+        duration_secs: f64,
+    ) {
+        self.lyrics = None;
+        self.is_loading_lyrics = true;
+
+        let tx = self.lyrics_tx.clone();
+        let track_path = std::path::PathBuf::from(format!("stream_{}_{}.lrc", artist, title));
+        let a = artist.to_string();
+        let t = title.to_string();
+        let alb = album.to_string();
+
+        crate::lyrics::lrclib::fetch_track_lyrics_async(
+            track_path,
+            a,
+            t,
+            alb,
+            duration_secs,
+            move |res| {
+                let _ = tx.send(res);
+            },
+        );
     }
 
     pub fn current_track(&self) -> Option<&Track> {
@@ -103,6 +169,8 @@ impl PlayerController {
     }
 
     pub fn load_queue(&mut self, tracks: Vec<Track>, start_index: usize) {
+        self.playback_source = PlaybackSource::Local;
+        self.active_stream_track = None;
         if tracks.is_empty() {
             self.queue.clear();
             self.current_index = None;
@@ -121,6 +189,8 @@ impl PlayerController {
     }
 
     pub fn set_queue_paused(&mut self, tracks: Vec<Track>, start_index: usize) {
+        self.playback_source = PlaybackSource::Local;
+        self.active_stream_track = None;
         if tracks.is_empty() {
             return;
         }
@@ -142,6 +212,8 @@ impl PlayerController {
             return;
         }
 
+        self.playback_source = PlaybackSource::Local;
+        self.active_stream_track = None;
         self.current_index = Some(index);
         let track = self.queue[index].clone();
         let path = Path::new(&track.path);
@@ -685,5 +757,51 @@ mod tests {
 
         player.repeat = RepeatMode::All;
         assert_eq!(player.peek_next_index(), Some(0));
+    }
+
+    #[test]
+    fn test_player_controller_stream_routing_and_switching() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        // Initially local
+        assert!(player.playback_source.is_local());
+        assert!(!player.is_stream_active());
+        assert_eq!(player.stream_provider_id(), None);
+        assert!(player.active_stream_track.is_none());
+
+        // Switch to stream
+        let stream_track = StreamTrack::new(
+            "stream_1",
+            "Midnight City",
+            "M83",
+            "Hurry Up, We're Dreaming",
+            243.0,
+            None,
+            "spotify:track:stream_1",
+            "spotify",
+        );
+        player.switch_to_stream("spotify", Some(stream_track.clone()));
+        assert!(!player.playback_source.is_local());
+        assert!(player.is_stream_active());
+        assert_eq!(player.stream_provider_id(), Some("spotify"));
+        assert_eq!(player.active_stream_track.as_ref().unwrap().title, "Midnight City");
+
+        // Switching back to local via switch_to_local
+        player.switch_to_local();
+        assert!(player.playback_source.is_local());
+        assert!(!player.is_stream_active());
+        assert!(player.active_stream_track.is_none());
+
+        // Switch to stream again, then load_queue
+        player.switch_to_stream("youtube", None);
+        assert!(player.is_stream_active());
+
+        let tracks = vec![dummy_track(1, "Local Track 1")];
+        player.load_queue(tracks, 0);
+        // Loading local queue automatically resets playback source to Local
+        assert!(player.playback_source.is_local());
+        assert!(!player.is_stream_active());
+        assert!(player.active_stream_track.is_none());
     }
 }

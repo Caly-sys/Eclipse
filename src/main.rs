@@ -4,6 +4,7 @@ pub mod audio;
 pub mod config;
 pub mod library;
 pub mod lyrics;
+pub mod streams;
 pub mod ui;
 
 use eframe::egui::vec2;
