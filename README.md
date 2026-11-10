@@ -29,32 +29,11 @@ A high-performance, local-first lossless music player for Windows rewritten in *
 
 ## ✦ Highlights
 
-- **Rust Audio Engine**: Powered by `rodio` and `symphonia` with real-time PCM audio stream tapping. Zero audio stuttering with an 8192-sample non-blocking buffer.
-- **Studio-Grade Real-Time Visualizer**:
-  - 2048-sample forward Hann-windowed FFT via `rustfft`.
-  - Logarithmic frequency mapping from `20Hz` to `20kHz` with +3dB/octave pink-noise compensation and dBFS temporal smoothing/gravity decay.
-  - Real-time time-domain oscilloscope buffer and live Left/Right channel RMS & Peak dBFS meters. Zero fake math waves.
-- **100% Vector Icon Architecture**:
-  - Completely free of Unicode emoji and symbol placeholders.
-  - 46 custom vector icons (Lucide / Feather style) rendered crisply directly on `egui::Painter` with dynamic DPI scaling.
-- **Glassmorphic Purple UI**:
-  - Centralized design tokens in `src/ui/theme.rs`.
-  - Obsidian canvas (`#0b0914`), translucent frosted glass cards, neon violet accent (`#b388ff`), and warm amber lossless format badges (`#ffb25c`).
-- **Responsive Layout & Dynamic Grids**:
-  - Fixed 240px left sidebar with smooth independent scrolling and full-width library counter.
-  - Responsive auto-wrapping grid (`minmax(165px, 1fr)`) for Albums, Artists, and Genres with strict 1:1 square cover art aspect ratios.
-  - Full Eclipse Home dashboard with Quick Actions (`Play All`, `Shuffle Library`, `Scan Folder`), 4-card statistics grid, and Recently Played shelf.
-  - 3-column docked Player Bar with album art snippet, transport controls, continuous scrubbing seekbar, and mini spectrum visualizer.
-- **Full Queue Progression**:
-  - Sequential playback, non-repeating shuffle permutation, and repeat modes (`Off`, `All`, `One`).
-  - Seamless automatic track advancement on EOF.
-- **Cover Art & CJK Typography**:
-  - Embedded metadata picture extraction via `lofty` with asynchronous decoding on background worker threads.
-  - Zero UI thread blocking.
-  - Native Windows CJK font fallbacks for Japanese, Korean, and Chinese tracks and synced lyrics.
-- **Frameless Window Management**:
-  - Custom titlebar drag region, double-click maximize/restore, minimize, and close.
-  - 7px border margin hit-testing for 8-direction OS window resizing and bottom-right glass grip handle.
+- **Local-First Audio Engine**: Bit-perfect lossless decoding (FLAC, ALAC, WAV, MP3, AAC) powered by Rodio and Symphonia.
+- **Hardware-Tapped Audio Analyzer**: Real-time logarithmic FFT visualizer, stereo peak meters, and oscilloscope driven directly by in-memory PCM audio.
+- **Synced Lyrics & Dynamic Artwork**: Real-time autoscrolling `.lrc` lyrics from LRCLIB and asynchronous embedded cover art decoding.
+- **Dark Glass Interface**: Frameless, responsive desktop UI built with egui, custom vector iconography, and native CJK font fallbacks.
+- **Zero-Login Stream Importer**: Paste public Spotify links to save playlists, match against local files, or stream via YouTube.
 
 ---
 
@@ -67,11 +46,10 @@ Eclipse is 100% local-first and portable. It requires no administrative installe
 1. Download the latest standalone release binary (`eclipse.exe` or `eclipse-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
 2. Move `eclipse.exe` into any preferred directory (for example `C:\Tools\Eclipse` or `%LOCALAPPDATA%\Programs\Eclipse`).
 3. Double-click `eclipse.exe` to launch.
-   - **Tip:** Right-click `eclipse.exe` → **Show more options** → **Send to** → **Desktop (create shortcut)** for easy access from your desktop or taskbar.
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**
-> Because Eclipse is a community open-source binary without an expensive commercial code-signing certificate, Windows SmartScreen may display a *"Windows protected your PC"* popup on first launch. Click **More info** → **Run anyway** to start the application.
+> Because Eclipse is an open-source binary without a commercial code-signing certificate, Windows SmartScreen may display a *"Windows protected your PC"* popup on first launch. Click **More info** → **Run anyway** to start the application.
 
 ---
 
@@ -103,9 +81,9 @@ winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --wa
 ```
 
 Alternatively, open the **Visual Studio Installer** and verify the following components are checked:
-- ✅ **Desktop development with C++** (Workload)
-  - ✅ **MSVC v143 - VS 2022 C++ x64/x86 build tools**
-  - ✅ **Windows 11 SDK (10.0.22621.0)** or **Windows 10 SDK**
+- **Desktop development with C++** (Workload)
+  - **MSVC v143 - VS 2022 C++ x64/x86 build tools**
+  - **Windows 11 SDK (10.0.22621.0)** or **Windows 10 SDK**
 
 Then verify your Rust toolchain uses the MSVC target:
 ```powershell
@@ -134,6 +112,19 @@ cargo build --release
 .\run.bat
 ```
 
+---
+
+#### ✦ Running Tests
+
+```powershell
+# Run the test suite
+cargo test --all
+
+# Run the Clippy linter
+cargo clippy --all-targets -- -D warnings
+```
+
+---
 #### ✦ Packaging the Portable Distribution ZIP
 
 To create the portable standalone distribution package:
@@ -179,11 +170,11 @@ To completely reset the player to a fresh state, simply exit the application and
 ## ✦ Usage
 
 ### 1. Launching Eclipse
-- Run `./run.bat` or `./eclipse.exe` directly.
+- Run `.\run.bat` or `.\eclipse.exe` directly.
 - The player launches in a frameless glass window. Drag anywhere on the empty titlebar to move the window, or drag borders/corners to resize.
 
 ### 2. Scanning Your Music Library
-- On the **Home** dashboard, click **Scan Folder** in the Quick Actions banner, or navigate to **Settings** (`⚙ Settings` in sidebar) → **Library Monitored Folders** and click **Add Folder**.
+- On the **Home** dashboard, click **Scan Folder** in the Quick Actions banner, or navigate to **Settings** in the sidebar → **Library Monitored Folders** and click **Add Folder**.
 - Select the folder containing your audio files (`FLAC`, `MP3`, `WAV`, `OGG`, `AAC`, `M4A`).
 - Eclipse will crawl your files, extract metadata (titles, artists, albums, codecs, sample rates) via `lofty`, cache embedded cover art asynchronously, and store the indexed library in SQLite (`%APPDATA%\Eclipse\library.db`).
 
@@ -273,7 +264,7 @@ Eclipse uses the official **Google YouTube Data API v3** to search music tracks 
    - Copy your newly generated API key (starts with `AIzaSy...`).
    - *(Recommended security step)*: Click **Edit API key**, and under **API restrictions**, select **Restrict key** → check **YouTube Data API v3** → click **Save**.
 5. **Configure in Eclipse**:
-   - In Eclipse, click **Settings** (`⚙ Settings` in sidebar) → **Streaming** tab (or open **YouTube Music** in the sidebar).
+   - In Eclipse, click **Settings** in the sidebar → **Streaming** tab (or open **YouTube Music** in the sidebar).
    - Paste your API key into the field and click **Save Key & Connect**.
    - Eclipse securely encrypts and stores the key in the **Windows Credential Manager** (`CredWriteW`).
 6. **Quota & Rate Limits**:
@@ -330,7 +321,7 @@ src/
 
 ---
 
-## Acknowledgements
+## ✦ Acknowledgements
 
 Eclipse is an independent Rust reimplementation inspired by [Umbra](https://github.com/sadult/umbra), originally created by **Mersad Shahidi (@Bitologist)**.
 
