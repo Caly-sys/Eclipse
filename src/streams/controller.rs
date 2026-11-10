@@ -2,6 +2,7 @@ use crate::streams::provider::{
     StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
 };
 use crate::streams::spotify::SpotifyProvider;
+use crate::streams::youtube::YouTubeProvider;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -84,9 +85,12 @@ pub struct StreamController {
 }
 
 impl StreamController {
-    /// Initialize default streaming providers (Spotify).
+    /// Initialize default streaming providers (Spotify, YouTube Music).
     pub fn default_providers() -> Vec<Box<dyn StreamProvider>> {
-        vec![Box::new(SpotifyProvider::new())]
+        vec![
+            Box::new(SpotifyProvider::new()),
+            Box::new(YouTubeProvider::new()),
+        ]
     }
 
     /// Initialize a new stream controller and spawn its background worker.
@@ -735,9 +739,11 @@ mod tests {
     fn test_stream_controller_default_initialization() {
         let controller = StreamController::default();
         let providers = StreamController::default_providers();
-        assert_eq!(providers.len(), 1);
+        assert_eq!(providers.len(), 2);
         assert_eq!(providers[0].id(), "spotify");
         assert_eq!(providers[0].name(), "Spotify");
+        assert_eq!(providers[1].id(), "youtube");
+        assert_eq!(providers[1].name(), "YouTube Music");
         assert!(controller.search_results.is_empty());
     }
 }
