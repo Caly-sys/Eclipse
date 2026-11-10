@@ -63,11 +63,10 @@ Eclipse is portable and self-contained. It requires no administrative installers
 2. Move `eclipse.exe` into any preferred directory (such as `%LOCALAPPDATA%\Programs\Eclipse`).
 3. Double-click `eclipse.exe` to launch.
 
-#### Release SHA-256 Checksums (v1.2.2)
+#### Release SHA-256 Checksum (v1.2.2)
 | File | SHA-256 Checksum |
 |---|---|
-| `eclipse.exe` | `E224A60A3E670528A61819C27330F6D9DA399E396504E46AA3E31714444135F0` |
-| `eclipse-v1.2.2-windows-x64.zip` | `B55A4D806A3975ECCAE5A4F9FEB5A22439F982FC193D9B6BA6C531801A7D82D1` |
+| `eclipse.exe` (x64 MSVC) | `5CC2171A7873EC9B57238EEE2467429C5AD6881524A7A7E26F23131F61905809` |
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**
