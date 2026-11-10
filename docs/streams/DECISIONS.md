@@ -12,14 +12,14 @@
 - **Decision**: Store all sensitive tokens in the Windows Credential Manager using the `keyring` crate with `features = ["windows-native"]`. Implemented in `src/streams/credentials.rs` (`CredentialStore`). Service namespaces `Eclipse_Spotify` and `Eclipse_YouTube` isolate credentials with zero plain-text logging. Missing credentials safely return `Ok(None)`.
 - **Status**: Accepted & Implemented (TASK-S1).
 
-### ADR-003: YouTube Playback Hosting Strategy
-- **Context**: User requirement: *"Record decisions in DECISIONS.md, including how YouTube playback is hosted (options: a separate small webview window with the official embedded player, or opening the default browser). Pick the simplest that works."*
-- **Evaluation**:
-  - *Option A (Heavy embedded webview via wry/tao)*: Introduces massive C++/Edge WebView2 native build dependencies, potential CI compilation failures on Windows MSVC, huge binary size inflation, and complicated IPC event bridges.
-  - *Option B (Lightweight official webview / popup window)*: Uses Windows native Shell/Edge popup URL to host the official YouTube embed player.
-  - *Option C (Opening the default browser at the official embedded / watch URL)*: 100% stable, zero additional C++ runtime dependencies, zero binary bloat, no DLL dependencies, zero risk of broken builds, and fully compliant with YouTube's Terms of Service and official monetization/player guidelines.
-- **Decision**: Select **Option C (official embedded / watch player launched in user's default browser via `webbrowser` crate off-thread)** as the primary simplest working solution. Eclipse provides search, playlist browsing, track listing, and one-click playback launch.
-- **Status**: Accepted & Implemented (TASK-S1).
+### ADR-003: YouTube Embedded Playback via Dedicated Wry/WebView2 Window (Official IFrame API)
+- **Context**: The player bar, Play all, Shuffle, seek, volume, and next/prev controls must directly control YouTube playback, read playback position in real-time, and advance on the "ended" event. `webbrowser::open` does not support bidirectional IPC control.
+- **Decision**: Host the official YouTube IFrame Player API inside a controlled, small dedicated webview window using `wry` (backed by Windows WebView2):
+  - Uses `https://www.youtube.com/iframe_api` with `enablejsapi=1`.
+  - Bidirectional IPC: Eclipse dispatches JavaScript commands (`player.playVideo()`, `player.pauseVideo()`, `player.seekTo(sec)`, `player.setVolume(vol)`), and listens to `onStateChange` events (playing, paused, ended) and time updates.
+  - On the "ended" event (state 0), automatically advances to the next track in the queue.
+  - Fallback / Question gate: If `wry` encounters compatibility issues with the current egui setup, write `handoffs/QUESTION-WRY.md` and stop per protocol.
+- **Status**: Accepted & Supersedes previous browser popout decision.
 
 ### ADR-004: Pure Vector Icons for Streaming Providers
 - **Context**: Eclipse has a strict "Zero Emojis" vector icon policy.

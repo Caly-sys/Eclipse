@@ -51,37 +51,11 @@ impl CredentialStore {
         }
     }
 
-    // High-level helpers for Spotify
-
-    pub fn save_spotify_tokens(access_token: &str, refresh_token: Option<&str>) -> Result<(), String> {
-        Self::set_secret(SERVICE_SPOTIFY, USER_ACCESS_TOKEN, access_token)?;
-        if let Some(refresh) = refresh_token {
-            Self::set_secret(SERVICE_SPOTIFY, USER_REFRESH_TOKEN, refresh)?;
-        }
-        Ok(())
-    }
-
-    pub fn get_spotify_access_token() -> Result<Option<String>, String> {
-        Self::get_secret(SERVICE_SPOTIFY, USER_ACCESS_TOKEN)
-    }
-
-    pub fn get_spotify_refresh_token() -> Result<Option<String>, String> {
-        Self::get_secret(SERVICE_SPOTIFY, USER_REFRESH_TOKEN)
-    }
-
-    pub fn save_spotify_client_id(client_id: &str) -> Result<(), String> {
-        Self::set_secret(SERVICE_SPOTIFY, USER_CLIENT_ID, client_id)
-    }
-
-    pub fn get_spotify_client_id() -> Result<Option<String>, String> {
-        Self::get_secret(SERVICE_SPOTIFY, USER_CLIENT_ID)
-    }
-
-    pub fn clear_spotify_credentials() -> Result<(), String> {
+    /// Clean one-time migration: delete any legacy `Eclipse_Spotify` keyring entries.
+    pub fn migrate_legacy_credentials() {
         let _ = Self::delete_secret(SERVICE_SPOTIFY, USER_ACCESS_TOKEN);
         let _ = Self::delete_secret(SERVICE_SPOTIFY, USER_REFRESH_TOKEN);
         let _ = Self::delete_secret(SERVICE_SPOTIFY, USER_CLIENT_ID);
-        Ok(())
     }
 
     // High-level helpers for YouTube
@@ -138,5 +112,21 @@ mod tests {
         let after_del = CredentialStore::get_secret(test_service, test_user);
         assert!(after_del.is_ok());
         assert_eq!(after_del.unwrap(), None);
+    }
+
+    #[test]
+    fn test_migrate_legacy_credentials() {
+        // Store dummy legacy credentials
+        let _ = CredentialStore::set_secret(SERVICE_SPOTIFY, USER_ACCESS_TOKEN, "dummy_access");
+        let _ = CredentialStore::set_secret(SERVICE_SPOTIFY, USER_REFRESH_TOKEN, "dummy_refresh");
+        let _ = CredentialStore::set_secret(SERVICE_SPOTIFY, USER_CLIENT_ID, "dummy_client");
+
+        // Run migration
+        CredentialStore::migrate_legacy_credentials();
+
+        // Verify all legacy secrets are deleted
+        assert_eq!(CredentialStore::get_secret(SERVICE_SPOTIFY, USER_ACCESS_TOKEN).unwrap(), None);
+        assert_eq!(CredentialStore::get_secret(SERVICE_SPOTIFY, USER_REFRESH_TOKEN).unwrap(), None);
+        assert_eq!(CredentialStore::get_secret(SERVICE_SPOTIFY, USER_CLIENT_ID).unwrap(), None);
     }
 }

@@ -1,3 +1,4 @@
+use crate::streams::credentials::CredentialStore;
 use crate::streams::provider::{
     StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
 };
@@ -95,6 +96,9 @@ impl StreamController {
 
     /// Initialize a new stream controller and spawn its background worker.
     pub fn new(providers: Vec<Box<dyn StreamProvider>>) -> Self {
+        // Automatically migrate/purge any legacy Spotify keyring entries
+        CredentialStore::migrate_legacy_credentials();
+
         let (cmd_tx, cmd_rx) = channel::<StreamCommand>();
         let (event_tx, event_rx) = channel::<StreamEvent>();
 
@@ -533,27 +537,31 @@ fn run_stream_worker(
                 }
                 StreamCommand::PollState { provider_id } => {
                     let id_key = provider_id.to_lowercase();
-                    if let Some(&idx) = provider_map.get(&id_key) {
-                        if let Ok(Some(state)) = providers[idx].get_playback_state() {
-                            let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
-                                provider_id,
-                                state,
-                            });
+                    if id_key != "spotify" {
+                        if let Some(&idx) = provider_map.get(&id_key) {
+                            if let Ok(Some(state)) = providers[idx].get_playback_state() {
+                                let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
+                                    provider_id,
+                                    state,
+                                });
+                            }
                         }
                     }
                 }
             }
         } else {
-            // Periodic 1Hz poll when idle
+            // Periodic 1Hz poll when idle (excluding Spotify Connect polling)
             if let Some(id) = &active_provider_id {
                 let id_key = id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    if providers[idx].is_connected() {
-                        if let Ok(Some(state)) = providers[idx].get_playback_state() {
-                            let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
-                                provider_id: id.clone(),
-                                state,
-                            });
+                if id_key != "spotify" {
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        if providers[idx].is_connected() {
+                            if let Ok(Some(state)) = providers[idx].get_playback_state() {
+                                let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
+                                    provider_id: id.clone(),
+                                    state,
+                                });
+                            }
                         }
                     }
                 }

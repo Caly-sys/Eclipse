@@ -1113,27 +1113,13 @@ fn render_lyrics_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
 }
 
 fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
-    let spotify_input_id = egui::Id::new("settings_streaming_spotify_client_id");
-    let mut spotify_input: String = ui.data(|d| d.get_temp(spotify_input_id)).unwrap_or_else(|| {
-        CredentialStore::get_spotify_client_id().ok().flatten().unwrap_or_default()
-    });
-
     let youtube_input_id = egui::Id::new("settings_streaming_youtube_api_key");
     let mut youtube_input: String = ui.data(|d| d.get_temp(youtube_input_id)).unwrap_or_else(|| {
         CredentialStore::get_youtube_api_key().ok().flatten().unwrap_or_default()
     });
 
-    let spotify_msg_id = egui::Id::new("settings_streaming_spotify_status_msg");
-    let mut spotify_msg: Option<String> = ui.data(|d| d.get_temp(spotify_msg_id));
-
     let youtube_msg_id = egui::Id::new("settings_streaming_youtube_status_msg");
     let mut youtube_msg: Option<String> = ui.data(|d| d.get_temp(youtube_msg_id));
-
-    let has_spotify = CredentialStore::get_spotify_client_id()
-        .ok()
-        .flatten()
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
 
     let has_youtube = CredentialStore::get_youtube_api_key()
         .ok()
@@ -1165,64 +1151,9 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
         },
     );
 
-    section_header(ui, "SPOTIFY DEVELOPER CONFIGURATION", theme);
-
-    // 3. Spotify Client ID
-    setting_row_card(
-        ui,
-        theme,
-        "Spotify Client ID",
-        "Official Web API Client ID (Redirect: http://127.0.0.1:8888/callback).",
-        |ui| {
-            ui.horizontal(|ui| {
-                if has_spotify {
-                    pill_badge(
-                        ui,
-                        "CONFIGURED",
-                        Color32::from_rgba_unmultiplied(30, 215, 96, 35),
-                        Color32::from_rgb(30, 215, 96),
-                    );
-                } else {
-                    pill_badge(
-                        ui,
-                        "NOT CONFIGURED",
-                        Color32::from_rgba_unmultiplied(239, 68, 68, 35),
-                        Color32::from_rgb(239, 68, 68),
-                    );
-                }
-
-                ui.add_space(6.0);
-                ui.add(
-                    TextEdit::singleline(&mut spotify_input)
-                        .hint_text("Enter Spotify Client ID...")
-                        .desired_width(170.0),
-                );
-
-                if white_pill_button(ui, "Save", None).clicked() {
-                    let trimmed = spotify_input.trim();
-                    if !trimmed.is_empty() {
-                        let _ = CredentialStore::save_spotify_client_id(trimmed);
-                        spotify_msg = Some("Client ID saved to Windows Credential Manager.".to_string());
-                    }
-                }
-
-                if dark_pill_button(ui, "Clear", None).clicked() {
-                    let _ = CredentialStore::clear_spotify_credentials();
-                    spotify_input.clear();
-                    spotify_msg = Some("Spotify credentials cleared.".to_string());
-                }
-            });
-        },
-    );
-
-    if let Some(ref msg) = spotify_msg {
-        ui.add_space(2.0);
-        ui.label(RichText::new(msg).size(11.0).color(theme.accent));
-    }
-
     section_header(ui, "YOUTUBE DATA API CONFIGURATION", theme);
 
-    // 4. YouTube API Key
+    // 3. YouTube API Key
     setting_row_card(
         ui,
         theme,
@@ -1278,7 +1209,7 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
 
     section_header(ui, "EXPERIMENTAL", theme);
 
-    // 5. Enable experimental streaming
+    // 4. Enable experimental streaming
     setting_row_card(
         ui,
         theme,
@@ -1290,9 +1221,7 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
     );
 
     ui.data_mut(|d| {
-        d.insert_temp(spotify_input_id, spotify_input);
         d.insert_temp(youtube_input_id, youtube_input);
-        d.insert_temp(spotify_msg_id, spotify_msg);
         d.insert_temp(youtube_msg_id, youtube_msg);
     });
 }
