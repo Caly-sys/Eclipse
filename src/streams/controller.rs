@@ -1,4 +1,8 @@
 use crate::streams::credentials::CredentialStore;
+use crate::streams::playback::{
+    prefetch_next_track_match, resolve_or_cached_match, search_youtube_alternatives,
+    select_alternative_match, YouTubeAlternativeMatch, YouTubeWebviewPlayer,
+};
 use crate::streams::provider::{
     StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
 };
@@ -9,6 +13,7 @@ use crate::streams::spotify_public::{
 use crate::streams::youtube::YouTubeProvider;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 /// Commands dispatched from UI / Controller to the Stream background worker.
@@ -31,6 +36,20 @@ pub enum StreamCommand {
     ImportSpotifyLink(String),
     MatchLibrary(Vec<StreamTrack>),
     SaveImportedPlaylist { name: String, tracks: Vec<StreamTrack> },
+    PlayStreamTrack(StreamTrack),
+    PauseStream,
+    ResumeStream,
+    SeekStream(f64),
+    SetStreamVolume(f32),
+    SelectAlternativeMatch {
+        spotify_id: String,
+        alternative: YouTubeAlternativeMatch,
+    },
+    SearchAlternatives {
+        spotify_id: String,
+        query: String,
+    },
+    PrefetchNextTrack(StreamTrack),
     Shutdown,
 }
 
@@ -75,6 +94,15 @@ pub enum StreamEvent {
         name: String,
         track_count: usize,
     },
+    StreamTrackEnded,
+    AlternativesLoaded {
+        spotify_id: String,
+        alternatives: Vec<YouTubeAlternativeMatch>,
+    },
+    AlternativeSelected {
+        spotify_id: String,
+        matched: YouTubeAlternativeMatch,
+    },
     Error {
         provider_id: String,
         action: String,
@@ -97,6 +125,9 @@ pub struct StreamController {
     pub is_busy: bool,
     pub last_error: Option<String>,
     pub last_spotify_import: Option<Result<SpotifyImportResult, String>>,
+    pub alternatives: HashMap<String, Vec<YouTubeAlternativeMatch>>,
+    pub stream_queue: Vec<StreamTrack>,
+    pub stream_queue_index: Option<usize>,
 }
 
 impl StreamController {
@@ -140,6 +171,9 @@ impl StreamController {
             is_busy: false,
             last_error: None,
             last_spotify_import: None,
+            alternatives: HashMap::new(),
+            stream_queue: Vec::new(),
+            stream_queue_index: None,
         }
     }
 
@@ -226,16 +260,26 @@ impl StreamController {
         });
     }
 
-    pub fn next(&self, provider_id: &str) {
-        let _ = self.send(StreamCommand::Next {
-            provider_id: provider_id.to_string(),
-        });
+    pub fn next(&mut self, provider_id: &str) {
+        if provider_id.eq_ignore_ascii_case("youtube") && self.has_next_in_queue() {
+            self.play_next_in_queue();
+        } else {
+            let _ = self.send(StreamCommand::Next {
+                provider_id: provider_id.to_string(),
+            });
+        }
     }
 
-    pub fn prev(&self, provider_id: &str) {
-        let _ = self.send(StreamCommand::Prev {
-            provider_id: provider_id.to_string(),
-        });
+    pub fn prev(&mut self, provider_id: &str) {
+        if provider_id.eq_ignore_ascii_case("youtube")
+            && self.stream_queue_index.map(|i| i > 0).unwrap_or(false)
+        {
+            self.play_prev_in_queue();
+        } else {
+            let _ = self.send(StreamCommand::Prev {
+                provider_id: provider_id.to_string(),
+            });
+        }
     }
 
     pub fn set_volume(&self, provider_id: &str, volume: f32) {
@@ -255,6 +299,111 @@ impl StreamController {
         let _ = self.send(StreamCommand::OpenBrowserUrl {
             url: url.to_string(),
         });
+    }
+
+    /// Play a stream track via lazy YouTube matching and official embedded webview playback.
+    pub fn play_stream_track(&mut self, track: StreamTrack) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::PlayStreamTrack(track));
+    }
+
+    /// Pause stream playback.
+    pub fn pause_stream(&self) {
+        let _ = self.send(StreamCommand::PauseStream);
+    }
+
+    /// Resume stream playback.
+    pub fn resume_stream(&self) {
+        let _ = self.send(StreamCommand::ResumeStream);
+    }
+
+    /// Seek in the current stream track.
+    pub fn seek_stream(&self, position_secs: f64) {
+        let _ = self.send(StreamCommand::SeekStream(position_secs));
+    }
+
+    /// Set stream playback volume (0.0 to 1.0).
+    pub fn set_stream_volume(&self, volume: f32) {
+        let _ = self.send(StreamCommand::SetStreamVolume(volume));
+    }
+
+    /// Select an alternative YouTube match for a stream track.
+    pub fn select_alternative_match(
+        &mut self,
+        spotify_id: &str,
+        alternative: YouTubeAlternativeMatch,
+    ) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::SelectAlternativeMatch {
+            spotify_id: spotify_id.to_string(),
+            alternative,
+        });
+    }
+
+    /// Search for alternative YouTube matches for a given track or query.
+    pub fn search_alternatives(&mut self, spotify_id: &str, query: &str) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::SearchAlternatives {
+            spotify_id: spotify_id.to_string(),
+            query: query.to_string(),
+        });
+    }
+
+    /// Lazily prefetch match for the next track in queue.
+    pub fn prefetch_next_track(&self, next_track: StreamTrack) {
+        let _ = self.send(StreamCommand::PrefetchNextTrack(next_track));
+    }
+
+    /// Load and play a stream queue.
+    pub fn load_stream_queue(&mut self, tracks: Vec<StreamTrack>, start_index: usize) {
+        self.stream_queue = tracks;
+        self.stream_queue_index = Some(start_index);
+        if let Some(track) = self.stream_queue.get(start_index).cloned() {
+            self.play_stream_track(track);
+            if let Some(next) = self.stream_queue.get(start_index + 1).cloned() {
+                self.prefetch_next_track(next);
+            }
+        }
+    }
+
+    pub fn has_next_in_queue(&self) -> bool {
+        if let Some(idx) = self.stream_queue_index {
+            idx + 1 < self.stream_queue.len()
+        } else {
+            !self.stream_queue.is_empty()
+        }
+    }
+
+    pub fn play_next_in_queue(&mut self) -> bool {
+        if let Some(idx) = self.stream_queue_index {
+            if idx + 1 < self.stream_queue.len() {
+                let next_idx = idx + 1;
+                self.stream_queue_index = Some(next_idx);
+                let track = self.stream_queue[next_idx].clone();
+                self.play_stream_track(track);
+                if let Some(peek) = self.stream_queue.get(next_idx + 1).cloned() {
+                    self.prefetch_next_track(peek);
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn play_prev_in_queue(&mut self) -> bool {
+        if let Some(idx) = self.stream_queue_index {
+            if idx > 0 {
+                let prev_idx = idx - 1;
+                self.stream_queue_index = Some(prev_idx);
+                let track = self.stream_queue[prev_idx].clone();
+                self.play_stream_track(track);
+                return true;
+            }
+        }
+        false
     }
 
     /// Dispatch Spotify public metadata import to the background worker.
@@ -344,6 +493,26 @@ impl StreamController {
                 StreamEvent::PlaylistSaved { .. } => {
                     self.is_busy = false;
                 }
+                StreamEvent::StreamTrackEnded => {
+                    if let Some(ref mut state) = self.active_state {
+                        state.is_playing = false;
+                    }
+                }
+                StreamEvent::AlternativesLoaded {
+                    spotify_id,
+                    alternatives,
+                } => {
+                    self.alternatives
+                        .insert(spotify_id.clone(), alternatives.clone());
+                    self.is_busy = false;
+                }
+                StreamEvent::AlternativeSelected {
+                    spotify_id,
+                    ..
+                } => {
+                    self.alternatives.remove(spotify_id);
+                    self.is_busy = false;
+                }
                 StreamEvent::Error { message, .. } => {
                     self.last_error = Some(message.clone());
                     self.is_busy = false;
@@ -382,7 +551,8 @@ fn run_stream_worker(
     }
 
     let mut active_provider_id: Option<String> = None;
-    let poll_interval = std::time::Duration::from_millis(1000);
+    let mut webview_player: Option<YouTubeWebviewPlayer> = None;
+    let poll_interval = std::time::Duration::from_millis(200);
 
     loop {
         let cmd_opt = match cmd_rx.recv_timeout(poll_interval) {
@@ -393,7 +563,155 @@ fn run_stream_worker(
 
         if let Some(cmd) = cmd_opt {
             match cmd {
-                StreamCommand::Shutdown => break,
+                StreamCommand::Shutdown => {
+                    if let Some(mut p) = webview_player {
+                        p.shutdown();
+                    }
+                    break;
+                }
+                StreamCommand::PlayStreamTrack(track) => {
+                    active_provider_id = Some("youtube".to_string());
+                    let tx = event_tx.clone();
+                    let track_clone = track.clone();
+                    match crate::library::Database::open() {
+                        Ok(db) => {
+                            let api_key = CredentialStore::get_youtube_api_key().ok().flatten();
+                            match resolve_or_cached_match(&db, api_key.as_deref(), &track) {
+                                Ok(matched) => {
+                                    let player = webview_player.get_or_insert_with(YouTubeWebviewPlayer::new);
+                                    let _ = player.play_video(&matched.video_id, &track_clone);
+                                    let _ = tx.send(StreamEvent::TrackStarted {
+                                        provider_id: "youtube".to_string(),
+                                        track: track_clone,
+                                    });
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(StreamEvent::Error {
+                                        provider_id: "youtube".to_string(),
+                                        action: "play_stream_track".to_string(),
+                                        message: e,
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(StreamEvent::Error {
+                                provider_id: "youtube".to_string(),
+                                action: "play_stream_track".to_string(),
+                                message: format!("Failed to open database: {e}"),
+                            });
+                        }
+                    }
+                }
+                StreamCommand::PauseStream => {
+                    if let Some(ref p) = webview_player {
+                        p.pause();
+                    }
+                    if let Some(ref id) = active_provider_id {
+                        let id_key = id.to_lowercase();
+                        if let Some(&idx) = provider_map.get(&id_key) {
+                            let _ = providers[idx].pause();
+                        }
+                    }
+                }
+                StreamCommand::ResumeStream => {
+                    if let Some(ref p) = webview_player {
+                        p.resume();
+                    }
+                    if let Some(ref id) = active_provider_id {
+                        let id_key = id.to_lowercase();
+                        if let Some(&idx) = provider_map.get(&id_key) {
+                            let _ = providers[idx].resume();
+                        }
+                    }
+                }
+                StreamCommand::SeekStream(position_secs) => {
+                    if let Some(ref p) = webview_player {
+                        p.seek(position_secs);
+                    }
+                    if let Some(ref id) = active_provider_id {
+                        let id_key = id.to_lowercase();
+                        if let Some(&idx) = provider_map.get(&id_key) {
+                            let _ = providers[idx].seek(position_secs);
+                        }
+                    }
+                }
+                StreamCommand::SetStreamVolume(volume) => {
+                    if let Some(ref p) = webview_player {
+                        p.set_volume(volume);
+                    }
+                    if let Some(ref id) = active_provider_id {
+                        let id_key = id.to_lowercase();
+                        if let Some(&idx) = provider_map.get(&id_key) {
+                            let _ = providers[idx].set_volume(volume);
+                        }
+                    }
+                }
+                StreamCommand::SelectAlternativeMatch {
+                    spotify_id,
+                    alternative,
+                } => {
+                    match crate::library::Database::open() {
+                        Ok(db) => {
+                            if let Err(e) = select_alternative_match(&db, &spotify_id, &alternative) {
+                                let _ = event_tx.send(StreamEvent::Error {
+                                    provider_id: "youtube".to_string(),
+                                    action: "select_alternative_match".to_string(),
+                                    message: e,
+                                });
+                            } else {
+                                let _ = event_tx.send(StreamEvent::AlternativeSelected {
+                                    spotify_id,
+                                    matched: alternative,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(StreamEvent::Error {
+                                provider_id: "youtube".to_string(),
+                                action: "select_alternative_match".to_string(),
+                                message: format!("Failed to open database: {e}"),
+                            });
+                        }
+                    }
+                }
+                StreamCommand::SearchAlternatives { spotify_id, query } => {
+                    let tx = event_tx.clone();
+                    thread::spawn(move || {
+                        let api_key = match CredentialStore::get_youtube_api_key() {
+                            Ok(Some(k)) if !k.trim().is_empty() => k,
+                            _ => {
+                                let _ = tx.send(StreamEvent::Error {
+                                    provider_id: "youtube".to_string(),
+                                    action: "search_alternatives".to_string(),
+                                    message: crate::streams::playback::MISSING_KEY_ERROR_MESSAGE.to_string(),
+                                });
+                                return;
+                            }
+                        };
+                        match search_youtube_alternatives(&api_key, &query, 10) {
+                            Ok(alternatives) => {
+                                let _ = tx.send(StreamEvent::AlternativesLoaded {
+                                    spotify_id,
+                                    alternatives,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = tx.send(StreamEvent::Error {
+                                    provider_id: "youtube".to_string(),
+                                    action: "search_alternatives".to_string(),
+                                    message: e,
+                                });
+                            }
+                        }
+                    });
+                }
+                StreamCommand::PrefetchNextTrack(next_track) => {
+                    if let Ok(db) = crate::library::Database::open() {
+                        let api_key = CredentialStore::get_youtube_api_key().ok().flatten();
+                        prefetch_next_track_match(Arc::new(db), api_key, next_track);
+                    }
+                }
                 StreamCommand::OpenBrowserUrl { url } => {
                     let u = url.clone();
                     let tx = event_tx.clone();
@@ -522,6 +840,10 @@ fn run_stream_worker(
                 StreamCommand::PlayTrack { provider_id, track } => {
                     let id_key = provider_id.to_lowercase();
                     active_provider_id = Some(provider_id.clone());
+                    if id_key == "youtube" {
+                        let player = webview_player.get_or_insert_with(YouTubeWebviewPlayer::new);
+                        let _ = player.play_video(&track.id, &track);
+                    }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let track_clone = track.clone();
                         match providers[idx].play(&track) {
@@ -543,6 +865,11 @@ fn run_stream_worker(
                 }
                 StreamCommand::Pause { provider_id } => {
                     let id_key = provider_id.to_lowercase();
+                    if id_key == "youtube" {
+                        if let Some(ref p) = webview_player {
+                            p.pause();
+                        }
+                    }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].pause();
                     }
@@ -550,6 +877,11 @@ fn run_stream_worker(
                 StreamCommand::Resume { provider_id } => {
                     let id_key = provider_id.to_lowercase();
                     active_provider_id = Some(provider_id.clone());
+                    if id_key == "youtube" {
+                        if let Some(ref p) = webview_player {
+                            p.resume();
+                        }
+                    }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].resume();
                     }
@@ -559,6 +891,11 @@ fn run_stream_worker(
                     position_secs,
                 } => {
                     let id_key = provider_id.to_lowercase();
+                    if id_key == "youtube" {
+                        if let Some(ref p) = webview_player {
+                            p.seek(position_secs);
+                        }
+                    }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].seek(position_secs);
                     }
@@ -580,13 +917,18 @@ fn run_stream_worker(
                     volume,
                 } => {
                     let id_key = provider_id.to_lowercase();
+                    if id_key == "youtube" {
+                        if let Some(ref p) = webview_player {
+                            p.set_volume(volume);
+                        }
+                    }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].set_volume(volume);
                     }
                 }
                 StreamCommand::PollState { provider_id } => {
                     let id_key = provider_id.to_lowercase();
-                    if id_key != "spotify" {
+                    if id_key != "spotify" && id_key != "youtube" {
                         if let Some(&idx) = provider_map.get(&id_key) {
                             if let Ok(Some(state)) = providers[idx].get_playback_state() {
                                 let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
@@ -666,21 +1008,22 @@ fn run_stream_worker(
                     });
                 }
             }
-        } else {
-            // Periodic 1Hz poll when idle (excluding Spotify Connect polling)
-            if let Some(id) = &active_provider_id {
-                let id_key = id.to_lowercase();
-                if id_key != "spotify" {
-                    if let Some(&idx) = provider_map.get(&id_key) {
-                        if providers[idx].is_connected() {
-                            if let Ok(Some(state)) = providers[idx].get_playback_state() {
-                                let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
-                                    provider_id: id.clone(),
-                                    state,
-                                });
-                            }
-                        }
-                    }
+        }
+
+        // Drain incoming webview IPC messages if webview player is active
+        if let Some(ref mut p) = webview_player {
+            if p.update() {
+                let _ = event_tx.send(StreamEvent::StreamTrackEnded);
+            }
+
+            // If YouTube is active, dispatch real-time state updates from the webview player
+            if active_provider_id.as_deref().map(|s| s.eq_ignore_ascii_case("youtube")).unwrap_or(false) {
+                let cur_state = p.playback_state.read().unwrap().clone();
+                if cur_state.current_track.is_some() {
+                    let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
+                        provider_id: "youtube".to_string(),
+                        state: cur_state,
+                    });
                 }
             }
         }
@@ -993,5 +1336,66 @@ mod tests {
         }
         assert!(got_saved);
         assert!(!controller.is_busy);
+    }
+
+    #[test]
+    fn test_stream_controller_playback_and_queue_commands() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        let track1 = StreamTrack::new(
+            "sp_1",
+            "Track One",
+            "Artist",
+            "Album",
+            180.0,
+            None,
+            "spotify:track:1",
+            "spotify",
+        );
+        let track2 = StreamTrack::new(
+            "sp_2",
+            "Track Two",
+            "Artist",
+            "Album",
+            200.0,
+            None,
+            "spotify:track:2",
+            "spotify",
+        );
+
+        // Load stream queue
+        controller.load_stream_queue(vec![track1.clone(), track2.clone()], 0);
+        assert_eq!(controller.stream_queue.len(), 2);
+        assert_eq!(controller.stream_queue_index, Some(0));
+        assert!(controller.has_next_in_queue());
+
+        // Advance queue
+        assert!(controller.play_next_in_queue());
+        assert_eq!(controller.stream_queue_index, Some(1));
+        assert!(!controller.has_next_in_queue());
+
+        // Step back
+        assert!(controller.play_prev_in_queue());
+        assert_eq!(controller.stream_queue_index, Some(0));
+
+        // Test direct stream controls
+        controller.pause_stream();
+        controller.resume_stream();
+        controller.seek_stream(45.0);
+        controller.set_stream_volume(0.8);
+
+        // Test alternative selection dispatch
+        let alt = YouTubeAlternativeMatch::new(
+            "yt_alt_123",
+            "Alternative Title",
+            "Alt Channel",
+            182.0,
+            None,
+        );
+        controller.select_alternative_match("sp_1", alt.clone());
+
+        // Test StreamTrackEnded handling
+        let _ = controller.send(StreamCommand::Shutdown);
     }
 }

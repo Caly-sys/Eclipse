@@ -1,6 +1,7 @@
 pub mod controller;
 pub mod credentials;
 pub mod matcher;
+pub mod playback;
 pub mod provider;
 pub mod spotify;
 pub mod spotify_public;
@@ -14,6 +15,7 @@ pub use credentials::{
     USER_CLIENT_ID, USER_REFRESH_TOKEN,
 };
 pub use matcher::*;
+pub use playback::*;
 pub use provider::{
     PlaybackSource, StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
 };

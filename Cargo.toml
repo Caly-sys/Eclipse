@@ -26,6 +26,8 @@ webbrowser = "1.0"
 url = "2.5"
 sha2 = "0.10"
 base64 = "0.22"
+wry = "0.47"
+tao = "0.30"
 
 [profile.release]
 opt-level = 3

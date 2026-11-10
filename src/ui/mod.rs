@@ -232,6 +232,16 @@ impl App for EclipseApp {
                         }
                     }
                 }
+                crate::streams::controller::StreamEvent::StreamTrackEnded => {
+                    if self.stream_controller.has_next_in_queue() {
+                        self.stream_controller.play_next_in_queue();
+                    } else {
+                        self.player.next();
+                    }
+                }
+                crate::streams::controller::StreamEvent::AlternativeSelected { spotify_id, matched } => {
+                    self.set_status(&format!("Match updated for {spotify_id}: {}", matched.title));
+                }
                 crate::streams::controller::StreamEvent::Error { provider_id, action, message } => {
                     self.set_status(&format!("{provider_id} error ({action}): {message}"));
                 }

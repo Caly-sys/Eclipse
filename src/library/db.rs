@@ -112,7 +112,17 @@ impl Database {
                 data TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS ix_stream_cache_key ON stream_cache(key);",
+            CREATE INDEX IF NOT EXISTS ix_stream_cache_key ON stream_cache(key);
+
+            CREATE TABLE IF NOT EXISTS stream_match_cache (
+                spotify_id TEXT PRIMARY KEY,
+                youtube_video_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                duration_secs REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_stream_match_cache_spotify ON stream_match_cache(spotify_id);",
         )?;
         Ok(())
     }
@@ -699,6 +709,84 @@ impl Database {
         conn.execute("DELETE FROM stream_cache", [])?;
         Ok(())
     }
+
+    /// Retrieve a cached stream match pairing (e.g. spotify_id -> youtube_video_id).
+    pub fn get_stream_match(&self, spotify_id: &str) -> Result<Option<StreamMatchRecord>> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT spotify_id, youtube_video_id, title, channel, duration_secs, updated_at
+             FROM stream_match_cache WHERE spotify_id = ?1",
+        )?;
+        let mut rows = stmt.query(params![spotify_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(StreamMatchRecord {
+                spotify_id: row.get(0)?,
+                youtube_video_id: row.get(1)?,
+                title: row.get(2)?,
+                channel: row.get(3)?,
+                duration_secs: row.get(4)?,
+                updated_at: row.get(5)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Cache or update a stream match pairing.
+    pub fn set_stream_match(
+        &self,
+        spotify_id: &str,
+        youtube_video_id: &str,
+        title: &str,
+        channel: &str,
+        duration_secs: f64,
+    ) -> Result<()> {
+        let conn = self.lock_conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        conn.execute(
+            "INSERT INTO stream_match_cache (spotify_id, youtube_video_id, title, channel, duration_secs, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(spotify_id) DO UPDATE SET
+                 youtube_video_id = excluded.youtube_video_id,
+                 title = excluded.title,
+                 channel = excluded.channel,
+                 duration_secs = excluded.duration_secs,
+                 updated_at = excluded.updated_at;",
+            params![spotify_id, youtube_video_id, title, channel, duration_secs, now],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a cached stream match pairing.
+    pub fn delete_stream_match(&self, spotify_id: &str) -> Result<()> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "DELETE FROM stream_match_cache WHERE spotify_id = ?1",
+            params![spotify_id],
+        )?;
+        Ok(())
+    }
+
+    /// Clear all cached stream match pairings.
+    pub fn clear_stream_match_cache(&self) -> Result<()> {
+        let conn = self.lock_conn();
+        conn.execute("DELETE FROM stream_match_cache", [])?;
+        Ok(())
+    }
+}
+
+/// Cached stream match pairing record stored in SQLite.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct StreamMatchRecord {
+    pub spotify_id: String,
+    pub youtube_video_id: String,
+    pub title: String,
+    pub channel: String,
+    pub duration_secs: f64,
+    pub updated_at: f64,
 }
 
 #[cfg(test)]
@@ -856,6 +944,59 @@ mod tests {
         db.clear_stream_cache()?;
         assert_eq!(db.get_stream_cache("k1")?, None);
         assert_eq!(db.get_stream_cache("k2")?, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_match_cache_crud() -> Result<()> {
+        let db = Database::open_in_memory()?;
+        let spotify_id = "4cOdK2wGLETKBW3PvgPWqT";
+
+        // Initially empty
+        assert_eq!(db.get_stream_match(spotify_id)?, None);
+
+        // Insert match
+        db.set_stream_match(
+            spotify_id,
+            "dQw4w9WgXcQ",
+            "Rick Astley - Never Gonna Give You Up (Official Music Video)",
+            "Rick Astley",
+            213.0,
+        )?;
+
+        let record = db.get_stream_match(spotify_id)?.expect("match record present");
+        assert_eq!(record.spotify_id, spotify_id);
+        assert_eq!(record.youtube_video_id, "dQw4w9WgXcQ");
+        assert_eq!(record.title, "Rick Astley - Never Gonna Give You Up (Official Music Video)");
+        assert_eq!(record.channel, "Rick Astley");
+        assert_eq!(record.duration_secs, 213.0);
+        assert!(record.updated_at > 0.0);
+
+        // Update match (e.g. user selected alternative match)
+        db.set_stream_match(
+            spotify_id,
+            "alternative_vid_id",
+            "Never Gonna Give You Up (Remastered)",
+            "Rick Astley Official",
+            214.0,
+        )?;
+        let updated = db.get_stream_match(spotify_id)?.expect("updated record");
+        assert_eq!(updated.youtube_video_id, "alternative_vid_id");
+        assert_eq!(updated.title, "Never Gonna Give You Up (Remastered)");
+
+        // Delete single
+        db.delete_stream_match(spotify_id)?;
+        assert_eq!(db.get_stream_match(spotify_id)?, None);
+
+        // Clear all
+        db.set_stream_match("s1", "yt1", "Title 1", "Artist 1", 100.0)?;
+        db.set_stream_match("s2", "yt2", "Title 2", "Artist 2", 200.0)?;
+        assert!(db.get_stream_match("s1")?.is_some());
+        assert!(db.get_stream_match("s2")?.is_some());
+        db.clear_stream_match_cache()?;
+        assert_eq!(db.get_stream_match("s1")?, None);
+        assert_eq!(db.get_stream_match("s2")?, None);
 
         Ok(())
     }
