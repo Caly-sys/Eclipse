@@ -261,7 +261,9 @@ impl StreamController {
     }
 
     pub fn next(&mut self, provider_id: &str) {
-        if provider_id.eq_ignore_ascii_case("youtube") && self.has_next_in_queue() {
+        if (provider_id.eq_ignore_ascii_case("youtube") || provider_id.eq_ignore_ascii_case("spotify"))
+            && self.has_next_in_queue()
+        {
             self.play_next_in_queue();
         } else {
             let _ = self.send(StreamCommand::Next {
@@ -271,7 +273,7 @@ impl StreamController {
     }
 
     pub fn prev(&mut self, provider_id: &str) {
-        if provider_id.eq_ignore_ascii_case("youtube")
+        if (provider_id.eq_ignore_ascii_case("youtube") || provider_id.eq_ignore_ascii_case("spotify"))
             && self.stream_queue_index.map(|i| i > 0).unwrap_or(false)
         {
             self.play_prev_in_queue();
@@ -487,8 +489,11 @@ impl StreamController {
                         self.last_error = Some(err.clone());
                     }
                 }
-                StreamEvent::LibraryMatched(_) => {
+                StreamEvent::LibraryMatched(ref tracks) => {
                     self.is_busy = false;
+                    if let Some(Ok(ref mut import_res)) = self.last_spotify_import {
+                        import_res.tracks = tracks.clone();
+                    }
                 }
                 StreamEvent::PlaylistSaved { .. } => {
                     self.is_busy = false;
@@ -865,10 +870,8 @@ fn run_stream_worker(
                 }
                 StreamCommand::Pause { provider_id } => {
                     let id_key = provider_id.to_lowercase();
-                    if id_key == "youtube" {
-                        if let Some(ref p) = webview_player {
-                            p.pause();
-                        }
+                    if let Some(ref p) = webview_player {
+                        p.pause();
                     }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].pause();
@@ -877,10 +880,8 @@ fn run_stream_worker(
                 StreamCommand::Resume { provider_id } => {
                     let id_key = provider_id.to_lowercase();
                     active_provider_id = Some(provider_id.clone());
-                    if id_key == "youtube" {
-                        if let Some(ref p) = webview_player {
-                            p.resume();
-                        }
+                    if let Some(ref p) = webview_player {
+                        p.resume();
                     }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].resume();
@@ -891,10 +892,8 @@ fn run_stream_worker(
                     position_secs,
                 } => {
                     let id_key = provider_id.to_lowercase();
-                    if id_key == "youtube" {
-                        if let Some(ref p) = webview_player {
-                            p.seek(position_secs);
-                        }
+                    if let Some(ref p) = webview_player {
+                        p.seek(position_secs);
                     }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].seek(position_secs);
@@ -917,10 +916,8 @@ fn run_stream_worker(
                     volume,
                 } => {
                     let id_key = provider_id.to_lowercase();
-                    if id_key == "youtube" {
-                        if let Some(ref p) = webview_player {
-                            p.set_volume(volume);
-                        }
+                    if let Some(ref p) = webview_player {
+                        p.set_volume(volume);
                     }
                     if let Some(&idx) = provider_map.get(&id_key) {
                         let _ = providers[idx].set_volume(volume);

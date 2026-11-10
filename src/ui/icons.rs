@@ -57,6 +57,7 @@ pub enum Icon {
     Headphones,
     PictureInPicture,
     MoreHorizontal,
+    Download,
 }
 
 /// Paint an icon onto any egui `Painter` within the target `Rect`.
@@ -633,6 +634,17 @@ pub fn paint_icon_with_stroke(
             painter.circle_filled(p(12.0, 12.0), r, color);
             painter.circle_filled(p(19.0, 12.0), r, color);
         }
+
+        Icon::Download => {
+            // Arrow pointing down: vertical shaft + chevron
+            painter.line_segment([p(12.0, 4.0), p(12.0, 14.5)], stroke);
+            painter.line_segment([p(7.5, 10.5), p(12.0, 15.0)], stroke);
+            painter.line_segment([p(16.5, 10.5), p(12.0, 15.0)], stroke);
+            // Tray / horizontal base
+            painter.line_segment([p(5.0, 17.0), p(5.0, 19.5)], stroke);
+            painter.line_segment([p(5.0, 19.5), p(19.0, 19.5)], stroke);
+            painter.line_segment([p(19.0, 19.5), p(19.0, 17.0)], stroke);
+        }
     }
 }
 
@@ -749,6 +761,7 @@ mod tests {
             Icon::Headphones,
             Icon::PictureInPicture,
             Icon::MoreHorizontal,
+            Icon::Download,
         ];
 
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(24.0, 24.0));

@@ -239,6 +239,32 @@ impl App for EclipseApp {
                         self.player.next();
                     }
                 }
+                crate::streams::controller::StreamEvent::PlaylistSaved { name, track_count, .. } => {
+                    self.set_status(&format!("Saved playlist '{}' ({} tracks)", name, track_count));
+                    self.streams_state.status_msg = Some((
+                        format!("Playlist '{}' saved successfully ({} tracks)!", name, track_count),
+                        false,
+                    ));
+                    self.reload_data();
+                }
+                crate::streams::controller::StreamEvent::LibraryMatched(ref tracks) => {
+                    let matched_count = tracks.iter().filter(|t| t.is_available_locally()).count();
+                    self.set_status(&format!("Matched {}/{} tracks in local library", matched_count, tracks.len()));
+                    self.streams_state.status_msg = Some((
+                        format!("Matched {} of {} tracks to lossless files in your local library!", matched_count, tracks.len()),
+                        false,
+                    ));
+                }
+                crate::streams::controller::StreamEvent::SpotifyImportComplete(ref res) => {
+                    match res {
+                        Ok(import) => {
+                            self.set_status(&format!("Imported '{}' ({} tracks)", import.title, import.tracks.len()));
+                        }
+                        Err(err) => {
+                            self.set_status(&format!("Import error: {}", err));
+                        }
+                    }
+                }
                 crate::streams::controller::StreamEvent::AlternativeSelected { spotify_id, matched } => {
                     self.set_status(&format!("Match updated for {spotify_id}: {}", matched.title));
                 }
@@ -692,6 +718,8 @@ impl App for EclipseApp {
                                         &mut self.player,
                                         &self.theme,
                                         &mut self.streams_state,
+                                        &mut self.art_manager,
+                                        &mut on_navigate,
                                     );
                                 }
                                 NavTab::YouTubeMusic => {
@@ -701,6 +729,7 @@ impl App for EclipseApp {
                                         &mut self.player,
                                         &self.theme,
                                         &mut self.streams_state,
+                                        &mut on_navigate,
                                     );
                                 }
                                 NavTab::About => {

@@ -1,6 +1,7 @@
 use crate::library::scanner::get_or_extract_cover_art;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::io::Read;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -30,19 +31,41 @@ impl AlbumArtManager {
         // Dedicated background decoding worker thread to keep UI thread at 60 FPS
         thread::spawn(move || {
             while let Ok(track_path) = req_rx.recv() {
-                let path = Path::new(&track_path);
-                let maybe_img = get_or_extract_cover_art(path).and_then(|bytes| {
-                    let dyn_img = image::load_from_memory(&bytes).ok()?;
-                    // Downsample to max 512x512 to preserve GPU memory
-                    let resized = if dyn_img.width() > 512 || dyn_img.height() > 512 {
-                        dyn_img.thumbnail(512, 512)
-                    } else {
-                        dyn_img
-                    };
-                    let rgba = resized.to_rgba8();
-                    let size = [rgba.width() as usize, rgba.height() as usize];
-                    Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
-                });
+                let maybe_img = if track_path.starts_with("http://") || track_path.starts_with("https://") {
+                    let bytes = ureq::get(&track_path)
+                        .timeout(std::time::Duration::from_secs(4))
+                        .call()
+                        .ok()
+                        .and_then(|resp| {
+                            let mut buf = Vec::new();
+                            resp.into_reader().read_to_end(&mut buf).ok().map(|_| buf)
+                        });
+                    bytes.and_then(|b| {
+                        let dyn_img = image::load_from_memory(&b).ok()?;
+                        let resized = if dyn_img.width() > 512 || dyn_img.height() > 512 {
+                            dyn_img.thumbnail(512, 512)
+                        } else {
+                            dyn_img
+                        };
+                        let rgba = resized.to_rgba8();
+                        let size = [rgba.width() as usize, rgba.height() as usize];
+                        Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+                    })
+                } else {
+                    let path = Path::new(&track_path);
+                    get_or_extract_cover_art(path).and_then(|bytes| {
+                        let dyn_img = image::load_from_memory(&bytes).ok()?;
+                        // Downsample to max 512x512 to preserve GPU memory
+                        let resized = if dyn_img.width() > 512 || dyn_img.height() > 512 {
+                            dyn_img.thumbnail(512, 512)
+                        } else {
+                            dyn_img
+                        };
+                        let rgba = resized.to_rgba8();
+                        let size = [rgba.width() as usize, rgba.height() as usize];
+                        Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+                    })
+                };
 
                 let _ = res_tx.send((track_path, maybe_img));
             }

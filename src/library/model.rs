@@ -1,6 +1,6 @@
 ﻿use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Track {
     pub id: i64,
     pub path: String,

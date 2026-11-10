@@ -77,9 +77,13 @@ impl CredentialStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static CRED_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_nonexistent_secret_returns_none() {
+        let _guard = CRED_MUTEX.lock().unwrap();
         let res = CredentialStore::get_secret("Eclipse_Nonexistent_Test_Service", "nonexistent_user");
         assert!(res.is_ok(), "Expected Ok result for nonexistent secret, got: {:?}", res);
         assert_eq!(res.unwrap(), None);
@@ -87,6 +91,7 @@ mod tests {
 
     #[test]
     fn test_secret_roundtrip_and_cleanup() {
+        let _guard = CRED_MUTEX.lock().unwrap();
         let test_service = "Eclipse_Test_Service_Unit_2";
         let test_user = "test_user_key_2";
         let test_secret = "super_secret_test_value_12345";
@@ -116,6 +121,7 @@ mod tests {
 
     #[test]
     fn test_migrate_legacy_credentials() {
+        let _guard = CRED_MUTEX.lock().unwrap();
         // Store dummy legacy credentials
         let _ = CredentialStore::set_secret(SERVICE_SPOTIFY, USER_ACCESS_TOKEN, "dummy_access");
         let _ = CredentialStore::set_secret(SERVICE_SPOTIFY, USER_REFRESH_TOKEN, "dummy_refresh");
