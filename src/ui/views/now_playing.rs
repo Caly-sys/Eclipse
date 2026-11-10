@@ -328,6 +328,7 @@ pub fn render_now_playing(
                                         ui.add_space(24.0);
                                     } else {
                                         ScrollArea::vertical()
+                                            .id_salt("manual_lyrics_search_results_scroll")
                                             .auto_shrink([false, false])
                                             .show(ui, |ui| {
                                                 ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
@@ -541,6 +542,7 @@ pub fn render_now_playing(
                             let current_idx = lyrics.current_index(pos_ms);
 
                             ScrollArea::vertical()
+                                .id_salt("synced_lyrics_scroll")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
@@ -597,6 +599,7 @@ pub fn render_now_playing(
                         } else {
                             // Plain (unsynced) lyrics
                             ScrollArea::vertical()
+                                .id_salt("synced_lyrics_scroll")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing = vec2(0.0, 6.0);

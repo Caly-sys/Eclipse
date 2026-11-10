@@ -15,6 +15,7 @@ const AUDIO_EXTENSIONS: &[&str] = &[
 pub fn scan_directories(folders: &[String], db: &Database) -> (usize, usize) {
     let mut total_scanned = 0;
     let mut added_or_updated = 0;
+    let mut batch = Vec::with_capacity(150);
 
     for folder in folders {
         let p = Path::new(folder);
@@ -30,14 +31,25 @@ pub fn scan_directories(folders: &[String], db: &Database) -> (usize, usize) {
                     if AUDIO_EXTENSIONS.contains(&ext_lower.as_str()) {
                         total_scanned += 1;
                         if let Some(track) = inspect_audio_file(path) {
-                            if db.upsert_track(&track).is_ok() {
-                                added_or_updated += 1;
+                            batch.push(track);
+                            if batch.len() >= 150 {
+                                if let Ok(n) = db.upsert_tracks_batch(&batch) {
+                                    added_or_updated += n;
+                                }
+                                batch.clear();
                             }
                         }
                     }
                 }
             }
         }
+    }
+
+    if !batch.is_empty() {
+        if let Ok(n) = db.upsert_tracks_batch(&batch) {
+            added_or_updated += n;
+        }
+        batch.clear();
     }
 
     (total_scanned, added_or_updated)

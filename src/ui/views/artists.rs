@@ -87,6 +87,7 @@ pub fn render_artists(
 
             // Track list for this artist
             ScrollArea::vertical()
+                .id_salt("artist_detail_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     for (i, t) in artist_tracks.iter().enumerate() {
@@ -120,6 +121,7 @@ pub fn render_artists(
 
     // Auto-wrapping responsive grid of Artists
     ScrollArea::vertical()
+        .id_salt("artists_grid_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let spacing = 14.0_f32;

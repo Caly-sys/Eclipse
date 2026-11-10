@@ -23,6 +23,7 @@ use crate::ui::views::*;
 use eframe::App;
 use egui::{vec2, Color32, Layout, RichText, Rounding, ScrollArea, Stroke};
 use rand::seq::SliceRandom;
+use std::time::Duration;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::Instant;
@@ -52,6 +53,7 @@ pub struct EclipseApp {
     scan_tx: Sender<(usize, usize)>,
     is_scanning: bool,
     status_msg: Option<(String, Instant)>,
+    last_active_track_id: Option<i64>,
 }
 
 pub type UmbraApp = EclipseApp;
@@ -63,7 +65,10 @@ impl EclipseApp {
 
         let cfg = AppConfig::load();
         let theme = Theme::from_name(&cfg.theme, Some(cfg.accent_color));
-        let db = Database::open().expect("Failed to open Eclipse database");
+        let db = Database::open().unwrap_or_else(|e| {
+            eprintln!("[WARN] Failed to open Eclipse SQLite database: {}. Falling back to in-memory database.", e);
+            Database::open_in_memory().expect("In-memory database should never fail to initialize")
+        });
         let mut player = PlayerController::new(&cfg);
         player.apply_audio_settings(&cfg.audio);
 
@@ -94,9 +99,23 @@ impl EclipseApp {
             scan_tx,
             is_scanning: false,
             status_msg: None,
+            last_active_track_id: None,
         };
 
         app.reload_data();
+
+        // Restore last session if enabled
+        if app.cfg.resume_session {
+            if let Some(last_id) = app.cfg.last_played_track_id {
+                if let Some(idx) = app.tracks.iter().position(|t| t.id == last_id) {
+                    app.player.set_queue_paused(app.tracks.clone(), idx);
+                    if app.cfg.last_played_position_secs > 0.0 {
+                        app.player.engine.seek(Duration::from_secs_f64(app.cfg.last_played_position_secs));
+                    }
+                    app.last_active_track_id = Some(last_id);
+                }
+            }
+        }
 
         // If library is empty on startup, scan watched folders
         if app.tracks.is_empty() {
@@ -183,6 +202,18 @@ impl App for EclipseApp {
 
         self.player.update();
         self.art_manager.update(ctx);
+
+        // Update play counts and listening history when active track changes
+        if let Some(curr) = self.player.current_track() {
+            let curr_id = curr.id;
+            if self.last_active_track_id != Some(curr_id) {
+                self.last_active_track_id = Some(curr_id);
+                let _ = self.db.increment_play_count(curr_id);
+                if let Ok(history) = self.db.get_recent_history(10) {
+                    self.recent_history = history;
+                }
+            }
+        }
 
         // Keyboard shortcuts listener
         let shortcut = shortcuts::handle_shortcuts(ctx, &mut self.player);
@@ -830,6 +861,14 @@ impl App for EclipseApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(track) = self.player.current_track() {
+            self.cfg.last_played_track_id = Some(track.id);
+            self.cfg.last_played_position_secs = self.player.engine.position().as_secs_f64();
+        }
+        self.cfg.volume = self.player.engine.volume();
+        self.cfg.muted = self.player.engine.is_muted();
+        self.cfg.shuffle = self.player.shuffle;
+        self.cfg.repeat = self.player.repeat;
         let _ = self.cfg.save();
     }
 }

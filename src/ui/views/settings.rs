@@ -295,6 +295,7 @@ pub fn render_settings(
     let old_cfg = cfg.clone();
 
     ScrollArea::vertical()
+        .id_salt("settings_view_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 10.0);

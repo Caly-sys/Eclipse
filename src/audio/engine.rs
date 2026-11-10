@@ -130,6 +130,12 @@ pub fn equal_power_fade_in(t: f32) -> f32 {
     (clamped * std::f32::consts::FRAC_PI_2).sin()
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum FadeTransition {
+    FadingOut { start: Instant, duration: Duration, base_vol: f32 },
+    FadingIn { start: Instant, duration: Duration, target_vol: f32 },
+}
+
 /// Limits sample amplitude to avoid clipping above 0.0 dBFS (-1.0 to 1.0).
 #[inline]
 pub fn limit_sample(sample: f32) -> f32 {
@@ -188,6 +194,7 @@ pub struct AudioEngine {
 
     // Click-free transition settings
     fade_pause_resume_ms: u32,
+    fade_transition: Option<FadeTransition>,
     crossfade_sec: f32,
     gapless: bool,
     prequeued: bool,
@@ -228,6 +235,7 @@ impl AudioEngine {
             buffer_ms: 120,
             exclusive_mode: false,
             fade_pause_resume_ms: 180,
+            fade_transition: None,
             crossfade_sec: 0.0,
             gapless: true,
             prequeued: false,
@@ -507,6 +515,27 @@ impl AudioEngine {
         }
     }
 
+    pub fn has_track_reached_end(&self) -> bool {
+        if self.track_duration.is_zero() || self.is_paused {
+            return false;
+        }
+        if let Some(start) = self.start_instant {
+            start.elapsed() + self.pause_offset >= self.track_duration
+        } else {
+            false
+        }
+    }
+
+    pub fn transition_to_prequeued(&mut self, next_path: &Path, duration_secs: f64) {
+        self.current_path = Some(next_path.to_path_buf());
+        self.current_duration_secs = duration_secs;
+        self.track_duration = Duration::from_secs_f64(duration_secs);
+        self.start_instant = Some(Instant::now());
+        self.pause_offset = Duration::ZERO;
+        self.prequeued = false;
+        self.fade_transition = None;
+    }
+
     pub fn update_crossfade(&mut self) {
         if let Some((ref old_sink, start, duration)) = self.crossfade_sink {
             let elapsed = start.elapsed();
@@ -523,6 +552,46 @@ impl AudioEngine {
                 self.crossfade_sink = None;
                 if let Some(ref new_sink) = self.sink {
                     new_sink.set_volume(current_vol);
+                }
+            }
+        }
+
+        // Process non-blocking frame-based pause/resume fading
+        if let Some(trans) = self.fade_transition {
+            match trans {
+                FadeTransition::FadingOut { start, duration, base_vol } => {
+                    let elapsed = start.elapsed();
+                    if elapsed < duration {
+                        let t = elapsed.as_secs_f32() / duration.as_secs_f32();
+                        let vol = (base_vol * (1.0 - t)).max(0.0);
+                        if let Some(ref sink) = self.sink {
+                            sink.set_volume(vol);
+                        }
+                    } else {
+                        if let Some(ref sink) = self.sink {
+                            sink.pause();
+                            sink.set_volume(base_vol);
+                        }
+                        self.pause_offset = self.position();
+                        self.start_instant = None;
+                        self.is_paused = true;
+                        self.fade_transition = None;
+                    }
+                }
+                FadeTransition::FadingIn { start, duration, target_vol } => {
+                    let elapsed = start.elapsed();
+                    if elapsed < duration {
+                        let t = elapsed.as_secs_f32() / duration.as_secs_f32();
+                        let vol = (target_vol * t).min(target_vol);
+                        if let Some(ref sink) = self.sink {
+                            sink.set_volume(vol);
+                        }
+                    } else {
+                        if let Some(ref sink) = self.sink {
+                            sink.set_volume(target_vol);
+                        }
+                        self.fade_transition = None;
+                    }
                 }
             }
         }
@@ -611,53 +680,46 @@ impl AudioEngine {
 
     pub fn pause(&mut self) {
         if let Some(ref sink) = self.sink {
-            if !self.is_paused {
+            if !self.is_paused && !matches!(self.fade_transition, Some(FadeTransition::FadingOut { .. })) {
                 let base_vol = if self.muted { 0.0 } else { self.volume };
                 if self.fade_pause_resume_ms > 0 && !sink.empty() && base_vol > 0.0 {
-                    let steps = 18.min(self.fade_pause_resume_ms).max(1);
-                    let step_ms = (self.fade_pause_resume_ms as u64) / (steps as u64);
-                    for step in (0..steps).rev() {
-                        let factor = step as f32 / steps as f32;
-                        sink.set_volume(base_vol * factor);
-                        if step_ms > 0 {
-                            std::thread::sleep(Duration::from_millis(step_ms));
-                        }
-                    }
+                    self.fade_transition = Some(FadeTransition::FadingOut {
+                        start: Instant::now(),
+                        duration: Duration::from_millis(self.fade_pause_resume_ms as u64),
+                        base_vol,
+                    });
+                } else {
+                    sink.pause();
+                    sink.set_volume(base_vol);
+                    self.pause_offset = self.position();
+                    self.start_instant = None;
+                    self.is_paused = true;
+                    self.fade_transition = None;
                 }
-                sink.pause();
-                sink.set_volume(base_vol);
-                self.pause_offset = self.position();
-                self.start_instant = None;
-                self.is_paused = true;
             }
         }
     }
 
     pub fn resume(&mut self) {
         if let Some(ref sink) = self.sink {
-            if self.is_paused {
+            if self.is_paused || matches!(self.fade_transition, Some(FadeTransition::FadingOut { .. })) {
                 let base_vol = if self.muted { 0.0 } else { self.volume };
                 if self.fade_pause_resume_ms > 0 && !sink.empty() && base_vol > 0.0 {
                     sink.set_volume(0.0);
                     sink.play();
                     self.start_instant = Some(Instant::now());
                     self.is_paused = false;
-
-                    let steps = 18.min(self.fade_pause_resume_ms).max(1);
-                    let step_ms = (self.fade_pause_resume_ms as u64) / (steps as u64);
-                    for step in 1..=steps {
-                        if step_ms > 0 {
-                            std::thread::sleep(Duration::from_millis(step_ms));
-                        }
-                        let factor = step as f32 / steps as f32;
-                        sink.set_volume(base_vol * factor);
-                    }
-                    sink.set_volume(base_vol);
+                    self.fade_transition = Some(FadeTransition::FadingIn {
+                        start: Instant::now(),
+                        duration: Duration::from_millis(self.fade_pause_resume_ms as u64),
+                        target_vol: base_vol,
+                    });
                 } else {
                     sink.set_volume(base_vol);
                     sink.play();
                     self.start_instant = Some(Instant::now());
                     self.is_paused = false;
+                    self.fade_transition = None;
                 }
             }
         }
@@ -668,7 +730,7 @@ impl AudioEngine {
     }
 
     pub fn toggle_play_pause(&mut self) {
-        if self.is_paused() {
+        if self.is_paused() || matches!(self.fade_transition, Some(FadeTransition::FadingOut { .. })) {
             self.resume();
         } else {
             self.pause();
@@ -691,6 +753,7 @@ impl AudioEngine {
         self.current_path = None;
         self.current_duration_secs = 0.0;
         self.prequeued = false;
+        self.fade_transition = None;
     }
 
     pub fn seek(&mut self, pos: Duration) {
@@ -706,6 +769,7 @@ impl AudioEngine {
             if let Ok(mut tap) = self.tap_buffer.lock() {
                 tap.clear();
             }
+            self.fade_transition = None;
         }
     }
 

@@ -38,7 +38,7 @@ pub fn render_about(ui: &mut Ui, theme: &Theme) {
             );
 
             ui.label(
-                RichText::new("v1.2.0 · Audiophile Rust Edition")
+                RichText::new(concat!("v", env!("CARGO_PKG_VERSION"), " · Audiophile Rust Edition"))
                     .size(13.5)
                     .color(theme.accent)
                     .strong(),

@@ -128,8 +128,69 @@ impl Database {
         })
     }
 
+    #[inline]
+    pub fn lock_conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn upsert_tracks_batch(&self, tracks: &[Track]) -> Result<usize> {
+        if tracks.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO tracks (
+                    path, title, artist, albumartist, album, genre, year, track,
+                    duration, bitrate, samplerate, channels, codec, filesize,
+                    has_art, folder
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                ON CONFLICT(path) DO UPDATE SET
+                    title = excluded.title,
+                    artist = excluded.artist,
+                    albumartist = excluded.albumartist,
+                    album = excluded.album,
+                    genre = excluded.genre,
+                    year = excluded.year,
+                    track = excluded.track,
+                    duration = excluded.duration,
+                    bitrate = excluded.bitrate,
+                    samplerate = excluded.samplerate,
+                    channels = excluded.channels,
+                    codec = excluded.codec,
+                    filesize = excluded.filesize,
+                    has_art = excluded.has_art,
+                    folder = excluded.folder;",
+            )?;
+
+            for t in tracks {
+                stmt.execute(params![
+                    t.path,
+                    t.title,
+                    t.artist,
+                    t.album_artist,
+                    t.album,
+                    t.genre,
+                    t.year,
+                    t.track_number,
+                    t.duration_secs,
+                    t.bitrate_kbps,
+                    t.sample_rate,
+                    t.channels,
+                    t.format,
+                    t.file_size,
+                    t.has_art as i32,
+                    t.folder,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(tracks.len())
+    }
+
     pub fn upsert_track(&self, t: &Track) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "INSERT INTO tracks (
                 path, title, artist, albumartist, album, genre, year, track,
@@ -178,7 +239,7 @@ impl Database {
     }
 
     pub fn get_all_tracks(&self) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -197,7 +258,7 @@ impl Database {
     }
 
     pub fn get_track_by_id(&self, id: i64) -> Result<Option<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -216,7 +277,7 @@ impl Database {
     }
 
     pub fn toggle_favorite(&self, id: i64) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "UPDATE tracks SET favorite = CASE WHEN favorite = 1 THEN 0 ELSE 1 END WHERE id = ?1",
             params![id],
@@ -227,7 +288,7 @@ impl Database {
     }
 
     pub fn increment_play_count(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "UPDATE tracks SET play_count = play_count + 1 WHERE id = ?1",
             params![id],
@@ -245,7 +306,7 @@ impl Database {
     }
 
     pub fn get_playlists(&self) -> Result<Vec<Playlist>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT p.id, p.name, COALESCE(p.created, 0.0), COALESCE(p.description, ''),
                     COUNT(pi.track_id) as track_count
@@ -273,7 +334,7 @@ impl Database {
     }
 
     pub fn create_playlist(&self, name: &str) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -286,14 +347,14 @@ impl Database {
     }
 
     pub fn delete_playlist(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute("DELETE FROM playlist_items WHERE playlist_id = ?1", params![id])?;
         conn.execute("DELETE FROM playlists WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn add_to_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "INSERT OR IGNORE INTO playlist_items (playlist_id, track_id, pos)
              VALUES (?1, ?2, (SELECT COALESCE(MAX(pos), 0) + 1 FROM playlist_items WHERE playlist_id = ?1))",
@@ -303,7 +364,7 @@ impl Database {
     }
 
     pub fn remove_from_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "DELETE FROM playlist_items WHERE playlist_id = ?1 AND track_id = ?2",
             params![playlist_id, track_id],
@@ -312,7 +373,7 @@ impl Database {
     }
 
     pub fn get_playlist_tracks(&self, playlist_id: i64) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.path, COALESCE(t.title,''), COALESCE(t.artist,''), COALESCE(t.albumartist,''),
                     COALESCE(t.album,''), COALESCE(t.genre,''), COALESCE(t.year,0), COALESCE(t.track,0),
@@ -334,7 +395,7 @@ impl Database {
     }
 
     pub fn get_recent_history(&self, limit: usize) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT t.id, t.path, COALESCE(t.title,''), COALESCE(t.artist,''), COALESCE(t.albumartist,''),
                     COALESCE(t.album,''), COALESCE(t.genre,''), COALESCE(t.year,0), COALESCE(t.track,0),
@@ -361,7 +422,7 @@ impl Database {
         if !history.is_empty() {
             return Ok(history);
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -379,7 +440,7 @@ impl Database {
     }
 
     pub fn get_smart_most_played(&self, limit: usize) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -397,7 +458,7 @@ impl Database {
     }
 
     pub fn get_smart_recently_added(&self, limit: usize) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -415,7 +476,7 @@ impl Database {
     }
 
     pub fn get_smart_favorites(&self) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -433,7 +494,7 @@ impl Database {
     }
 
     pub fn get_smart_never_played(&self, limit: usize) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -451,7 +512,7 @@ impl Database {
     }
 
     pub fn get_smart_random_discovery(&self, limit: usize) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -469,7 +530,7 @@ impl Database {
     }
 
     pub fn get_top_played_tracks(&self, limit: usize) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -491,7 +552,7 @@ impl Database {
     }
 
     pub fn get_recently_added_tracks(&self, limit: usize) -> Result<Vec<Track>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = conn.prepare(
             "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
                     COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
@@ -564,7 +625,7 @@ impl Database {
     }
 
     pub fn set_track_play_count(&self, id: i64, count: u32) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.execute(
             "UPDATE tracks SET play_count = ?1 WHERE id = ?2",
             params![count, id],

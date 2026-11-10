@@ -1,12 +1,15 @@
 use crate::library::scanner::get_or_extract_cover_art;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
+const MAX_TEXTURE_CACHE_SIZE: usize = 200;
+
 pub struct AlbumArtManager {
     textures: HashMap<String, TextureHandle>,
+    access_order: VecDeque<String>,
     pending: HashSet<String>,
     failed: HashSet<String>,
     req_tx: Sender<String>,
@@ -47,6 +50,7 @@ impl AlbumArtManager {
 
         Self {
             textures: HashMap::new(),
+            access_order: VecDeque::new(),
             pending: HashSet::new(),
             failed: HashSet::new(),
             req_tx,
@@ -61,7 +65,18 @@ impl AlbumArtManager {
             if let Some(color_image) = maybe_img {
                 let name = format!("cover_{}", path);
                 let texture = ctx.load_texture(name, color_image, TextureOptions::LINEAR);
-                self.textures.insert(path, texture);
+                self.textures.insert(path.clone(), texture);
+                self.access_order.push_back(path.clone());
+
+                // Evict oldest textures when exceeding LRU capacity
+                while self.textures.len() > MAX_TEXTURE_CACHE_SIZE {
+                    if let Some(oldest) = self.access_order.pop_front() {
+                        self.textures.remove(&oldest);
+                    } else {
+                        break;
+                    }
+                }
+
                 ctx.request_repaint();
             } else {
                 self.failed.insert(path);
@@ -78,8 +93,13 @@ impl AlbumArtManager {
             return None;
         }
 
-        if let Some(tex) = self.textures.get(track_path) {
-            return Some(tex);
+        if self.textures.contains_key(track_path) {
+            // Refresh LRU access order
+            if let Some(pos) = self.access_order.iter().position(|p| p == track_path) {
+                self.access_order.remove(pos);
+            }
+            self.access_order.push_back(track_path.to_string());
+            return self.textures.get(track_path);
         }
 
         if !self.pending.contains(track_path) {
@@ -98,6 +118,7 @@ impl AlbumArtManager {
     /// Clear cache
     pub fn clear(&mut self) {
         self.textures.clear();
+        self.access_order.clear();
         self.pending.clear();
         self.failed.clear();
     }

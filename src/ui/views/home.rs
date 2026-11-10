@@ -93,6 +93,7 @@ pub fn render_home(
     on_navigate: &mut Option<NavTab>,
 ) {
     ScrollArea::vertical()
+        .id_salt("home_view_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 16.0);
@@ -213,7 +214,7 @@ fn render_greeting_header(ui: &mut Ui, theme: &Theme) {
                                     .strong(),
                             );
                             ui.label(
-                                RichText::new("v1.2.0")
+                                RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
                                     .size(10.5)
                                     .color(theme.text_muted),
                             );

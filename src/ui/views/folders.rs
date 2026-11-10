@@ -55,6 +55,7 @@ pub fn render_folders(
         ui.add_space(8.0);
 
         ScrollArea::vertical()
+            .id_salt("folders_view_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = vec2(0.0, 10.0);

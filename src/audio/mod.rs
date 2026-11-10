@@ -120,6 +120,23 @@ impl PlayerController {
         self.play_index(idx);
     }
 
+    pub fn set_queue_paused(&mut self, tracks: Vec<Track>, start_index: usize) {
+        if tracks.is_empty() {
+            return;
+        }
+        self.queue = tracks;
+        let idx = start_index.min(self.queue.len() - 1);
+        self.current_index = Some(idx);
+        if self.shuffle {
+            self.rebuild_shuffle();
+        }
+        let track = self.queue[idx].clone();
+        let path = Path::new(&track.path);
+        let _ = self.engine.play_file(path, track.duration_secs);
+        self.engine.pause();
+        self.load_lyrics_for_track(&track);
+    }
+
     pub fn play_index(&mut self, index: usize) {
         if index >= self.queue.len() {
             return;
@@ -424,6 +441,19 @@ impl PlayerController {
         let is_playing = self.engine.is_playing();
         let pos_secs = self.engine.position().as_secs_f64();
         self.visualizer.update(is_playing, pos_secs);
+
+        // Gapless seamless transition check
+        if self.engine.has_prequeued() && self.engine.has_track_reached_end() {
+            if let Some(next_idx) = self.peek_next_index() {
+                if let Some(next_track) = self.queue.get(next_idx).cloned() {
+                    let next_path = Path::new(&next_track.path);
+                    self.engine.transition_to_prequeued(next_path, next_track.duration_secs);
+                    self.current_index = Some(next_idx);
+                    self.load_lyrics_for_track(&next_track);
+                    return;
+                }
+            }
+        }
 
         // Check if track ended (EOF)
         if self.current_index.is_some() && self.engine.is_finished() && !self.engine.is_paused() {

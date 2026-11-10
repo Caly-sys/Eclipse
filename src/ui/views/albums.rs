@@ -120,6 +120,7 @@ pub fn render_albums(
 
             // Album Tracks List
             ScrollArea::vertical()
+                .id_salt("album_detail_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     for (i, t) in album_tracks.iter().enumerate() {
@@ -152,6 +153,7 @@ pub fn render_albums(
 
     // Auto-wrapping responsive grid of Albums
     ScrollArea::vertical()
+        .id_salt("albums_grid_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let spacing = 14.0_f32;

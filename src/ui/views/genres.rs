@@ -94,6 +94,7 @@ pub fn render_genres(
 
             // Track list for this genre
             ScrollArea::vertical()
+                .id_salt("genre_detail_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     for (i, t) in genre_tracks.iter().enumerate() {
@@ -127,6 +128,7 @@ pub fn render_genres(
 
     // Auto-wrapping responsive grid of Genres
     ScrollArea::vertical()
+        .id_salt("genres_grid_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let spacing = 14.0_f32;

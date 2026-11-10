@@ -173,7 +173,7 @@ pub fn render_track_table(
     on_toggle_fav: &mut Option<i64>,
 ) {
     let right_padding = 24.0;
-    let total_width = (ui.available_width() - right_padding).max(520.0);
+    let total_width = (ui.available_width() - right_padding).max(280.0);
     let col_num_w = 40.0;
     let col_added_w = 85.0;
     let col_plays_w = 65.0;
@@ -181,7 +181,7 @@ pub fn render_track_table(
     let gap = 10.0;
     let total_gaps = gap * 5.0;
     let fixed_w = col_num_w + col_added_w + col_plays_w + col_time_w;
-    let remaining_w = (total_width - fixed_w - total_gaps).max(200.0);
+    let remaining_w = (total_width - fixed_w - total_gaps).max(100.0);
 
     let total_fr = 4.0;
     let col_title_w = remaining_w * 2.5 / total_fr;
