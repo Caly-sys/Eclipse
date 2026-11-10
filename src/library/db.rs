@@ -103,7 +103,16 @@ impl Database {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 track_id INTEGER NOT NULL,
                 timestamp REAL NOT NULL
-            );",
+            );
+
+            CREATE TABLE IF NOT EXISTS stream_cache (
+                key TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                data TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_stream_cache_key ON stream_cache(key);",
         )?;
         Ok(())
     }
@@ -632,6 +641,59 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Retrieve cached streaming metadata JSON by unique key.
+    pub fn get_stream_cache(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare("SELECT data FROM stream_cache WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            let data: String = row.get(0)?;
+            Ok(Some(data))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Insert or update streaming metadata JSON in the cache table.
+    pub fn set_stream_cache(
+        &self,
+        key: &str,
+        provider: &str,
+        resource_type: &str,
+        data: &str,
+    ) -> Result<()> {
+        let conn = self.lock_conn();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        conn.execute(
+            "INSERT INTO stream_cache (key, provider, resource_type, data, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(key) DO UPDATE SET
+                 provider = excluded.provider,
+                 resource_type = excluded.resource_type,
+                 data = excluded.data,
+                 updated_at = excluded.updated_at;",
+            params![key, provider, resource_type, data, now],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a cached streaming entry by key.
+    pub fn delete_stream_cache(&self, key: &str) -> Result<()> {
+        let conn = self.lock_conn();
+        conn.execute("DELETE FROM stream_cache WHERE key = ?1", params![key])?;
+        Ok(())
+    }
+
+    /// Clear all cached streaming metadata entries.
+    pub fn clear_stream_cache(&self) -> Result<()> {
+        let conn = self.lock_conn();
+        conn.execute("DELETE FROM stream_cache", [])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -755,6 +817,40 @@ mod tests {
         let hours = db.get_total_listening_hours();
         assert!((hours - 2.0).abs() < 1e-4);
         assert!((db.total_listening_time_hours() - 2.0).abs() < 1e-4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_cache_crud() -> Result<()> {
+        let db = Database::open_in_memory()?;
+        let key = "spotify:track:4cOdK2wGLETKBW3PvgPWqT";
+
+        // Initially empty
+        assert_eq!(db.get_stream_cache(key)?, None);
+
+        // Insert
+        let payload = r#"{"id":"4cOdK2wGLETKBW3PvgPWqT","title":"Never Gonna Give You Up"}"#;
+        db.set_stream_cache(key, "spotify", "track", payload)?;
+        assert_eq!(db.get_stream_cache(key)?, Some(payload.to_string()));
+
+        // Update
+        let updated = r#"{"id":"4cOdK2wGLETKBW3PvgPWqT","title":"Updated Title"}"#;
+        db.set_stream_cache(key, "spotify", "track", updated)?;
+        assert_eq!(db.get_stream_cache(key)?, Some(updated.to_string()));
+
+        // Delete single
+        db.delete_stream_cache(key)?;
+        assert_eq!(db.get_stream_cache(key)?, None);
+
+        // Clear all
+        db.set_stream_cache("k1", "spotify", "album", "data1")?;
+        db.set_stream_cache("k2", "spotify", "playlist", "data2")?;
+        assert_eq!(db.get_stream_cache("k1")?, Some("data1".to_string()));
+        assert_eq!(db.get_stream_cache("k2")?, Some("data2".to_string()));
+        db.clear_stream_cache()?;
+        assert_eq!(db.get_stream_cache("k1")?, None);
+        assert_eq!(db.get_stream_cache("k2")?, None);
 
         Ok(())
     }

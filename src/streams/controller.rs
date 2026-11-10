@@ -3,6 +3,9 @@ use crate::streams::provider::{
     StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
 };
 use crate::streams::spotify::SpotifyProvider;
+use crate::streams::spotify_public::{
+    PublicSpotifyFetcher, SpotifyImportResult, SpotifyPublicMetadataFetcher,
+};
 use crate::streams::youtube::YouTubeProvider;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -25,6 +28,7 @@ pub enum StreamCommand {
     SetVolume { provider_id: String, volume: f32 },
     PollState { provider_id: String },
     OpenBrowserUrl { url: String },
+    ImportSpotifyLink(String),
     Shutdown,
 }
 
@@ -62,6 +66,7 @@ pub enum StreamEvent {
     BrowserUrlOpened {
         url: String,
     },
+    SpotifyImportComplete(Result<SpotifyImportResult, String>),
     Error {
         provider_id: String,
         action: String,
@@ -83,6 +88,7 @@ pub struct StreamController {
     pub connected_providers: HashMap<String, bool>,
     pub is_busy: bool,
     pub last_error: Option<String>,
+    pub last_spotify_import: Option<Result<SpotifyImportResult, String>>,
 }
 
 impl StreamController {
@@ -125,6 +131,7 @@ impl StreamController {
             connected_providers: initial_connected,
             is_busy: false,
             last_error: None,
+            last_spotify_import: None,
         }
     }
 
@@ -242,6 +249,13 @@ impl StreamController {
         });
     }
 
+    /// Dispatch Spotify public metadata import to the background worker.
+    pub fn import_spotify_link(&mut self, url: &str) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::ImportSpotifyLink(url.to_string()));
+    }
+
     /// Drain incoming events non-blockingly on the UI frame loop.
     pub fn update(&mut self) -> Vec<StreamEvent> {
         let mut events = Vec::new();
@@ -294,6 +308,13 @@ impl StreamController {
                 }
                 StreamEvent::BrowserUrlOpened { .. } => {
                     self.is_busy = false;
+                }
+                StreamEvent::SpotifyImportComplete(ref res) => {
+                    self.is_busy = false;
+                    self.last_spotify_import = Some(res.clone());
+                    if let Err(ref err) = res {
+                        self.last_error = Some(err.clone());
+                    }
                 }
                 StreamEvent::Error { message, .. } => {
                     self.last_error = Some(message.clone());
@@ -548,6 +569,14 @@ fn run_stream_worker(
                         }
                     }
                 }
+                StreamCommand::ImportSpotifyLink(url) => {
+                    let tx = event_tx.clone();
+                    thread::spawn(move || {
+                        let fetcher = PublicSpotifyFetcher::new();
+                        let res = fetcher.fetch_metadata(&url);
+                        let _ = tx.send(StreamEvent::SpotifyImportComplete(res));
+                    });
+                }
             }
         } else {
             // Periodic 1Hz poll when idle (excluding Spotify Connect polling)
@@ -784,5 +813,37 @@ mod tests {
         assert_eq!(providers[1].id(), "youtube");
         assert_eq!(providers[1].name(), "YouTube Music");
         assert!(controller.search_results.is_empty());
+    }
+
+    #[test]
+    fn test_stream_controller_import_spotify_link_dispatch() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        // Dispatch import with an invalid link to test background execution & error event delivery
+        controller.import_spotify_link("not_a_valid_spotify_link");
+        assert!(controller.is_busy);
+
+        // Wait for worker thread to process and send back event
+        let mut got_event = false;
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(50));
+            let events = controller.update();
+            for ev in events {
+                if let StreamEvent::SpotifyImportComplete(res) = ev {
+                    assert!(res.is_err());
+                    got_event = true;
+                    break;
+                }
+            }
+            if got_event {
+                break;
+            }
+        }
+
+        assert!(got_event, "Worker should dispatch SpotifyImportComplete");
+        assert!(!controller.is_busy);
+        assert!(controller.last_error.is_some());
+        assert!(controller.last_spotify_import.is_some());
     }
 }
