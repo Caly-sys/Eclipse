@@ -15,13 +15,6 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 
 <br/>
 
-### Now Playing & Real-Time PCM Analyzer
-*Synchronized LRCLIB lyrics with smooth autoscrolling, stereo peak meters, and real-time logarithmic FFT spectrum analyzer.*
-
-![Eclipse Now Playing View](IMG/ss4_now_playing.png)
-
-<br/>
-
 ### Spotify Public Link Importer
 *Zero-login public link importer with local library matcher, custom playlist saver, and embedded YouTube streaming.*
 
