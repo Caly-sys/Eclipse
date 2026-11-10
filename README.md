@@ -2,7 +2,7 @@
 
 A high-performance music player for Windows written in Rust with a calm, dark purple glass aesthetic.
 
-> **Project Status**: **Beta** — Local lossless audio playback is fully functional; streaming features and link importing are in active development.
+> **Project Status**: **Beta** — Local audio playback is fully functional; streaming features and link importing are in active development.
 
 ---
 
@@ -45,7 +45,7 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 
 ## ✦ Highlights
 
-- **Local Audio Engine**: High-fidelity lossless decoding (FLAC, WAV, ALAC, MP3, OGG, AAC) powered by Rodio and Symphonia.
+- **Local Audio Engine**: High-fidelity decoding for lossless (FLAC, WAV, ALAC) and lossy (MP3, Vorbis, AAC) formats, powered by Rodio and Symphonia.
 - **In-Memory Audio Analyzer**: Real-time logarithmic FFT visualizer, stereo peak meters, and oscilloscope driven by in-memory PCM audio buffers.
 - **Synced Lyrics & Dynamic Artwork**: Real-time autoscrolling `.lrc` lyrics from LRCLIB and asynchronous embedded cover art decoding.
 - **Dark Glass Interface**: Frameless, responsive desktop UI built with egui, custom vector iconography, and native Windows CJK font fallbacks.
@@ -159,7 +159,7 @@ Eclipse includes a public **Spotify Link Importer** and integrated **YouTube Mus
 3. **Local Library Matching**:
    - Click **Find in my library**: Eclipse compares the imported tracks against your indexed local music files.
    - Uses fuzzy matching with CJK/Unicode normalization, punctuation stripping, and duration tolerance.
-   - If an imported track exists locally, Eclipse marks it with a `LOCAL` badge and plays your local lossless file instead of streaming.
+   - If an imported track exists locally, Eclipse marks it with a `LOCAL` badge and plays your local file instead of streaming.
 4. **Save As Custom Playlist**:
    - Click **Save all as playlist**: Eclipse stores the tracklist directly into your local SQLite database as an Eclipse playlist.
 5. **Matched YouTube Playback**:
@@ -169,12 +169,12 @@ Eclipse includes a public **Spotify Link Importer** and integrated **YouTube Mus
 
 ### Capabilities Matrix
 
-| Feature / Capability | Local Lossless Playback | Spotify Public Link Import | YouTube Music Stream |
+| Feature / Capability | Local Playback | Spotify Public Link Import | YouTube Music Stream |
 |---|---|---|---|
 | **Audio Pipeline** | In-process Rodio/Symphonia engine | Metadata import + local playback / YouTube stream | Official embedded webview player |
 | **Supported Codecs** | FLAC, WAV, ALAC, MP3, Vorbis (OGG), AAC (M4A) | Plays local file if matched | AAC / Opus (via embedded player) |
 | **FFT Spectrum Analyzer** | **Available** (Real-time in-memory PCM tap) | **Available** when playing local matched file | *Not available for remote streams* (badge displayed) |
-| **Account / Key Requirement** | **None** (100% offline) | **None** (Public embed metadata) | Free Google account (for YouTube API key) |
+| **Account / Key Requirement** | **None** (Offline playback; optional lyrics lookup) | **None** (Public embed metadata) | Free Google account (for YouTube API key) |
 | **Credentials Storage** | *None required* | *None required* | Stored in Windows Credential Manager |
 
 > [!NOTE]
@@ -198,11 +198,9 @@ Eclipse uses the Google YouTube Data API v3 to search tracks and resolve stream 
 
 ## ✦ Network & Privacy
 
-Eclipse is designed to respect your privacy and limit network communication to user-initiated actions:
-
-- **Local Playback**: 100% offline. Zero network connections, zero telemetry, and zero analytics.
+- **Local Playback**: Audio decoding and playback require no network connection. The only outbound request during local playback is an optional lyrics lookup from LRCLIB. This can be toggled off in **Settings > Lyrics** (`Auto-Fetch from LRCLIB`). When disabled, local playback makes zero network connections. Zero telemetry, zero analytics.
 - **Spotify Importer**: Makes outbound HTTPS GET requests to `open.spotify.com` to fetch public embed metadata. No user credentials, cookies, or accounts are transmitted.
-- **YouTube Streaming**: Queries Google APIs for search and resolves video embeds. Your YouTube API key is stored securely in the Windows Credential Manager.
+- **YouTube Streaming**: Queries Google APIs for search and resolves video embeds. Your YouTube API key is stored in the Windows Credential Manager.
 - **LRCLIB Lyrics**: Queries `lrclib.net` over HTTPS using track titles and artists to fetch plain and synchronized lyrics. Results are stored in `%APPDATA%\Eclipse\lyrics_cache\` to minimize repeated queries.
 
 ---
