@@ -1,8 +1,9 @@
 ﻿use crate::audio::PlayerController;
 use crate::config::RepeatMode;
 use crate::library::format_time_secs;
+use crate::streams::controller::StreamController;
 use crate::ui::art::AlbumArtManager;
-use crate::ui::components::{format_badge, render_mini_visualizer};
+use crate::ui::components::{format_badge, pill_badge, render_mini_visualizer};
 use crate::ui::icons::{icon_button, paint_icon, Icon};
 use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, Stroke, Ui};
@@ -12,6 +13,7 @@ use std::time::Duration;
 pub fn render_playerbar(
     ui: &mut Ui,
     player: &mut PlayerController,
+    stream_controller: &mut StreamController,
     theme: &Theme,
     show_queue: &mut bool,
     show_pip_overlay: &mut bool,
@@ -22,6 +24,9 @@ pub fn render_playerbar(
     let frame = egui::Frame::none()
         .fill(Color32::from_rgb(16, 16, 19)) // #101013
         .inner_margin(egui::Margin::symmetric(20.0, 8.0)); // padding: 0 20px
+
+    let is_stream = player.playback_source.is_stream();
+    let prov_id = player.stream_provider_id().unwrap_or("spotify").to_string();
 
     let inner = frame.show(ui, |ui| {
         let total_w = ui.available_width();
@@ -38,7 +43,92 @@ pub fn render_playerbar(
                 vec2(left_w, 54.0),
                 Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    if let Some(track) = player.current_track() {
+                    if is_stream {
+                        if let Some(ref track) = player.active_stream_track {
+                            let prov_icon = match prov_id.as_str() {
+                                "spotify" => Icon::Spotify,
+                                "youtube" => Icon::YouTube,
+                                _ => Icon::Disc,
+                            };
+                            let prov_color = match prov_id.as_str() {
+                                "spotify" => Color32::from_rgb(30, 215, 96),
+                                "youtube" => Color32::from_rgb(255, 60, 60),
+                                _ => theme.accent,
+                            };
+
+                            let (rect, cover_resp) = ui.allocate_exact_size(vec2(48.0, 48.0), egui::Sense::click());
+                            ui.painter().rect_filled(rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 24));
+                            ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0_f32, theme.border));
+                            let icon_rect = Rect::from_center_size(rect.center(), vec2(22.0, 22.0));
+                            paint_icon(ui.painter(), prov_icon, icon_rect, prov_color);
+
+                            if cover_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            if cover_resp.clicked() {
+                                *toggle_now_playing = true;
+                            }
+
+                            ui.add_space(8.0);
+
+                            let text_w = (left_w - 94.0).max(60.0);
+                            let char_limit = (text_w / 7.5).max(8.0) as usize;
+
+                            ui.allocate_ui_with_layout(
+                                vec2(text_w, 48.0),
+                                Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+
+                                    let title_str = truncate_str(track.display_title(), char_limit);
+                                    let title_label = ui.add(
+                                        egui::Label::new(
+                                            RichText::new(title_str)
+                                                .color(Color32::from_rgb(244, 244, 245))
+                                                .size(13.0)
+                                                .strong(),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if title_label.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+                                    if title_label.clicked() {
+                                        *toggle_now_playing = true;
+                                    }
+
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing = vec2(5.0, 0.0);
+                                        let artist_str = truncate_str(track.display_artist(), char_limit.saturating_sub(4));
+                                        ui.label(
+                                            RichText::new(artist_str)
+                                                .color(Color32::from_rgb(161, 161, 170))
+                                                .size(11.5),
+                                        );
+
+                                        let badge_text = match prov_id.as_str() {
+                                            "spotify" => "SPOTIFY",
+                                            "youtube" => "YOUTUBE",
+                                            _ => "STREAM",
+                                        };
+                                        format_badge(ui, badge_text, false, theme);
+                                    });
+                                },
+                            );
+                        } else {
+                            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 48.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 24));
+                            ui.painter().rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0_f32, theme.border));
+                            let icon_rect = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
+                            paint_icon(ui.painter(), Icon::Music, icon_rect, theme.text_muted);
+
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new("Streaming Ready").color(theme.text_muted).size(13.0));
+                                ui.label(RichText::new("Select a stream track").color(theme.text_muted).size(10.5));
+                            });
+                        }
+                    } else if let Some(track) = player.current_track() {
                         let track_id = track.id;
                         let is_fav = track.favorite;
 
@@ -166,12 +256,10 @@ pub fn render_playerbar(
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(12.0, 0.0);
 
-                        // Shuffle Button
-                        let shuffle_color = if player.shuffle { Color32::WHITE } else { theme.text_muted };
-                        if icon_button(ui, Icon::Shuffle, 15.0, shuffle_color)
-                            .on_hover_text("Shuffle (S)")
-                            .clicked()
-                        {
+                        // Shuffle Button (Local only)
+                        let shuffle_color = if !is_stream && player.shuffle { Color32::WHITE } else { theme.text_muted };
+                        let shuffle_btn = icon_button(ui, Icon::Shuffle, 15.0, shuffle_color);
+                        if !is_stream && shuffle_btn.on_hover_text("Shuffle (S)").clicked() {
                             player.toggle_shuffle();
                         }
 
@@ -180,11 +268,19 @@ pub fn render_playerbar(
                             .on_hover_text("Previous (B / Left)")
                             .clicked()
                         {
-                            player.prev();
+                            if is_stream {
+                                stream_controller.prev(&prov_id);
+                            } else {
+                                player.prev();
+                            }
                         }
 
                         // Big Circular Solid White Play / Pause Button (40x40px)
-                        let is_playing = player.engine.is_playing();
+                        let is_playing = if is_stream {
+                            stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false)
+                        } else {
+                            player.engine.is_playing()
+                        };
                         let (play_rect, play_resp) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::click());
 
                         if play_resp.hovered() {
@@ -216,7 +312,13 @@ pub fn render_playerbar(
                         );
 
                         if play_resp.clicked() {
-                            if player.current_track().is_some() {
+                            if is_stream {
+                                if is_playing {
+                                    stream_controller.pause(&prov_id);
+                                } else {
+                                    stream_controller.resume(&prov_id);
+                                }
+                            } else if player.current_track().is_some() {
                                 player.engine.toggle_play_pause();
                             } else if !player.queue.is_empty() {
                                 player.play_index(0);
@@ -228,29 +330,47 @@ pub fn render_playerbar(
                             .on_hover_text("Next (N / Right)")
                             .clicked()
                         {
-                            player.next();
+                            if is_stream {
+                                stream_controller.next(&prov_id);
+                            } else {
+                                player.next();
+                            }
                         }
 
-                        // Repeat Button
-                        let (rep_icon, rep_color) = match player.repeat {
-                            RepeatMode::Off => (Icon::Repeat, theme.text_muted),
-                            RepeatMode::All => (Icon::Repeat, Color32::WHITE),
-                            RepeatMode::One => (Icon::RepeatOne, Color32::WHITE),
+                        // Repeat Button (Local only)
+                        let (rep_icon, rep_color) = if !is_stream {
+                            match player.repeat {
+                                RepeatMode::Off => (Icon::Repeat, theme.text_muted),
+                                RepeatMode::All => (Icon::Repeat, Color32::WHITE),
+                                RepeatMode::One => (Icon::RepeatOne, Color32::WHITE),
+                            }
+                        } else {
+                            (Icon::Repeat, theme.text_muted)
                         };
-                        if icon_button(ui, rep_icon, 15.0, rep_color)
-                            .on_hover_text("Repeat (R)")
-                            .clicked()
-                        {
+                        let rep_btn = icon_button(ui, rep_icon, 15.0, rep_color);
+                        if !is_stream && rep_btn.on_hover_text("Repeat (R)").clicked() {
                             player.cycle_repeat();
                         }
                     });
 
                     // Bottom Row: Current Timestamp, Seekbar, Duration
-                    let pos = player.engine.position().as_secs_f64();
-                    let dur = player
-                        .current_track()
-                        .map(|t| t.duration_secs)
-                        .unwrap_or(0.0);
+                    let (pos, dur) = if is_stream {
+                        let p = stream_controller.active_state.as_ref().map(|s| s.position_secs).unwrap_or(0.0);
+                        let d = stream_controller
+                            .active_state
+                            .as_ref()
+                            .map(|s| s.duration_secs)
+                            .or_else(|| player.active_stream_track.as_ref().map(|t| t.duration_secs))
+                            .unwrap_or(0.0);
+                        (p, d)
+                    } else {
+                        let p = player.engine.position().as_secs_f64();
+                        let d = player
+                            .current_track()
+                            .map(|t| t.duration_secs)
+                            .unwrap_or(0.0);
+                        (p, d)
+                    };
 
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
@@ -262,7 +382,15 @@ pub fn render_playerbar(
                         );
 
                         let seekbar_w = (center_w - 90.0).max(60.0);
-                        render_custom_seekbar(ui, pos, dur, theme, seekbar_w, player);
+                        render_custom_seekbar(
+                            ui,
+                            pos,
+                            dur,
+                            theme,
+                            seekbar_w,
+                            player,
+                            if is_stream { Some((prov_id.as_str(), &*stream_controller)) } else { None },
+                        );
 
                         ui.label(
                             RichText::new(format_time_secs(dur))
@@ -322,7 +450,13 @@ pub fn render_playerbar(
 
                     // Interactive Volume Slider
                     let vol = player.engine.volume();
-                    render_custom_volume_slider(ui, vol, theme, player);
+                    render_custom_volume_slider(
+                        ui,
+                        vol,
+                        theme,
+                        player,
+                        if is_stream { Some((prov_id.as_str(), &*stream_controller)) } else { None },
+                    );
 
                     // Volume Mute Button (Vector Speaker Icon)
                     let is_muted = player.engine.is_muted();
@@ -341,16 +475,33 @@ pub fn render_playerbar(
                         .on_hover_text("Mute / Unmute (M)")
                         .clicked()
                     {
-                        player.engine.toggle_mute();
+                        if is_stream {
+                            if vol > 0.001 {
+                                stream_controller.set_volume(&prov_id, 0.0);
+                            } else {
+                                stream_controller.set_volume(&prov_id, 1.0);
+                            }
+                        } else {
+                            player.engine.toggle_mute();
+                        }
                     }
 
-                    // Real-Time Mini Spectrum Visualizer (12-16 Animated Bars)
-                    render_mini_visualizer(
-                        ui,
-                        &player.visualizer.band_values,
-                        Color32::WHITE,
-                        vec2(48.0, 22.0),
-                    );
+                    // Real-Time Mini Spectrum Visualizer (12-16 Animated Bars) or Stream Badge
+                    if is_stream {
+                        pill_badge(
+                            ui,
+                            "STREAM",
+                            Color32::from_rgba_unmultiplied(theme.accent.r(), theme.accent.g(), theme.accent.b(), 35),
+                            theme.accent,
+                        );
+                    } else {
+                        render_mini_visualizer(
+                            ui,
+                            &player.visualizer.band_values,
+                            Color32::WHITE,
+                            vec2(48.0, 22.0),
+                        );
+                    }
                 },
             );
         });
@@ -384,6 +535,7 @@ fn render_custom_seekbar(
     theme: &Theme,
     desired_width: f32,
     player: &mut PlayerController,
+    stream_info: Option<(&str, &StreamController)>,
 ) {
     let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 18.0), egui::Sense::click_and_drag());
     let is_hovered = resp.hovered();
@@ -404,7 +556,11 @@ fn render_custom_seekbar(
         if let Some(pointer_pos) = resp.interact_pointer_pos() {
             let ratio = ((pointer_pos.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
             let target_secs = ratio as f64 * max_dur;
-            player.engine.seek(Duration::from_secs_f64(target_secs));
+            if let Some((prov_id, stream_ctrl)) = stream_info {
+                stream_ctrl.seek(prov_id, target_secs);
+            } else {
+                player.engine.seek(Duration::from_secs_f64(target_secs));
+            }
             target_secs
         } else {
             pos
@@ -455,6 +611,7 @@ fn render_custom_volume_slider(
     vol: f32,
     theme: &Theme,
     player: &mut PlayerController,
+    stream_info: Option<(&str, &StreamController)>,
 ) {
     let desired_width = 72.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 18.0), egui::Sense::click_and_drag());
@@ -471,10 +628,14 @@ fn render_custom_volume_slider(
         if scroll_y != 0.0 {
             let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
             let new_vol = (vol + step).clamp(0.0, 1.0);
-            if player.engine.is_muted() && new_vol > 0.0 {
-                player.engine.set_muted(false);
+            if let Some((prov_id, stream_ctrl)) = stream_info {
+                stream_ctrl.set_volume(prov_id, new_vol);
+            } else {
+                if player.engine.is_muted() && new_vol > 0.0 {
+                    player.engine.set_muted(false);
+                }
+                player.engine.set_volume(new_vol);
             }
-            player.engine.set_volume(new_vol);
         }
     }
 
@@ -485,10 +646,14 @@ fn render_custom_volume_slider(
     let effective_vol = if is_dragged || resp.clicked() {
         if let Some(pos) = resp.interact_pointer_pos() {
             let ratio = ((pos.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
-            if player.engine.is_muted() && ratio > 0.0 {
-                player.engine.set_muted(false);
+            if let Some((prov_id, stream_ctrl)) = stream_info {
+                stream_ctrl.set_volume(prov_id, ratio);
+            } else {
+                if player.engine.is_muted() && ratio > 0.0 {
+                    player.engine.set_muted(false);
+                }
+                player.engine.set_volume(ratio);
             }
-            player.engine.set_volume(ratio);
             ratio
         } else {
             vol
@@ -592,10 +757,13 @@ mod tests {
                 let mut toggle_np = false;
                 let mut on_fav = None;
 
+                let mut stream_ctrl = StreamController::new(vec![]);
+
                 // Render when not playing
                 render_playerbar(
                     ui,
                     &mut player,
+                    &mut stream_ctrl,
                     &theme,
                     &mut show_queue,
                     &mut show_pip_overlay,
@@ -632,6 +800,32 @@ mod tests {
                 render_playerbar(
                     ui,
                     &mut player,
+                    &mut stream_ctrl,
+                    &theme,
+                    &mut show_queue,
+                    &mut show_pip_overlay,
+                    &mut toggle_np,
+                    &mut on_fav,
+                    &mut art_manager,
+                );
+
+                // Switch to stream track and render
+                let stream_track = crate::streams::provider::StreamTrack::new(
+                    "sp-1",
+                    "Stream Song",
+                    "Stream Artist",
+                    "Stream Album",
+                    180.0,
+                    None,
+                    "spotify:track:123",
+                    "spotify",
+                );
+                player.switch_to_stream("spotify", Some(stream_track));
+
+                render_playerbar(
+                    ui,
+                    &mut player,
+                    &mut stream_ctrl,
                     &theme,
                     &mut show_queue,
                     &mut show_pip_overlay,

@@ -1,6 +1,8 @@
 ﻿use crate::audio::PlayerController;
 use crate::config::VisualizerStyle;
 use crate::library::format_time_secs;
+use crate::streams::controller::StreamController;
+use crate::streams::provider::StreamTrack;
 use crate::ui::art::AlbumArtManager;
 use crate::ui::components::{format_badge, pill_badge, render_spectrum};
 use crate::ui::icons::{icon_button as vector_icon_button, paint_icon, render_icon, Icon};
@@ -13,7 +15,14 @@ pub fn render_now_playing(
     player: &mut PlayerController,
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
+    stream_controller: Option<&StreamController>,
 ) {
+    if player.playback_source.is_stream() {
+        if let Some(stream_track) = player.active_stream_track.clone() {
+            render_stream_now_playing(ui, &stream_track, player, theme, stream_controller);
+            return;
+        }
+    }
     if let Some(track) = player.current_track().cloned() {
         let pos_secs = player.engine.position().as_secs_f64();
         let pos_ms = (pos_secs * 1000.0) as u64;
@@ -1140,6 +1149,406 @@ fn render_channel_meter(
     });
 }
 
+fn render_stream_now_playing(
+    ui: &mut Ui,
+    track: &StreamTrack,
+    player: &mut PlayerController,
+    theme: &Theme,
+    stream_controller: Option<&StreamController>,
+) {
+    let pos_secs = stream_controller
+        .and_then(|sc| sc.active_state.as_ref())
+        .map(|s| s.position_secs)
+        .unwrap_or(0.0);
+    let pos_ms = (pos_secs * 1000.0) as u64;
+
+    ui.columns(3, |cols| {
+        // =================================================================
+        // COLUMN 1 (LEFT): Stream Provider Artwork, Track Info, Badges
+        // =================================================================
+        cols[0].vertical(|ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
+
+            let mut art_frame = theme.glass_frame(16.0);
+            art_frame.inner_margin = egui::Margin::same(16.0);
+
+            art_frame.show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    let card_width = (ui.available_width() - 10.0).clamp(180.0, 260.0);
+                    let art_size = vec2(card_width, card_width);
+
+                    let (rect, _) = ui.allocate_exact_size(art_size, egui::Sense::hover());
+
+                    let prov_color = match track.provider.to_lowercase().as_str() {
+                        "spotify" => Color32::from_rgb(30, 215, 96),
+                        "youtube" | "youtube music" => Color32::from_rgb(255, 60, 60),
+                        _ => theme.accent,
+                    };
+
+                    let prov_icon = match track.provider.to_lowercase().as_str() {
+                        "spotify" => Icon::Spotify,
+                        "youtube" | "youtube music" => Icon::YouTube,
+                        _ => Icon::Disc,
+                    };
+
+                    // Multi-layered specular halo
+                    ui.painter().rect_filled(
+                        rect.expand(10.0),
+                        Rounding::same(18.0),
+                        Color32::from_rgba_premultiplied(
+                            prov_color.r(),
+                            prov_color.g(),
+                            prov_color.b(),
+                            18,
+                        ),
+                    );
+                    ui.painter().rect_filled(
+                        rect.expand(4.0),
+                        Rounding::same(16.0),
+                        Color32::from_rgba_premultiplied(
+                            prov_color.r(),
+                            prov_color.g(),
+                            prov_color.b(),
+                            32,
+                        ),
+                    );
+
+                    // Provider icon inside glowing glass card
+                    ui.painter().rect_filled(rect, Rounding::same(14.0), theme.card);
+                    ui.painter().rect_stroke(rect, Rounding::same(14.0), Stroke::new(1.0_f32, theme.border_accent));
+                    let icon_box = Rect::from_center_size(rect.center(), vec2(art_size.x * 0.38, art_size.x * 0.38));
+                    paint_icon(ui.painter(), prov_icon, icon_box, prov_color);
+
+                    ui.add_space(14.0);
+
+                    // Track Title
+                    ui.label(
+                        RichText::new(track.display_title())
+                            .size(19.0)
+                            .color(theme.text_primary)
+                            .strong(),
+                    );
+                    ui.add_space(2.0);
+
+                    // Artist
+                    ui.label(
+                        RichText::new(track.display_artist())
+                            .size(14.5)
+                            .color(theme.text_secondary),
+                    );
+                    ui.add_space(2.0);
+
+                    // Album
+                    ui.label(
+                        RichText::new(track.display_album())
+                            .size(12.5)
+                            .color(theme.text_muted),
+                    );
+
+                    ui.add_space(10.0);
+
+                    // Stream Badges
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+
+                        let badge_label = match track.provider.to_lowercase().as_str() {
+                            "spotify" => "SPOTIFY CONNECT",
+                            "youtube" | "youtube music" => "YOUTUBE MUSIC",
+                            _ => "STREAMING",
+                        };
+                        pill_badge(
+                            ui,
+                            badge_label,
+                            Color32::from_rgba_unmultiplied(prov_color.r(), prov_color.g(), prov_color.b(), 45),
+                            prov_color,
+                        );
+
+                        pill_badge(
+                            ui,
+                            "REMOTE STREAM",
+                            Color32::from_rgba_unmultiplied(theme.accent.r(), theme.accent.g(), theme.accent.b(), 45),
+                            theme.accent,
+                        );
+
+                        pill_badge(
+                            ui,
+                            &track.formatted_duration(),
+                            Color32::from_rgba_unmultiplied(38, 30, 62, 190),
+                            theme.text_secondary,
+                        );
+                    });
+                });
+            });
+        });
+
+        // =================================================================
+        // COLUMN 2 (CENTER): Synced Lyrics via LRCLIB for Streams
+        // =================================================================
+        cols[1].vertical(|ui| {
+            let search_open_id = egui::Id::new("now_playing_stream_lyrics_search_open");
+            let search_query_id = egui::Id::new("now_playing_stream_lyrics_search_query");
+            let track_id_key = egui::Id::new("now_playing_stream_lyrics_track_id");
+
+            let mut is_search_open: bool = ui.data(|d| d.get_temp(search_open_id)).unwrap_or(false);
+            let mut search_query: String = ui.data(|d| d.get_temp(search_query_id)).unwrap_or_default();
+            let last_track_id: Option<String> = ui.data(|d| d.get_temp(track_id_key));
+
+            if last_track_id.as_deref() != Some(&track.id) {
+                search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+                ui.data_mut(|d| d.insert_temp(track_id_key, track.id.clone()));
+            }
+
+            if search_query.trim().is_empty() {
+                search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+            }
+
+            let mut lyrics_frame = theme.glass_frame(16.0);
+            lyrics_frame.inner_margin = egui::Margin::same(16.0);
+
+            lyrics_frame.show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (icon_box, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                    paint_icon(ui.painter(), Icon::Mic, icon_box, theme.accent);
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("SYNCED LYRICS (LRCLIB)")
+                            .size(13.0)
+                            .color(theme.text_primary)
+                            .strong(),
+                    );
+
+                    let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player);
+                    ui.add_space(6.0);
+                    pill_badge(ui, badge_text, badge_fill, badge_color);
+
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn_resp = search_online_header_button(ui, is_search_open, theme);
+                        if btn_resp.clicked() {
+                            is_search_open = !is_search_open;
+                        }
+                    });
+                });
+
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                if let Some(ref lyrics) = player.lyrics {
+                    if lyrics.lines.is_empty() {
+                        render_stream_lyrics_empty_state(ui, theme, &mut is_search_open);
+                    } else if lyrics.is_synced {
+                        let current_idx = lyrics.current_index(pos_ms);
+
+                        ScrollArea::vertical()
+                            .id_salt("stream_synced_lyrics_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+
+                                for (i, line) in lyrics.lines.iter().enumerate() {
+                                    let is_current = current_idx == Some(i);
+
+                                    let text_color = if is_current {
+                                        theme.text_primary
+                                    } else {
+                                        theme.text_muted
+                                    };
+
+                                    let size = if is_current { 18.0 } else { 14.5 };
+                                    let mut rich = RichText::new(&line.text)
+                                        .color(text_color)
+                                        .size(size);
+
+                                    if is_current {
+                                        rich = rich.strong();
+                                    }
+
+                                    let (fill, stroke) = if is_current {
+                                        (
+                                            Color32::from_rgba_premultiplied(
+                                                theme.accent.r(),
+                                                theme.accent.g(),
+                                                theme.accent.b(),
+                                                30,
+                                            ),
+                                            Stroke::new(1.0_f32, theme.border_accent),
+                                        )
+                                    } else {
+                                        (Color32::TRANSPARENT, Stroke::NONE)
+                                    };
+
+                                    let btn = ui.add(
+                                        egui::Button::new(rich)
+                                            .fill(fill)
+                                            .stroke(stroke)
+                                            .rounding(Rounding::same(8.0))
+                                            .wrap(),
+                                    );
+
+                                    if is_current {
+                                        btn.scroll_to_me(Some(egui::Align::Center));
+                                    }
+
+                                    if btn.clicked() {
+                                        if let Some(sc) = stream_controller {
+                                            let seek_secs = line.timestamp_ms as f64 / 1000.0;
+                                            sc.seek(&track.provider, seek_secs);
+                                        }
+                                    }
+                                }
+                            });
+                    } else {
+                        // Plain lyrics
+                        ScrollArea::vertical()
+                            .id_salt("stream_plain_lyrics_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+
+                                for line in &lyrics.lines {
+                                    if line.text.trim().is_empty() {
+                                        ui.add_space(10.0);
+                                    } else {
+                                        ui.label(
+                                            RichText::new(&line.text)
+                                                .color(theme.text_primary)
+                                                .size(14.5)
+                                                .line_height(Some(22.0)),
+                                        );
+                                    }
+                                }
+                            });
+                    }
+                } else {
+                    render_stream_lyrics_empty_state(ui, theme, &mut is_search_open);
+                }
+            });
+
+            ui.data_mut(|d| {
+                d.insert_temp(search_open_id, is_search_open);
+                d.insert_temp(search_query_id, search_query);
+            });
+        });
+
+        // =================================================================
+        // COLUMN 3 (RIGHT): Audio Analyzer Notice Card (Not available for streams)
+        // =================================================================
+        cols[2].vertical(|ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 10.0);
+
+            let mut analyzer_frame = theme.glass_frame(16.0);
+            analyzer_frame.inner_margin = egui::Margin::same(14.0);
+
+            analyzer_frame.show(ui, |ui| {
+                // Header with Notice Badge
+                ui.horizontal(|ui| {
+                    render_icon(ui, Icon::Info, 14.0, theme.text_muted);
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("AUDIO ANALYZER")
+                            .size(12.5)
+                            .color(theme.text_secondary)
+                            .strong(),
+                    );
+
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        pill_badge(
+                            ui,
+                            "NOT AVAILABLE FOR STREAMS",
+                            Color32::from_rgba_unmultiplied(234, 179, 8, 35),
+                            Color32::from_rgb(250, 204, 21),
+                        );
+                    });
+                });
+
+                ui.add_space(8.0);
+
+                // Informative explanation card per Rule 5
+                let notice_card = theme.card_frame(10.0);
+                notice_card.show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+
+                        ui.label(
+                            RichText::new("Audio Analyzer not available for streams")
+                                .size(13.0)
+                                .color(theme.text_primary)
+                                .strong(),
+                        );
+
+                        ui.label(
+                            RichText::new(
+                                "Real-time 20Hz - 20kHz FFT spectrum visualizers, peak dBFS meters, \
+                                 LUFS loudness analysis, and stereo meters require local raw audio frames \
+                                 decoded by the Eclipse Rodio engine (Local lossless PCM decoding only).",
+                            )
+                            .size(11.5)
+                            .color(theme.text_secondary),
+                        );
+                    });
+                });
+
+                ui.add_space(8.0);
+
+                // Technical Stream Info Sub-Card
+                let specs_card = theme.card_frame(8.0);
+                specs_card.show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+
+                        stat_row(ui, "Source Provider", &track.provider.to_uppercase(), theme);
+                        stat_row(ui, "Playback Engine", "Remote Session (Official API)", theme);
+
+                        let dev_name = stream_controller
+                            .and_then(|sc| sc.active_state.as_ref())
+                            .and_then(|s| s.device_name.as_deref())
+                            .unwrap_or("Active Device");
+                        stat_row(ui, "Connect Device", dev_name, theme);
+
+                        stat_row(ui, "Spectrum Tap", "Local Decoders Only (FLAC/WAV/MP3)", theme);
+                        stat_row(ui, "Lyrics Engine", "LRCLIB Synced (Title/Artist Match)", theme);
+                    });
+                });
+            });
+        });
+    });
+}
+
+fn render_stream_lyrics_empty_state(ui: &mut Ui, theme: &Theme, is_search_open: &mut bool) {
+    ui.add_space(48.0);
+    ui.vertical_centered(|ui| {
+        let (icon_rect, _) = ui.allocate_exact_size(vec2(36.0, 36.0), egui::Sense::hover());
+        paint_icon(ui.painter(), Icon::Mic, icon_rect, theme.text_muted);
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new("No lyrics found for this stream track")
+                .size(15.0)
+                .color(theme.text_primary)
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("Click 'Search Online' above to look up lyrics on LRCLIB.")
+                .size(12.5)
+                .color(theme.text_muted),
+        );
+        ui.add_space(18.0);
+
+        let btn = egui::Button::new(
+            RichText::new("Search LRCLIB Online")
+                .color(Color32::from_rgb(11, 9, 20))
+                .size(13.5)
+                .strong(),
+        )
+        .fill(theme.accent)
+        .rounding(Rounding::same(8.0));
+
+        if ui.add(btn).clicked() {
+            *is_search_open = true;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1220,7 +1629,7 @@ mod tests {
                 let mut art_manager = AlbumArtManager::new();
 
                 // Empty state test
-                render_now_playing(ui, &mut player, &theme, &mut art_manager);
+                render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
 
                 // Playing track test
                 let track = Track {
@@ -1254,7 +1663,7 @@ mod tests {
                 player.visualizer.lufs = -14.1;
                 player.visualizer.dynamic_range = 12.0;
 
-                render_now_playing(ui, &mut player, &theme, &mut art_manager);
+                render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
             });
         });
     }
@@ -1334,7 +1743,7 @@ mod tests {
                 ]);
 
                 // Render Now Playing view with Search Drawer and Results
-                render_now_playing(ui, &mut player, &theme, &mut art_manager);
+                render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
 
                 // Apply custom lyrics test
                 let selected = player.manual_search_results.as_ref().unwrap()[0].clone();
@@ -1383,7 +1792,7 @@ mod tests {
                 // 1. Loading state
                 player.is_loading_lyrics = true;
                 player.lyrics = None;
-                render_now_playing(ui, &mut player, &theme, &mut art_manager);
+                render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
 
                 // 2. Plain lyrics state
                 player.is_loading_lyrics = false;
@@ -1395,7 +1804,7 @@ mod tests {
                     is_synced: false,
                     source: "LRCLIB (Plain)".into(),
                 });
-                render_now_playing(ui, &mut player, &theme, &mut art_manager);
+                render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
 
                 // 3. Instrumental state
                 player.lyrics = Some(Lyrics {
@@ -1405,7 +1814,35 @@ mod tests {
                     is_synced: false,
                     source: "LRCLIB (Instrumental)".into(),
                 });
-                render_now_playing(ui, &mut player, &theme, &mut art_manager);
+                render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
+            });
+        });
+    }
+
+    #[test]
+    fn test_render_now_playing_stream_track() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let mut art_manager = AlbumArtManager::new();
+                let ctrl = StreamController::new(vec![]);
+
+                let stream_track = StreamTrack::new(
+                    "spotify-456",
+                    "Starboy",
+                    "The Weeknd",
+                    "Starboy",
+                    230.0,
+                    None,
+                    "spotify:track:456",
+                    "spotify",
+                );
+                player.switch_to_stream("spotify", Some(stream_track));
+
+                render_now_playing(ui, &mut player, &theme, &mut art_manager, Some(&ctrl));
             });
         });
     }

@@ -8,6 +8,7 @@ pub mod now_playing;
 pub mod playlists;
 pub mod settings;
 pub mod songs;
+pub mod streams;
 
 pub use about::render_about;
 pub use albums::{render_albums, AlbumsViewState};
@@ -19,3 +20,4 @@ pub use now_playing::render_now_playing;
 pub use playlists::{render_playlist_detail, render_playlists, PlaylistsViewState};
 pub use settings::render_settings;
 pub use songs::{render_songs, render_songs_view, render_track_table, SongsViewState};
+pub use streams::{render_spotify_view, render_youtube_view, StreamsViewState};

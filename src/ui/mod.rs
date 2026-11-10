@@ -48,6 +48,8 @@ pub struct EclipseApp {
     pub genres_state: GenresViewState,
     pub folders_state: FoldersViewState,
     pub playlists_state: PlaylistsViewState,
+    pub streams_state: StreamsViewState,
+    pub stream_controller: crate::streams::controller::StreamController,
     pub art_manager: art::AlbumArtManager,
     scan_rx: Receiver<(usize, usize)>,
     scan_tx: Sender<(usize, usize)>,
@@ -94,6 +96,8 @@ impl EclipseApp {
             genres_state: GenresViewState::default(),
             folders_state: FoldersViewState::default(),
             playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
             art_manager: art::AlbumArtManager::new(),
             scan_rx,
             scan_tx,
@@ -196,12 +200,44 @@ impl EclipseApp {
 impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // High frame rate during playback for smooth spectrum visualizer and PiP overlay
-        if self.player.engine.is_playing() || self.is_scanning || self.cfg.pip.enabled {
+        let is_stream_playing = self.stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false);
+        if self.player.engine.is_playing()
+            || (self.player.playback_source.is_stream() && is_stream_playing)
+            || self.is_scanning
+            || self.cfg.pip.enabled
+        {
             ctx.request_repaint();
         }
 
         self.player.update();
         self.art_manager.update(ctx);
+
+        let stream_events = self.stream_controller.update();
+        for event in stream_events {
+            match event {
+                crate::streams::controller::StreamEvent::TrackStarted { provider_id, track } => {
+                    self.player.switch_to_stream(&provider_id, Some(track.clone()));
+                    self.set_status(&format!("Playing '{}' via {}", track.display_title(), provider_id));
+                }
+                crate::streams::controller::StreamEvent::PlaybackStateUpdated { provider_id, state } => {
+                    if state.is_playing && self.player.playback_source.is_local() {
+                        if let Some(ref t) = state.current_track {
+                            self.player.switch_to_stream(&provider_id, Some(t.clone()));
+                        }
+                    } else if self.player.playback_source.is_stream() {
+                        if let Some(ref t) = state.current_track {
+                            if self.player.active_stream_track.as_ref().map(|x| &x.id) != Some(&t.id) {
+                                self.player.set_active_stream_track(Some(t.clone()));
+                            }
+                        }
+                    }
+                }
+                crate::streams::controller::StreamEvent::Error { provider_id, action, message } => {
+                    self.set_status(&format!("{provider_id} error ({action}): {message}"));
+                }
+                _ => {}
+            }
+        }
 
         // Update play counts and listening history when active track changes
         if let Some(curr) = self.player.current_track() {
@@ -401,7 +437,13 @@ impl App for EclipseApp {
                                     );
                                 }
                                 NavTab::NowPlaying => {
-                                    render_now_playing(ui, &mut self.player, &self.theme, &mut self.art_manager);
+                                    render_now_playing(
+                                        ui,
+                                        &mut self.player,
+                                        &self.theme,
+                                        &mut self.art_manager,
+                                        Some(&self.stream_controller),
+                                    );
                                 }
                                 NavTab::Songs => {
                                     render_songs(
@@ -633,6 +675,24 @@ impl App for EclipseApp {
                                     );
                                     self.player.apply_audio_settings(&self.cfg.audio);
                                 }
+                                NavTab::Spotify => {
+                                    render_spotify_view(
+                                        ui,
+                                        &mut self.stream_controller,
+                                        &mut self.player,
+                                        &self.theme,
+                                        &mut self.streams_state,
+                                    );
+                                }
+                                NavTab::YouTubeMusic => {
+                                    render_youtube_view(
+                                        ui,
+                                        &mut self.stream_controller,
+                                        &mut self.player,
+                                        &self.theme,
+                                        &mut self.streams_state,
+                                    );
+                                }
                                 NavTab::About => {
                                     render_about(ui, &self.theme);
                                 }
@@ -731,6 +791,7 @@ impl App for EclipseApp {
                     playerbar::render_playerbar(
                         ui,
                         &mut self.player,
+                        &mut self.stream_controller,
                         &self.theme,
                         &mut self.show_queue,
                         &mut self.cfg.pip.enabled,

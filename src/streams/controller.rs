@@ -98,6 +98,11 @@ impl StreamController {
         let (cmd_tx, cmd_rx) = channel::<StreamCommand>();
         let (event_tx, event_rx) = channel::<StreamEvent>();
 
+        let mut initial_connected = HashMap::new();
+        for p in &providers {
+            initial_connected.insert(p.id().to_lowercase(), p.is_connected());
+        }
+
         let worker_handle = thread::Builder::new()
             .name("eclipse-stream-worker".to_string())
             .spawn(move || {
@@ -113,10 +118,36 @@ impl StreamController {
             search_results: HashMap::new(),
             playlists: HashMap::new(),
             playlist_tracks: HashMap::new(),
-            connected_providers: HashMap::new(),
+            connected_providers: initial_connected,
             is_busy: false,
             last_error: None,
         }
+    }
+
+    /// Check if a given provider is currently marked as connected.
+    pub fn is_connected(&self, provider_id: &str) -> bool {
+        self.connected_providers
+            .get(&provider_id.to_lowercase())
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Dispatch connect command to background worker.
+    pub fn connect(&mut self, provider_id: &str) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::Connect {
+            provider_id: provider_id.to_string(),
+        });
+    }
+
+    /// Dispatch disconnect command to background worker.
+    pub fn disconnect(&mut self, provider_id: &str) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::Disconnect {
+            provider_id: provider_id.to_string(),
+        });
     }
 
     /// Dispatch a command to the background worker thread.

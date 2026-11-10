@@ -20,6 +20,9 @@ pub enum NavTab {
     Favorites,
     NeverPlayed,
     RandomDiscovery,
+    // Stream
+    Spotify,
+    YouTubeMusic,
     // Playlists
     Playlists,
     Playlist(i64),
@@ -82,10 +85,10 @@ pub fn render_sidebar(
                 if show_spotify || show_youtube {
                     section_header(ui, "STREAM", None, theme);
                     if show_spotify {
-                        disabled_stream_item(ui, Icon::Spotify, "Spotify", theme);
+                        nav_button(ui, current_tab, NavTab::Spotify, Icon::Spotify, "Spotify", theme);
                     }
                     if show_youtube {
-                        disabled_stream_item(ui, Icon::YouTube, "YouTube Music", theme);
+                        nav_button(ui, current_tab, NavTab::YouTubeMusic, Icon::YouTube, "YouTube Music", theme);
                     }
                     ui.add_space(8.0);
                 }
@@ -210,6 +213,7 @@ fn section_header(ui: &mut Ui, label: &str, count: Option<usize>, theme: &Theme)
     ui.add_space(2.0);
 }
 
+#[allow(dead_code)]
 fn disabled_stream_item(
     ui: &mut Ui,
     icon: Icon,
