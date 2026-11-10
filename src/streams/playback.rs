@@ -17,7 +17,9 @@ use crate::streams::youtube::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver};
+#[cfg(not(test))]
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -507,32 +509,47 @@ impl Default for YouTubeWebviewPlayer {
 impl YouTubeWebviewPlayer {
     /// Initialize a new YouTube Webview Player.
     pub fn new() -> Self {
-        let (ipc_tx, ipc_rx) = channel::<PlayerIpcMessage>();
+        let (_ipc_tx, ipc_rx) = channel::<PlayerIpcMessage>();
         let playback_state = Arc::new(RwLock::new(StreamPlaybackState::default()));
         let is_ready = Arc::new(AtomicBool::new(false));
 
-        let (proxy_tx, proxy_rx) = channel::<Option<tao::event_loop::EventLoopProxy<PlayerWebviewCommand>>>();
+        #[cfg(test)]
+        {
+            Self {
+                cmd_tx: None,
+                ipc_rx,
+                thread_handle: None,
+                playback_state,
+                is_ready,
+                is_active: false,
+            }
+        }
 
-        let state_clone = Arc::clone(&playback_state);
-        let ready_clone = Arc::clone(&is_ready);
+        #[cfg(not(test))]
+        {
+            let (proxy_tx, proxy_rx) =
+                channel::<Option<tao::event_loop::EventLoopProxy<PlayerWebviewCommand>>>();
+            let state_clone = Arc::clone(&playback_state);
+            let ready_clone = Arc::clone(&is_ready);
 
-        let thread_handle = thread::Builder::new()
-            .name("eclipse-youtube-webview".to_string())
-            .spawn(move || {
-                run_webview_event_loop(ipc_tx, proxy_tx, state_clone, ready_clone);
-            })
-            .ok();
+            let thread_handle = thread::Builder::new()
+                .name("eclipse-youtube-webview".to_string())
+                .spawn(move || {
+                    run_webview_event_loop(_ipc_tx, proxy_tx, state_clone, ready_clone);
+                })
+                .ok();
 
-        // Wait briefly for proxy initialization
-        let cmd_tx = proxy_rx.recv_timeout(Duration::from_millis(1500)).ok().flatten();
+            // Wait briefly for proxy initialization
+            let cmd_tx = proxy_rx.recv_timeout(Duration::from_millis(1500)).ok().flatten();
 
-        Self {
-            cmd_tx,
-            ipc_rx,
-            thread_handle,
-            playback_state,
-            is_ready,
-            is_active: false,
+            Self {
+                cmd_tx,
+                ipc_rx,
+                thread_handle,
+                playback_state,
+                is_ready,
+                is_active: false,
+            }
         }
     }
 
@@ -563,8 +580,11 @@ impl YouTubeWebviewPlayer {
             Ok(())
         } else {
             // Graceful fallback to default browser if webview initialization failed
-            let url = format!("{YOUTUBE_WATCH_BASE}{video_id}");
-            let _ = webbrowser::open(&url);
+            #[cfg(not(test))]
+            {
+                let url = format!("{YOUTUBE_WATCH_BASE}{video_id}");
+                let _ = webbrowser::open(&url);
+            }
             Ok(())
         }
     }
@@ -678,6 +698,7 @@ impl Drop for YouTubeWebviewPlayer {
 // Webview Background Runner
 // ---------------------------------------------------------------------------
 
+#[cfg(not(test))]
 fn run_webview_event_loop(
     ipc_tx: Sender<PlayerIpcMessage>,
     proxy_tx: Sender<Option<tao::event_loop::EventLoopProxy<PlayerWebviewCommand>>>,
