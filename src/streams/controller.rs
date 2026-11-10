@@ -1,6 +1,7 @@
 use crate::streams::provider::{
     StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
 };
+use crate::streams::spotify::SpotifyProvider;
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::{self, JoinHandle};
@@ -83,6 +84,11 @@ pub struct StreamController {
 }
 
 impl StreamController {
+    /// Initialize default streaming providers (Spotify).
+    pub fn default_providers() -> Vec<Box<dyn StreamProvider>> {
+        vec![Box::new(SpotifyProvider::new())]
+    }
+
     /// Initialize a new stream controller and spawn its background worker.
     pub fn new(providers: Vec<Box<dyn StreamProvider>>) -> Self {
         let (cmd_tx, cmd_rx) = channel::<StreamCommand>();
@@ -261,6 +267,12 @@ impl StreamController {
     }
 }
 
+impl Default for StreamController {
+    fn default() -> Self {
+        Self::new(Self::default_providers())
+    }
+}
+
 impl Drop for StreamController {
     fn drop(&mut self) {
         let _ = self.cmd_tx.send(StreamCommand::Shutdown);
@@ -281,202 +293,233 @@ fn run_stream_worker(
         provider_map.insert(p.id().to_lowercase(), idx);
     }
 
-    while let Ok(cmd) = cmd_rx.recv() {
-        match cmd {
-            StreamCommand::Shutdown => break,
-            StreamCommand::OpenBrowserUrl { url } => {
-                let u = url.clone();
-                let tx = event_tx.clone();
-                thread::spawn(move || {
-                    if let Err(e) = webbrowser::open(&u) {
-                        let _ = tx.send(StreamEvent::Error {
-                            provider_id: "browser".to_string(),
-                            action: "open_url".to_string(),
-                            message: format!("Failed to open browser URL: {e}"),
-                        });
-                    } else {
-                        let _ = tx.send(StreamEvent::BrowserUrlOpened { url: u });
-                    }
-                });
-            }
-            StreamCommand::Connect { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let res = providers[idx].connect();
-                    match res {
-                        Ok(()) => {
-                            let _ = event_tx.send(StreamEvent::Connected { provider_id });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(StreamEvent::Error {
-                                provider_id,
-                                action: "connect".to_string(),
-                                message: e,
+    let mut active_provider_id: Option<String> = None;
+    let poll_interval = std::time::Duration::from_millis(1000);
+
+    loop {
+        let cmd_opt = match cmd_rx.recv_timeout(poll_interval) {
+            Ok(cmd) => Some(cmd),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        };
+
+        if let Some(cmd) = cmd_opt {
+            match cmd {
+                StreamCommand::Shutdown => break,
+                StreamCommand::OpenBrowserUrl { url } => {
+                    let u = url.clone();
+                    let tx = event_tx.clone();
+                    thread::spawn(move || {
+                        if let Err(e) = webbrowser::open(&u) {
+                            let _ = tx.send(StreamEvent::Error {
+                                provider_id: "browser".to_string(),
+                                action: "open_url".to_string(),
+                                message: format!("Failed to open browser URL: {e}"),
                             });
+                        } else {
+                            let _ = tx.send(StreamEvent::BrowserUrlOpened { url: u });
                         }
-                    }
-                } else {
-                    let _ = event_tx.send(StreamEvent::Error {
-                        provider_id: provider_id.clone(),
-                        action: "connect".to_string(),
-                        message: format!("Unknown stream provider: {provider_id}"),
                     });
                 }
-            }
-            StreamCommand::Disconnect { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let res = providers[idx].disconnect();
-                    match res {
-                        Ok(()) => {
-                            let _ = event_tx.send(StreamEvent::Disconnected { provider_id });
+                StreamCommand::Connect { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let res = providers[idx].connect();
+                        match res {
+                            Ok(()) => {
+                                let _ = event_tx.send(StreamEvent::Connected { provider_id });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(StreamEvent::Error {
+                                    provider_id,
+                                    action: "connect".to_string(),
+                                    message: e,
+                                });
+                            }
                         }
-                        Err(e) => {
-                            let _ = event_tx.send(StreamEvent::Error {
-                                provider_id,
-                                action: "disconnect".to_string(),
-                                message: e,
-                            });
-                        }
-                    }
-                }
-            }
-            StreamCommand::Search { provider_id, query } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    match providers[idx].search(&query) {
-                        Ok(tracks) => {
-                            let _ = event_tx.send(StreamEvent::SearchResults {
-                                provider_id,
-                                query,
-                                tracks,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(StreamEvent::Error {
-                                provider_id,
-                                action: "search".to_string(),
-                                message: e,
-                            });
-                        }
-                    }
-                }
-            }
-            StreamCommand::FetchPlaylists { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    match providers[idx].get_user_playlists() {
-                        Ok(playlists) => {
-                            let _ = event_tx.send(StreamEvent::PlaylistsLoaded {
-                                provider_id,
-                                playlists,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(StreamEvent::Error {
-                                provider_id,
-                                action: "fetch_playlists".to_string(),
-                                message: e,
-                            });
-                        }
-                    }
-                }
-            }
-            StreamCommand::FetchPlaylistTracks {
-                provider_id,
-                playlist_id,
-            } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    match providers[idx].get_playlist_tracks(&playlist_id) {
-                        Ok(tracks) => {
-                            let _ = event_tx.send(StreamEvent::PlaylistTracksLoaded {
-                                provider_id,
-                                playlist_id,
-                                tracks,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(StreamEvent::Error {
-                                provider_id,
-                                action: "fetch_playlist_tracks".to_string(),
-                                message: e,
-                            });
-                        }
-                    }
-                }
-            }
-            StreamCommand::PlayTrack { provider_id, track } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let track_clone = track.clone();
-                    match providers[idx].play(&track) {
-                        Ok(()) => {
-                            let _ = event_tx.send(StreamEvent::TrackStarted {
-                                provider_id,
-                                track: track_clone,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = event_tx.send(StreamEvent::Error {
-                                provider_id,
-                                action: "play".to_string(),
-                                message: e,
-                            });
-                        }
-                    }
-                }
-            }
-            StreamCommand::Pause { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let _ = providers[idx].pause();
-                }
-            }
-            StreamCommand::Resume { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let _ = providers[idx].resume();
-                }
-            }
-            StreamCommand::Seek {
-                provider_id,
-                position_secs,
-            } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let _ = providers[idx].seek(position_secs);
-                }
-            }
-            StreamCommand::Next { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let _ = providers[idx].next();
-                }
-            }
-            StreamCommand::Prev { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let _ = providers[idx].prev();
-                }
-            }
-            StreamCommand::SetVolume {
-                provider_id,
-                volume,
-            } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    let _ = providers[idx].set_volume(volume);
-                }
-            }
-            StreamCommand::PollState { provider_id } => {
-                let id_key = provider_id.to_lowercase();
-                if let Some(&idx) = provider_map.get(&id_key) {
-                    if let Ok(Some(state)) = providers[idx].get_playback_state() {
-                        let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
-                            provider_id,
-                            state,
+                    } else {
+                        let _ = event_tx.send(StreamEvent::Error {
+                            provider_id: provider_id.clone(),
+                            action: "connect".to_string(),
+                            message: format!("Unknown stream provider: {provider_id}"),
                         });
+                    }
+                }
+                StreamCommand::Disconnect { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    if active_provider_id.as_deref().map(|s| s.to_lowercase()) == Some(id_key.clone()) {
+                        active_provider_id = None;
+                    }
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let res = providers[idx].disconnect();
+                        match res {
+                            Ok(()) => {
+                                let _ = event_tx.send(StreamEvent::Disconnected { provider_id });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(StreamEvent::Error {
+                                    provider_id,
+                                    action: "disconnect".to_string(),
+                                    message: e,
+                                });
+                            }
+                        }
+                    }
+                }
+                StreamCommand::Search { provider_id, query } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        match providers[idx].search(&query) {
+                            Ok(tracks) => {
+                                let _ = event_tx.send(StreamEvent::SearchResults {
+                                    provider_id,
+                                    query,
+                                    tracks,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(StreamEvent::Error {
+                                    provider_id,
+                                    action: "search".to_string(),
+                                    message: e,
+                                });
+                            }
+                        }
+                    }
+                }
+                StreamCommand::FetchPlaylists { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        match providers[idx].get_user_playlists() {
+                            Ok(playlists) => {
+                                let _ = event_tx.send(StreamEvent::PlaylistsLoaded {
+                                    provider_id,
+                                    playlists,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(StreamEvent::Error {
+                                    provider_id,
+                                    action: "fetch_playlists".to_string(),
+                                    message: e,
+                                });
+                            }
+                        }
+                    }
+                }
+                StreamCommand::FetchPlaylistTracks {
+                    provider_id,
+                    playlist_id,
+                } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        match providers[idx].get_playlist_tracks(&playlist_id) {
+                            Ok(tracks) => {
+                                let _ = event_tx.send(StreamEvent::PlaylistTracksLoaded {
+                                    provider_id,
+                                    playlist_id,
+                                    tracks,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(StreamEvent::Error {
+                                    provider_id,
+                                    action: "fetch_playlist_tracks".to_string(),
+                                    message: e,
+                                });
+                            }
+                        }
+                    }
+                }
+                StreamCommand::PlayTrack { provider_id, track } => {
+                    let id_key = provider_id.to_lowercase();
+                    active_provider_id = Some(provider_id.clone());
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let track_clone = track.clone();
+                        match providers[idx].play(&track) {
+                            Ok(()) => {
+                                let _ = event_tx.send(StreamEvent::TrackStarted {
+                                    provider_id,
+                                    track: track_clone,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(StreamEvent::Error {
+                                    provider_id,
+                                    action: "play".to_string(),
+                                    message: e,
+                                });
+                            }
+                        }
+                    }
+                }
+                StreamCommand::Pause { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let _ = providers[idx].pause();
+                    }
+                }
+                StreamCommand::Resume { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    active_provider_id = Some(provider_id.clone());
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let _ = providers[idx].resume();
+                    }
+                }
+                StreamCommand::Seek {
+                    provider_id,
+                    position_secs,
+                } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let _ = providers[idx].seek(position_secs);
+                    }
+                }
+                StreamCommand::Next { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let _ = providers[idx].next();
+                    }
+                }
+                StreamCommand::Prev { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let _ = providers[idx].prev();
+                    }
+                }
+                StreamCommand::SetVolume {
+                    provider_id,
+                    volume,
+                } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        let _ = providers[idx].set_volume(volume);
+                    }
+                }
+                StreamCommand::PollState { provider_id } => {
+                    let id_key = provider_id.to_lowercase();
+                    if let Some(&idx) = provider_map.get(&id_key) {
+                        if let Ok(Some(state)) = providers[idx].get_playback_state() {
+                            let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
+                                provider_id,
+                                state,
+                            });
+                        }
+                    }
+                }
+            }
+        } else {
+            // Periodic 1Hz poll when idle
+            if let Some(id) = &active_provider_id {
+                let id_key = id.to_lowercase();
+                if let Some(&idx) = provider_map.get(&id_key) {
+                    if providers[idx].is_connected() {
+                        if let Ok(Some(state)) = providers[idx].get_playback_state() {
+                            let _ = event_tx.send(StreamEvent::PlaybackStateUpdated {
+                                provider_id: id.clone(),
+                                state,
+                            });
+                        }
                     }
                 }
             }
@@ -686,5 +729,15 @@ mod tests {
         let _ = controller.update();
         assert_eq!(controller.connected_providers.get("test_mock"), Some(&false));
         assert!(!conn_flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_stream_controller_default_initialization() {
+        let controller = StreamController::default();
+        let providers = StreamController::default_providers();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].id(), "spotify");
+        assert_eq!(providers[0].name(), "Spotify");
+        assert!(controller.search_results.is_empty());
     }
 }

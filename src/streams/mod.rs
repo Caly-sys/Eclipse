@@ -1,6 +1,7 @@
 pub mod controller;
 pub mod credentials;
 pub mod provider;
+pub mod spotify;
 
 pub use controller::{
     StreamAction, StreamCommand, StreamController, StreamEvent,
@@ -12,3 +13,4 @@ pub use credentials::{
 pub use provider::{
     PlaybackSource, StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
 };
+pub use spotify::SpotifyProvider;
