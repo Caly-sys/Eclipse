@@ -52,6 +52,10 @@ pub struct StreamTrack {
     pub art_url: Option<String>,
     pub uri: String,
     pub provider: String,
+    #[serde(default)]
+    pub local_track_id: Option<i64>,
+    #[serde(default)]
+    pub local_path: Option<String>,
 }
 
 impl StreamTrack {
@@ -75,7 +79,24 @@ impl StreamTrack {
             art_url,
             uri: uri.into(),
             provider: provider.into(),
+            local_track_id: None,
+            local_path: None,
         }
+    }
+
+    #[inline]
+    pub fn is_available_locally(&self) -> bool {
+        self.local_track_id.is_some() || self.local_path.is_some()
+    }
+
+    pub fn set_local_match(&mut self, track_id: i64, path: impl Into<String>) {
+        self.local_track_id = Some(track_id);
+        self.local_path = Some(path.into());
+    }
+
+    pub fn clear_local_match(&mut self) {
+        self.local_track_id = None;
+        self.local_path = None;
     }
 
     pub fn display_title(&self) -> &str {
@@ -319,5 +340,32 @@ mod tests {
         let json_src = serde_json::to_string(&source).expect("serialize source");
         let deser_src: PlaybackSource = serde_json::from_str(&json_src).expect("deserialize source");
         assert_eq!(source, deser_src);
+    }
+
+    #[test]
+    fn test_stream_track_local_availability() {
+        let mut track = StreamTrack::new(
+            "id_1",
+            "Song",
+            "Artist",
+            "Album",
+            200.0,
+            None,
+            "spotify:track:123",
+            "spotify",
+        );
+        assert!(!track.is_available_locally());
+        assert_eq!(track.local_track_id, None);
+        assert_eq!(track.local_path, None);
+
+        track.set_local_match(42, "C:/music/song.flac");
+        assert!(track.is_available_locally());
+        assert_eq!(track.local_track_id, Some(42));
+        assert_eq!(track.local_path.as_deref(), Some("C:/music/song.flac"));
+
+        track.clear_local_match();
+        assert!(!track.is_available_locally());
+        assert_eq!(track.local_track_id, None);
+        assert_eq!(track.local_path, None);
     }
 }

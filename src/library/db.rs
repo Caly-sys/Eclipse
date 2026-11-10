@@ -372,6 +372,11 @@ impl Database {
         Ok(())
     }
 
+    #[inline]
+    pub fn add_track_to_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
+        self.add_to_playlist(playlist_id, track_id)
+    }
+
     pub fn remove_from_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
         let conn = self.lock_conn();
         conn.execute(

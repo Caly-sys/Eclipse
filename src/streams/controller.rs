@@ -29,6 +29,8 @@ pub enum StreamCommand {
     PollState { provider_id: String },
     OpenBrowserUrl { url: String },
     ImportSpotifyLink(String),
+    MatchLibrary(Vec<StreamTrack>),
+    SaveImportedPlaylist { name: String, tracks: Vec<StreamTrack> },
     Shutdown,
 }
 
@@ -67,6 +69,12 @@ pub enum StreamEvent {
         url: String,
     },
     SpotifyImportComplete(Result<SpotifyImportResult, String>),
+    LibraryMatched(Vec<StreamTrack>),
+    PlaylistSaved {
+        id: i64,
+        name: String,
+        track_count: usize,
+    },
     Error {
         provider_id: String,
         action: String,
@@ -256,6 +264,20 @@ impl StreamController {
         let _ = self.send(StreamCommand::ImportSpotifyLink(url.to_string()));
     }
 
+    /// Dispatch matching imported stream tracks against the local library to the background worker.
+    pub fn match_library(&mut self, tracks: Vec<StreamTrack>) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::MatchLibrary(tracks));
+    }
+
+    /// Dispatch saving imported stream tracks as a local playlist to the background worker.
+    pub fn save_imported_playlist(&mut self, name: String, tracks: Vec<StreamTrack>) {
+        self.is_busy = true;
+        self.last_error = None;
+        let _ = self.send(StreamCommand::SaveImportedPlaylist { name, tracks });
+    }
+
     /// Drain incoming events non-blockingly on the UI frame loop.
     pub fn update(&mut self) -> Vec<StreamEvent> {
         let mut events = Vec::new();
@@ -315,6 +337,12 @@ impl StreamController {
                     if let Err(ref err) = res {
                         self.last_error = Some(err.clone());
                     }
+                }
+                StreamEvent::LibraryMatched(_) => {
+                    self.is_busy = false;
+                }
+                StreamEvent::PlaylistSaved { .. } => {
+                    self.is_busy = false;
                 }
                 StreamEvent::Error { message, .. } => {
                     self.last_error = Some(message.clone());
@@ -575,6 +603,66 @@ fn run_stream_worker(
                         let fetcher = PublicSpotifyFetcher::new();
                         let res = fetcher.fetch_metadata(&url);
                         let _ = tx.send(StreamEvent::SpotifyImportComplete(res));
+                    });
+                }
+                StreamCommand::MatchLibrary(tracks) => {
+                    let tx = event_tx.clone();
+                    thread::spawn(move || {
+                        match crate::library::Database::open() {
+                            Ok(db) => {
+                                match crate::streams::matcher::find_in_my_library(&db, &tracks) {
+                                    Ok(matched) => {
+                                        let _ = tx.send(StreamEvent::LibraryMatched(matched));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(StreamEvent::Error {
+                                            provider_id: "library".to_string(),
+                                            action: "match_library".to_string(),
+                                            message: e,
+                                        });
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(StreamEvent::Error {
+                                    provider_id: "library".to_string(),
+                                    action: "match_library".to_string(),
+                                    message: format!("Failed to open database: {e}"),
+                                });
+                            }
+                        }
+                    });
+                }
+                StreamCommand::SaveImportedPlaylist { name, tracks } => {
+                    let tx = event_tx.clone();
+                    thread::spawn(move || {
+                        match crate::library::Database::open() {
+                            Ok(db) => {
+                                match crate::streams::matcher::save_imported_playlist(&db, &name, &tracks) {
+                                    Ok(res) => {
+                                        let _ = tx.send(StreamEvent::PlaylistSaved {
+                                            id: res.id,
+                                            name: res.name,
+                                            track_count: res.track_count,
+                                        });
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(StreamEvent::Error {
+                                            provider_id: "library".to_string(),
+                                            action: "save_imported_playlist".to_string(),
+                                            message: e,
+                                        });
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(StreamEvent::Error {
+                                    provider_id: "library".to_string(),
+                                    action: "save_imported_playlist".to_string(),
+                                    message: format!("Failed to open database: {e}"),
+                                });
+                            }
+                        }
                     });
                 }
             }
@@ -845,5 +933,65 @@ mod tests {
         assert!(!controller.is_busy);
         assert!(controller.last_error.is_some());
         assert!(controller.last_spotify_import.is_some());
+    }
+
+    #[test]
+    fn test_stream_controller_matcher_and_playlist_commands() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        // Test match_library dispatch
+        let track = StreamTrack::new(
+            "sp_1",
+            "Song",
+            "Artist",
+            "Album",
+            180.0,
+            None,
+            "spotify:track:1",
+            "spotify",
+        );
+        controller.match_library(vec![track.clone()]);
+        assert!(controller.is_busy);
+
+        // Wait for event
+        let mut got_match = false;
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(50));
+            for ev in controller.update() {
+                if let StreamEvent::LibraryMatched(tracks) = ev {
+                    assert_eq!(tracks.len(), 1);
+                    got_match = true;
+                    break;
+                }
+            }
+            if got_match {
+                break;
+            }
+        }
+        assert!(got_match);
+        assert!(!controller.is_busy);
+
+        // Test save_imported_playlist dispatch
+        controller.save_imported_playlist("My Test Pl".to_string(), vec![track]);
+        assert!(controller.is_busy);
+
+        let mut got_saved = false;
+        for _ in 0..20 {
+            thread::sleep(Duration::from_millis(50));
+            for ev in controller.update() {
+                if let StreamEvent::PlaylistSaved { name, track_count, .. } = ev {
+                    assert_eq!(name, "My Test Pl");
+                    assert_eq!(track_count, 1);
+                    got_saved = true;
+                    break;
+                }
+            }
+            if got_saved {
+                break;
+            }
+        }
+        assert!(got_saved);
+        assert!(!controller.is_busy);
     }
 }
