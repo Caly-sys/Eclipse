@@ -107,35 +107,105 @@ Eclipse is 100% local-first and portable. It requires no administrative installe
 
 If you prefer compiling directly from the Rust source code:
 
-#### Prerequisites
-- **Operating System:** Windows 10 or 11 (64-bit)
-- **Rust Toolchain:** [rustup.rs](https://rustup.rs/) (Rust 1.80+ recommended, edition 2021)
-- **C++ Build Tools:** Visual Studio Build Tools with C++ workload (standard for MSVC ABI)
-- **Git:** [git-scm.com](https://git-scm.com/)
+#### ✦ Build Requirements & Toolchain Prerequisites
 
-#### Clone & Compile
+Before building Eclipse, ensure your Windows development environment has the following tools installed:
+
+| Requirement | Minimum Version | Installation / Command | Purpose |
+|---|---|---|---|
+| **Operating System** | Windows 10 (1809+) or Windows 11 (64-bit) | Pre-installed | Target host OS |
+| **Rust Toolchain** | `1.80.0+` (`stable-x86_64-pc-windows-msvc`) | `winget install Rustlang.Rustup` or [rustup.rs](https://rustup.rs/) | Rust compiler (`rustc`) & package manager (`cargo`) |
+| **Visual Studio C++ Build Tools** | VS 2019 or 2022 (MSVC v142/v143) | `winget install Microsoft.VisualStudio.2022.BuildTools` or [Visual Studio Downloads](https://visualstudio.microsoft.com/visual-cpp-build-tools/) | Provides C++ compiler (`cl.exe`), linker (`link.exe`), and libraries for compiling native C dependencies (`rusqlite`, `cpal`, `wry`) |
+| **Windows 10 / 11 SDK** | 10.0.19041.0 or newer | Bundled with VS C++ Workload | Core Windows API headers and libraries (`kernel32`, `user32`, `dwmapi`, `ole32`) |
+| **Git for Windows** | 2.40+ | `winget install Git.Git` or [git-scm.com](https://git-scm.com/) | Version control and repository cloning |
+| **Python 3.8+** *(Optional)* | 3.8+ | `winget install Python.Python.3.12` | Required only if running the emoji audit test script (`tests/verify_no_emojis.py`) |
+
+---
+
+#### ✦ Installing the C++ Build Environment (Quick Setup)
+
+If you do not have Visual Studio installed, you can install the exact required C++ build tools in one command using `winget`:
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+Alternatively, open the **Visual Studio Installer** and verify the following components are checked:
+- ✅ **Desktop development with C++** (Workload)
+  - ✅ **MSVC v143 - VS 2022 C++ x64/x86 build tools**
+  - ✅ **Windows 11 SDK (10.0.22621.0)** or **Windows 10 SDK**
+
+Then verify your Rust toolchain uses the MSVC target:
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+---
+
+#### ✦ Clone & Compile
+
 ```powershell
 # 1. Clone the repository
 git clone https://github.com/Caly-sys/Eclipse.git
 cd Eclipse
 
-# 2. Build the optimized release binary
+# 2. Build for development (fast debug build)
+cargo build
+
+# 3. Build optimized standalone release binary
+# (Automatically statically links the C-runtime via .cargo/config.toml)
 cargo build --release
 
-# 3. Launch Eclipse
+# 4. Launch Eclipse
 .\target\release\eclipse.exe
 # or use the bundled quick-launch script:
 .\run.bat
 ```
 
-#### Running Tests & Code Quality Checks
+---
+
+#### ✦ Running Tests & Code Quality Gates
+
+Eclipse enforces a 100% clean test suite with zero compiler warnings and zero Unicode emoji artifacts:
+
 ```powershell
-# Run all unit and integration tests (102 tests)
+# Run the complete test suite (156 unit & integration tests)
 cargo test --all
 
-# Run strict Clippy linter
+# Run the strict Clippy linter (zero warnings policy)
 cargo clippy --all-targets -- -D warnings
+
+# Run the zero-emoji verification audit (requires Python)
+python tests/verify_no_emojis.py
 ```
+
+---
+
+#### ✦ Packaging the Portable Distribution ZIP
+
+To create the portable standalone distribution package:
+
+```powershell
+# 1. Ensure the release binary is built
+cargo build --release
+
+# 2. Copy the binary to the root directory
+Copy-Item target\release\eclipse.exe eclipse.exe -Force
+
+# 3. Create the release archive
+Compress-Archive -Path eclipse.exe, run.bat, README.md, LICENSE -DestinationPath eclipse-windows-x64.zip -Force
+```
+
+---
+
+#### ✦ Troubleshooting Build Issues
+
+- **`error: linker 'link.exe' not found`**:
+  You are missing the Microsoft C++ Build Tools. Install the **Desktop development with C++** workload in Visual Studio Installer and restart your terminal.
+- **`VCRUNTIME140.dll` missing on other PCs**:
+  Ensure you build with `.cargo/config.toml` containing `rustflags = ["-C", "target-feature=+crt-static"]` (already included in the repo). This statically embeds the C-runtime into the executable.
+- **Slow initial compile**:
+  The first `cargo build` compiles native audio codecs and GUI dependencies (~3–4 minutes). Subsequent incremental builds take 2–5 seconds.
 
 ---
 
