@@ -303,6 +303,8 @@ pub fn render_pip_card(
                     });
 
                     // Row B: Controls row
+                    let orig_interact_y = ui.spacing().interact_size.y;
+                    ui.spacing_mut().interact_size.y = 24.0;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(7.0, 0.0);
 
@@ -370,6 +372,7 @@ pub fn render_pip_card(
                             }
                         }
                     });
+                    ui.spacing_mut().interact_size.y = orig_interact_y;
                 },
             );
         });

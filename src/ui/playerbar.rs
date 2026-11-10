@@ -303,6 +303,8 @@ pub fn render_playerbar(
                     ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
 
                     // Top Row: Transport Buttons
+                    let orig_interact_y = ui.spacing().interact_size.y;
+                    ui.spacing_mut().interact_size.y = 40.0;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(12.0, 0.0);
 
@@ -402,6 +404,7 @@ pub fn render_playerbar(
                             player.cycle_repeat();
                         }
                     });
+                    ui.spacing_mut().interact_size.y = orig_interact_y;
 
                     // Bottom Row: Current Timestamp, Seekbar, Duration
                     let (pos, dur) = current_playback_time(player, if is_stream { Some(&*stream_controller) } else { None });
@@ -427,6 +430,8 @@ pub fn render_playerbar(
                         pos
                     };
 
+                    let orig_interact_y = ui.spacing().interact_size.y;
+                    ui.spacing_mut().interact_size.y = 16.0;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
 
@@ -455,6 +460,7 @@ pub fn render_playerbar(
                                 .size(11.0),
                         );
                     });
+                    ui.spacing_mut().interact_size.y = orig_interact_y;
                 },
             );
 
@@ -1334,5 +1340,42 @@ mod tests {
 
         assert!(drag_state.last_committed_secs.is_none(), "Committed preview must expire after 350ms");
         assert!(drag_state.last_committed_time.is_none());
+    }
+
+    #[test]
+    fn test_transport_buttons_vertical_alignment() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let orig_interact_y = ui.spacing().interact_size.y;
+                ui.spacing_mut().interact_size.y = 40.0;
+                let mut b1_y = 0.0;
+                let mut b2_y = 0.0;
+                let mut play_y = 0.0;
+                let mut b4_y = 0.0;
+                let mut b5_y = 0.0;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(12.0, 0.0);
+                    let (b1, _) = ui.allocate_exact_size(vec2(21.0, 21.0), egui::Sense::click());
+                    let (b2, _) = ui.allocate_exact_size(vec2(21.0, 21.0), egui::Sense::click());
+                    let (play, _) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::click());
+                    let (b4, _) = ui.allocate_exact_size(vec2(21.0, 21.0), egui::Sense::click());
+                    let (b5, _) = ui.allocate_exact_size(vec2(21.0, 21.0), egui::Sense::click());
+
+                    b1_y = b1.center().y;
+                    b2_y = b2.center().y;
+                    play_y = play.center().y;
+                    b4_y = b4.center().y;
+                    b5_y = b5.center().y;
+                });
+                ui.spacing_mut().interact_size.y = orig_interact_y;
+
+                assert_eq!(b1_y, play_y, "Shuffle button must be vertically centered with play button");
+                assert_eq!(b2_y, play_y, "Back button must be vertically centered with play button");
+                assert_eq!(b4_y, play_y, "Next button must be vertically centered with play button");
+                assert_eq!(b5_y, play_y, "Repeat button must be vertically centered with play button");
+                assert_eq!(ui.spacing().interact_size.y, orig_interact_y, "interact_size.y must be restored");
+            });
+        });
     }
 }

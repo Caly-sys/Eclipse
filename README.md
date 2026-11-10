@@ -66,8 +66,8 @@ Eclipse is portable and self-contained. It requires no administrative installers
 #### Release SHA-256 Checksums (v1.2.2)
 | File | SHA-256 Checksum |
 |---|---|
-| `eclipse.exe` (x64 MSVC) | `1D8B2F82F71FE13133D557DD093AF94FAAEF3998328B65B4F65F4DB3A39DE7D9` |
-| `eclipse-v1.2.2-windows-x64.zip` | `8B7C5B5F8339745E173B90AAB2BDCC532B8CBFC94C10517BE3FC36E3AE967C4C` |
+| `eclipse.exe` (x64 MSVC) | `56B86EAB6ECEC081F996C29EEBC8840952D30243DDE3DC58C346E715AEACC4C9` |
+| `eclipse-v1.2.2-windows-x64.zip` | `51488D7819AFE7CA13C3B5B07B43C5CFF1C52C26A00D1F9B67895637C5680C4F` |
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**
