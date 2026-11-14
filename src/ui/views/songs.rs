@@ -183,9 +183,9 @@ pub fn render_track_table(
     let right_padding = 24.0;
     let total_width = (ui.available_width() - right_padding).max(280.0);
     let col_num_w = 40.0;
-    let col_added_w = 85.0;
-    let col_plays_w = 65.0;
-    let col_time_w = 75.0;
+    let col_added_w = 80.0;
+    let col_plays_w = 60.0;
+    let col_time_w = 95.0;
     let gap = 10.0;
     let total_gaps = gap * 5.0;
     let fixed_w = col_num_w + col_added_w + col_plays_w + col_time_w;
@@ -269,10 +269,11 @@ pub fn render_track_table(
 
                 let row_height = 48.0;
                 let (row_rect, row_resp) = ui.allocate_exact_size(vec2(total_width, row_height), egui::Sense::click());
+                let is_row_hovered = ui.rect_contains_pointer(row_rect);
 
                 let row_bg = if is_current {
                     theme.accent_glow
-                } else if row_resp.hovered() {
+                } else if is_row_hovered {
                     Color32::from_rgb(28, 28, 31) // theme.surface_hover #1c1c1f
                 } else if is_selected {
                     Color32::from_rgba_premultiplied(180, 140, 255, 18)
@@ -398,14 +399,18 @@ pub fn render_track_table(
 
                     // Optional More actions trigger ("•••") on hover or if context menu is open for this track
                     let is_menu_open_for_this = context_menu.as_ref().is_some_and(|cm| cm.track.id == track.id);
-                    if row_resp.hovered() || is_menu_open_for_this {
-                        time_ui.add_space(6.0);
+                    if is_row_hovered || is_menu_open_for_this {
+                        time_ui.add_space(4.0);
                         let more_color = if is_menu_open_for_this { theme.accent } else { theme.text_muted };
                         let more_resp = icon_button(time_ui, Icon::MoreHorizontal, 13.0, more_color);
                         if more_resp.clicked() {
                             more_clicked = true;
-                            let anchor = pos2(more_resp.rect.left(), more_resp.rect.bottom() + 4.0);
-                            *context_menu = Some(TrackContextMenuState::new(track.clone(), anchor, from_playlist_id));
+                            if is_menu_open_for_this {
+                                *context_menu = None;
+                            } else {
+                                let anchor = pos2(more_resp.rect.right(), more_resp.rect.bottom() + 4.0);
+                                *context_menu = Some(TrackContextMenuState::new(track.clone(), anchor, from_playlist_id));
+                            }
                         }
                     }
                 });
@@ -415,7 +420,7 @@ pub fn render_track_table(
                 }
 
                 if row_resp.secondary_clicked() {
-                    let click_pos = ui.input(|i| i.pointer.interact_pos()).unwrap_or(row_rect.center());
+                    let click_pos = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()).or(i.pointer.hover_pos())).unwrap_or(row_rect.center());
                     *context_menu = Some(TrackContextMenuState::new(track.clone(), click_pos, from_playlist_id));
                 } else if row_resp.double_clicked() && !fav_clicked && !more_clicked {
                     let q = queue_tracks.unwrap_or(tracks);
@@ -519,5 +524,109 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn test_clicking_more_button_opens_context_menu() {
+        let ctx = egui::Context::default();
+        let theme = Theme::from_name("dark", None);
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let mut art_manager = AlbumArtManager::new();
+        let mut selected_id = None;
+        let mut on_toggle_fav = None;
+        let mut context_menu = None;
+
+        let tracks = vec![
+            sample_track(1, "Neon Horizon", "Solaris", "Midnight Echoes"),
+        ];
+
+        // Track 0 is at row_rect y in [28.0, 76.0] (28px header + 48px row)
+        // With total_width = 1000.0, time column is at the right end.
+        // Let's first move pointer over the row to see where the more button is allocated!
+        let mut in0 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.0),
+            ..Default::default()
+        };
+        in0.events.push(egui::Event::PointerMoved(pos2(950.0, 50.0)));
+        let _ = ctx.run(in0, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_track_table(
+                    ui,
+                    &tracks,
+                    None,
+                    &mut selected_id,
+                    &mut player,
+                    &theme,
+                    &mut art_manager,
+                    &mut on_toggle_fav,
+                    &mut context_menu,
+                    None,
+                );
+            });
+        });
+
+        // Frame 1: Pointer pressed on more button
+        let pt = pos2(892.0, 67.0);
+        let mut in1 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.1),
+            ..Default::default()
+        };
+        in1.events.push(egui::Event::PointerButton {
+            pos: pt,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(in1, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_track_table(
+                    ui,
+                    &tracks,
+                    None,
+                    &mut selected_id,
+                    &mut player,
+                    &theme,
+                    &mut art_manager,
+                    &mut on_toggle_fav,
+                    &mut context_menu,
+                    None,
+                );
+            });
+        });
+
+        // Frame 2: Pointer released on more button
+        let mut in2 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.15),
+            ..Default::default()
+        };
+        in2.events.push(egui::Event::PointerButton {
+            pos: pt,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(in2, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_track_table(
+                    ui,
+                    &tracks,
+                    None,
+                    &mut selected_id,
+                    &mut player,
+                    &theme,
+                    &mut art_manager,
+                    &mut on_toggle_fav,
+                    &mut context_menu,
+                    None,
+                );
+            });
+        });
+
+        println!("After click context_menu: {:?}", context_menu);
+        assert!(context_menu.is_some(), "Context menu must be opened after clicking the more button!");
     }
 }

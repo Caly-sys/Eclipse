@@ -179,35 +179,36 @@ pub fn render_track_context_menu(
         return None;
     }
 
-    // 2. Dismissal checks: Click outside
-    if ctx.input(|i| i.pointer.any_click()) {
-        if let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
-            let in_main = current_state
-                .main_menu_rect
-                .is_some_and(|r| r.expand(3.0).contains(click_pos));
-            let in_sub = current_state.is_submenu_open
-                && current_state
-                    .submenu_rect
-                    .is_some_and(|r| r.expand(3.0).contains(click_pos));
-            if !in_main && !in_sub {
-                return None;
+    // 2. Dismissal checks: Click outside (only evaluated once menu has rendered at least one frame)
+    if let Some(main_rect) = current_state.main_menu_rect {
+        if ctx.input(|i| i.pointer.any_click()) {
+            if let Some(click_pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                let in_main = main_rect.expand(4.0).contains(click_pos);
+                let in_sub = current_state.is_submenu_open
+                    && current_state
+                        .submenu_rect
+                        .is_some_and(|r| r.expand(4.0).contains(click_pos));
+                if !in_main && !in_sub {
+                    return None;
+                }
             }
         }
     }
 
-    // 3. Dismissal checks: Scroll outside menu
-    let scrolled = ctx.input(|i| i.smooth_scroll_delta.y.abs() > 0.0 || i.raw_scroll_delta.y.abs() > 0.0);
-    if scrolled {
-        let hover_pos = ctx.input(|i| i.pointer.hover_pos())?;
-        let in_main = current_state
-            .main_menu_rect
-            .is_some_and(|r| r.contains(hover_pos));
-        let in_sub = current_state.is_submenu_open
-            && current_state
-                .submenu_rect
-                .is_some_and(|r| r.contains(hover_pos));
-        if !in_main && !in_sub {
-            return None;
+    // 3. Dismissal checks: Scroll outside menu (only evaluated once menu has rendered at least one frame)
+    if let Some(main_rect) = current_state.main_menu_rect {
+        let scrolled = ctx.input(|i| i.smooth_scroll_delta.y.abs() > 0.0 || i.raw_scroll_delta.y.abs() > 0.0);
+        if scrolled {
+            if let Some(hover_pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                let in_main = main_rect.contains(hover_pos);
+                let in_sub = current_state.is_submenu_open
+                    && current_state
+                        .submenu_rect
+                        .is_some_and(|r| r.contains(hover_pos));
+                if !in_main && !in_sub {
+                    return None;
+                }
+            }
         }
     }
 
@@ -534,14 +535,83 @@ mod tests {
     }
 
     #[test]
-    fn test_context_menu_state_initialization() {
+    fn test_menu_survives_opening_click_frame() {
+        let ctx = egui::Context::default();
         let track = dummy_track();
-        let state = TrackContextMenuState::new(track.clone(), pos2(100.0, 200.0), Some(7));
-        assert_eq!(state.track.id, 42);
-        assert_eq!(state.anchor_pos, pos2(100.0, 200.0));
-        assert_eq!(state.from_playlist_id, Some(7));
-        assert!(!state.is_submenu_open);
-        assert!(!state.is_creating_playlist);
+
+        // Simulate frame where user clicked to open context menu
+        let mut state = Some(TrackContextMenuState::new(track.clone(), pos2(100.0, 100.0), None));
+        let playlists: [Playlist; 0] = [];
+        let theme = Theme::from_name("dark", None);
+
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(pos2(100.0, 100.0)),
+                    egui::Event::PointerButton {
+                        pos: pos2(100.0, 100.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos: pos2(100.0, 100.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| {
+                // In the opening frame, render_track_context_menu MUST NOT dismiss itself!
+                let _ = render_track_context_menu(ctx, &mut state, &playlists, &theme);
+            },
+        );
+
+        assert!(state.is_some(), "Context menu must remain open after the frame it was clicked open!");
+    }
+
+    #[test]
+    fn test_menu_dismisses_on_subsequent_outside_click() {
+        let ctx = egui::Context::default();
+        let track = dummy_track();
+        let playlists: [Playlist; 0] = [];
+        let theme = Theme::from_name("dark", None);
+
+        // Frame 1: Initial opening frame (menu renders and records main_menu_rect)
+        let mut state = Some(TrackContextMenuState::new(track.clone(), pos2(100.0, 100.0), None));
+        let _ = ctx.run(Default::default(), |ctx| {
+            let _ = render_track_context_menu(ctx, &mut state, &playlists, &theme);
+        });
+        assert!(state.is_some(), "Menu must be rendered and populated on frame 1");
+        assert!(state.as_ref().unwrap().main_menu_rect.is_some(), "main_menu_rect must be recorded");
+
+        // Frame 2: User clicks outside the menu (at pos 500, 500)
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(pos2(500.0, 500.0)),
+                    egui::Event::PointerButton {
+                        pos: pos2(500.0, 500.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Default::default(),
+                    },
+                    egui::Event::PointerButton {
+                        pos: pos2(500.0, 500.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Default::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ctx| {
+                let _ = render_track_context_menu(ctx, &mut state, &playlists, &theme);
+            },
+        );
+        assert!(state.is_none(), "Menu must be dismissed when user clicks outside on subsequent frame");
     }
 
     #[test]
