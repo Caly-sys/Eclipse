@@ -1,6 +1,6 @@
 ﻿[package]
 name = "eclipse"
-version = "1.2.2"
+version = "1.2.3"
 edition = "2021"
 description = "Eclipse — music, in the dark. A local-first lossless music player rewritten in Rust."
 authors = ["sadult", "Hype AMD"]
