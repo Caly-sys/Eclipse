@@ -10,10 +10,14 @@ use crate::library::model::Track;
 use crate::lyrics::{LrclibRecord, Lyrics};
 use crate::streams::{PlaybackSource, StreamTrack};
 use rand::seq::SliceRandom;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
+
+/// Maximum number of entries retained in the backward navigation history stack.
+const HISTORY_MAX: usize = 100;
 
 pub struct PlayerController {
     pub engine: AudioEngine,
@@ -33,7 +37,17 @@ pub struct PlayerController {
     lyrics_tx: Sender<Option<Lyrics>>,
     manual_search_rx: Receiver<Result<Vec<LrclibRecord>, String>>,
     manual_search_tx: Sender<Result<Vec<LrclibRecord>, String>>,
+    /// Legacy field kept for backward compatibility; now mirrors `shuffle_order`.
     shuffled_indices: Vec<usize>,
+    // ── Two-Tier Queue State ──────────────────────────────────────────
+    /// Tier 1: User-queued track indices (via "Add to Queue" / "Play Next").
+    user_queue: VecDeque<usize>,
+    /// Tier 2: Permutation shuffle order (or linear order when shuffle is off).
+    shuffle_order: Vec<usize>,
+    /// Position pointer inside `shuffle_order`.
+    queue_pos: usize,
+    /// Bounded backward navigation stack of previously played track indices.
+    history: Vec<usize>,
 }
 
 impl PlayerController {
@@ -65,6 +79,10 @@ impl PlayerController {
             manual_search_rx: ms_rx,
             manual_search_tx: ms_tx,
             shuffled_indices: Vec::new(),
+            user_queue: VecDeque::new(),
+            shuffle_order: Vec::new(),
+            queue_pos: 0,
+            history: Vec::new(),
         };
 
         controller.apply_audio_settings(&cfg.audio);
@@ -172,10 +190,14 @@ impl PlayerController {
     pub fn load_queue(&mut self, tracks: Vec<Track>, start_index: usize) {
         self.playback_source = PlaybackSource::Local;
         self.active_stream_track = None;
+        self.user_queue.clear();
+        self.history.clear();
         if tracks.is_empty() {
             self.queue.clear();
             self.current_index = None;
             self.shuffled_indices.clear();
+            self.shuffle_order.clear();
+            self.queue_pos = 0;
             self.engine.stop();
             return;
         }
@@ -185,6 +207,8 @@ impl PlayerController {
         self.current_index = Some(idx);
         if self.shuffle {
             self.rebuild_shuffle();
+        } else {
+            self.rebuild_linear_order(idx);
         }
         self.play_index(idx);
     }
@@ -192,6 +216,8 @@ impl PlayerController {
     pub fn set_queue_paused(&mut self, tracks: Vec<Track>, start_index: usize) {
         self.playback_source = PlaybackSource::Local;
         self.active_stream_track = None;
+        self.user_queue.clear();
+        self.history.clear();
         if tracks.is_empty() {
             return;
         }
@@ -200,6 +226,8 @@ impl PlayerController {
         self.current_index = Some(idx);
         if self.shuffle {
             self.rebuild_shuffle();
+        } else {
+            self.rebuild_linear_order(idx);
         }
         let track = self.queue[idx].clone();
         let path = Path::new(&track.path);
@@ -209,6 +237,10 @@ impl PlayerController {
     }
 
     pub fn play_index(&mut self, index: usize) {
+        self.play_index_internal(index, true);
+    }
+
+    fn play_index_internal(&mut self, index: usize, sync_queue_pos: bool) {
         if index >= self.queue.len() {
             return;
         }
@@ -216,6 +248,14 @@ impl PlayerController {
         self.playback_source = PlaybackSource::Local;
         self.active_stream_track = None;
         self.current_index = Some(index);
+
+        // Sync queue_pos to current position in shuffle_order / linear order if requested
+        if sync_queue_pos {
+            if let Some(pos) = self.shuffle_order.iter().position(|&x| x == index) {
+                self.queue_pos = pos;
+            }
+        }
+
         let track = self.queue[index].clone();
         let path = Path::new(&track.path);
 
@@ -311,45 +351,59 @@ impl PlayerController {
             return;
         }
 
-        if self.shuffle {
-            if self.shuffled_indices.is_empty() {
-                self.rebuild_shuffle();
-            }
-
-            if let Some(curr) = self.current_index {
-                if let Some(pos) = self.shuffled_indices.iter().position(|&x| x == curr) {
-                    if pos + 1 < self.shuffled_indices.len() {
-                        let next_idx = self.shuffled_indices[pos + 1];
-                        self.play_index(next_idx);
-                        return;
-                    } else if self.repeat == RepeatMode::All {
-                        self.rebuild_shuffle();
-                        if let Some(&first) = self.shuffled_indices.first() {
-                            self.play_index(first);
-                            return;
-                        }
-                    } else {
-                        self.engine.stop();
-                        return;
-                    }
-                }
-            } else if let Some(&first) = self.shuffled_indices.first() {
-                self.play_index(first);
-                return;
+        // Push outgoing track to history
+        if let Some(curr) = self.current_index {
+            self.history.push(curr);
+            if self.history.len() > HISTORY_MAX {
+                self.history.remove(0);
             }
         }
 
-        // Sequential (non-shuffle) playback
-        if let Some(curr) = self.current_index {
-            if curr + 1 < self.queue.len() {
-                self.play_index(curr + 1);
-            } else if self.repeat == RepeatMode::All {
-                self.play_index(0);
-            } else {
-                self.engine.stop();
+        // Priority 1: User queue (Tier 1 — "Next in Queue")
+        if let Some(queued_idx) = self.user_queue.pop_front() {
+            if queued_idx < self.queue.len() {
+                self.play_index_internal(queued_idx, false);
+                return;
             }
-        } else if !self.queue.is_empty() {
-            self.play_index(0);
+            // Invalid index was in user_queue, skip it and fall through
+        }
+
+        // Priority 2: Playlist queue (Tier 2 — shuffle_order / linear)
+        if self.shuffle_order.is_empty() {
+            if self.shuffle {
+                self.rebuild_shuffle();
+            } else if let Some(curr) = self.current_index {
+                self.rebuild_linear_order(curr);
+            } else {
+                self.rebuild_linear_order(0);
+            }
+        }
+
+        if self.queue_pos + 1 < self.shuffle_order.len() {
+            self.queue_pos += 1;
+            let next_idx = self.shuffle_order[self.queue_pos];
+            self.play_index(next_idx);
+        } else if self.repeat == RepeatMode::All {
+            if self.shuffle {
+                let last_idx = self.current_index;
+                self.rebuild_shuffle();
+                // Ensure the last song doesn't immediately repeat
+                if self.queue.len() > 1 {
+                    if let Some(last) = last_idx {
+                        if self.shuffle_order.first().copied() == Some(last)
+                            && self.shuffle_order.len() > 1
+                        {
+                            self.shuffle_order.swap(0, 1);
+                        }
+                    }
+                }
+            }
+            self.queue_pos = 0;
+            if let Some(&first) = self.shuffle_order.first() {
+                self.play_index(first);
+            }
+        } else {
+            self.engine.stop();
         }
     }
 
@@ -364,44 +418,39 @@ impl PlayerController {
             return;
         }
 
-        if self.shuffle {
-            if self.shuffled_indices.is_empty() {
-                self.rebuild_shuffle();
-            }
-
-            if let Some(curr) = self.current_index {
-                if let Some(pos) = self.shuffled_indices.iter().position(|&x| x == curr) {
-                    if pos > 0 {
-                        let prev_idx = self.shuffled_indices[pos - 1];
-                        self.play_index(prev_idx);
-                        return;
-                    } else if self.repeat == RepeatMode::All {
-                        if let Some(&last) = self.shuffled_indices.last() {
-                            self.play_index(last);
-                            return;
-                        }
-                    } else {
-                        self.engine.seek(Duration::ZERO);
-                        return;
-                    }
+        // Priority 1: Pop from backward navigation history
+        if let Some(prev_idx) = self.history.pop() {
+            if prev_idx < self.queue.len() {
+                // Sync queue_pos to the history target
+                if let Some(pos) = self.shuffle_order.iter().position(|&x| x == prev_idx) {
+                    self.queue_pos = pos;
                 }
-            } else if let Some(&last) = self.shuffled_indices.last() {
-                self.play_index(last);
+                self.play_index(prev_idx);
                 return;
             }
         }
 
-        // Sequential (non-shuffle) playback
-        if let Some(curr) = self.current_index {
-            if curr > 0 {
-                self.play_index(curr - 1);
-            } else if self.repeat == RepeatMode::All {
-                self.play_index(self.queue.len() - 1);
+        // Priority 2: Step backward in shuffle_order / linear order
+        if self.shuffle_order.is_empty() {
+            if self.shuffle {
+                self.rebuild_shuffle();
+            } else if let Some(curr) = self.current_index {
+                self.rebuild_linear_order(curr);
             } else {
-                self.engine.seek(Duration::ZERO);
+                self.rebuild_linear_order(0);
             }
-        } else if !self.queue.is_empty() {
-            self.play_index(0);
+        }
+
+        if self.queue_pos > 0 {
+            self.queue_pos -= 1;
+            let prev_idx = self.shuffle_order[self.queue_pos];
+            self.play_index(prev_idx);
+        } else if self.repeat == RepeatMode::All && !self.shuffle_order.is_empty() {
+            self.queue_pos = self.shuffle_order.len() - 1;
+            let last_idx = self.shuffle_order[self.queue_pos];
+            self.play_index(last_idx);
+        } else {
+            self.engine.seek(Duration::ZERO);
         }
     }
 
@@ -409,6 +458,15 @@ impl PlayerController {
         self.shuffle = !self.shuffle;
         if self.shuffle {
             self.rebuild_shuffle();
+        } else {
+            // Seamless linear resume: sync queue_pos to current_index
+            if let Some(curr) = self.current_index {
+                self.rebuild_linear_order(curr);
+            } else {
+                self.shuffle_order = (0..self.queue.len()).collect();
+                self.shuffled_indices = self.shuffle_order.clone();
+                self.queue_pos = 0;
+            }
         }
     }
 
@@ -424,12 +482,15 @@ impl PlayerController {
         let count = self.queue.len();
         if count == 0 {
             self.shuffled_indices.clear();
+            self.shuffle_order.clear();
+            self.queue_pos = 0;
             return;
         }
         let mut indices: Vec<usize> = (0..count).collect();
         let mut rng = rand::thread_rng();
         indices.shuffle(&mut rng);
 
+        // Pin the currently playing track at position 0
         if let Some(curr) = self.current_index {
             if let Some(pos) = indices.iter().position(|&x| x == curr) {
                 indices.remove(pos);
@@ -437,7 +498,48 @@ impl PlayerController {
             }
         }
 
+        // Smart Artist Spread: avoid back-to-back tracks by the same artist
+        if indices.len() > 2 {
+            for i in 1..indices.len() - 1 {
+                let artist_i = self.queue.get(indices[i]).map(|t| t.artist.as_str()).unwrap_or("");
+                if artist_i.is_empty() {
+                    continue;
+                }
+                let artist_prev = self.queue.get(indices[i - 1]).map(|t| t.artist.as_str()).unwrap_or("");
+                if artist_i == artist_prev {
+                    // Find the next index with a different artist to swap with
+                    let swap_target = indices.iter().enumerate().skip(i + 1).find_map(|(j, &idx)| {
+                        let artist_j = self.queue.get(idx).map(|t| t.artist.as_str()).unwrap_or("");
+                        if artist_j != artist_i {
+                            Some(j)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(j) = swap_target {
+                        indices.swap(i, j);
+                    }
+                }
+            }
+        }
+
+        self.shuffle_order = indices.clone();
         self.shuffled_indices = indices;
+        self.queue_pos = 0;
+    }
+
+    /// Build a linear (non-shuffled) play order starting from the given index.
+    fn rebuild_linear_order(&mut self, start_idx: usize) {
+        let count = self.queue.len();
+        if count == 0 {
+            self.shuffle_order.clear();
+            self.shuffled_indices.clear();
+            self.queue_pos = 0;
+            return;
+        }
+        self.shuffle_order = (0..count).collect();
+        self.shuffled_indices = self.shuffle_order.clone();
+        self.queue_pos = start_idx.min(count.saturating_sub(1));
     }
 
     pub fn peek_next_index(&self) -> Option<usize> {
@@ -445,29 +547,22 @@ impl PlayerController {
             return None;
         }
 
-        if self.shuffle {
-            if self.shuffled_indices.is_empty() {
-                return None;
+        // Priority 1: User queue
+        if let Some(&queued_idx) = self.user_queue.front() {
+            if queued_idx < self.queue.len() {
+                return Some(queued_idx);
             }
-            if let Some(curr) = self.current_index {
-                if let Some(pos) = self.shuffled_indices.iter().position(|&x| x == curr) {
-                    if pos + 1 < self.shuffled_indices.len() {
-                        return Some(self.shuffled_indices[pos + 1]);
-                    } else if self.repeat == RepeatMode::All {
-                        return self.shuffled_indices.first().copied();
-                    }
-                }
-            } else {
-                return self.shuffled_indices.first().copied();
-            }
-        } else if let Some(curr) = self.current_index {
-            if curr + 1 < self.queue.len() {
-                return Some(curr + 1);
-            } else if self.repeat == RepeatMode::All {
-                return Some(0);
-            }
-        } else {
-            return Some(0);
+        }
+
+        // Priority 2: Playlist queue (shuffle_order / linear)
+        if self.shuffle_order.is_empty() {
+            return None;
+        }
+
+        if self.queue_pos + 1 < self.shuffle_order.len() {
+            return Some(self.shuffle_order[self.queue_pos + 1]);
+        } else if self.repeat == RepeatMode::All {
+            return self.shuffle_order.first().copied();
         }
 
         None
@@ -521,7 +616,26 @@ impl PlayerController {
                 if let Some(next_track) = self.queue.get(next_idx).cloned() {
                     let next_path = Path::new(&next_track.path);
                     self.engine.transition_to_prequeued(next_path, next_track.duration_secs);
+                    // Push outgoing track to history
+                    if let Some(curr) = self.current_index {
+                        self.history.push(curr);
+                        if self.history.len() > HISTORY_MAX {
+                            self.history.remove(0);
+                        }
+                    }
+                    // Advance queue state (user_queue or queue_pos)
+                    let from_user_queue = !self.user_queue.is_empty();
+                    if from_user_queue {
+                        self.user_queue.pop_front();
+                    } else if self.queue_pos + 1 < self.shuffle_order.len() {
+                        self.queue_pos += 1;
+                    }
                     self.current_index = Some(next_idx);
+                    if !from_user_queue {
+                        if let Some(pos) = self.shuffle_order.iter().position(|&x| x == next_idx) {
+                            self.queue_pos = pos;
+                        }
+                    }
                     self.load_lyrics_for_track(&next_track);
                     return;
                 }
@@ -539,6 +653,80 @@ impl PlayerController {
             }
         }
     }
+
+    // ── Additive Queue Operations ────────────────────────────────────
+
+    /// Push a track index to the back of the user queue (Tier 1).
+    pub fn add_to_queue(&mut self, track_index: usize) {
+        if track_index < self.queue.len() {
+            self.user_queue.push_back(track_index);
+        }
+    }
+
+    /// Push a track index to the front of the user queue ("Play Next").
+    pub fn play_next(&mut self, track_index: usize) {
+        if track_index < self.queue.len() {
+            self.user_queue.push_front(track_index);
+        }
+    }
+
+    /// Remove a single item from the user queue by its position in `user_queue`.
+    pub fn remove_from_user_queue(&mut self, queue_idx: usize) -> Option<usize> {
+        if queue_idx < self.user_queue.len() {
+            self.user_queue.remove(queue_idx)
+        } else {
+            None
+        }
+    }
+
+    /// Clear the entire user queue.
+    pub fn clear_user_queue(&mut self) {
+        self.user_queue.clear();
+    }
+
+    /// Returns a snapshot of the current queue state for UI display.
+    pub fn get_queue_view(&self) -> QueueView<'_> {
+        let now_playing = self.current_index.and_then(|idx| self.queue.get(idx));
+
+        let next_in_queue: Vec<&Track> = self
+            .user_queue
+            .iter()
+            .filter_map(|&idx| self.queue.get(idx))
+            .collect();
+
+        let next_from_playlist: Vec<&Track> = if self.shuffle_order.is_empty() {
+            Vec::new()
+        } else {
+            let start = (self.queue_pos + 1).min(self.shuffle_order.len());
+            self.shuffle_order[start..]
+                .iter()
+                .filter_map(|&idx| self.queue.get(idx))
+                .collect()
+        };
+
+        QueueView {
+            now_playing,
+            next_in_queue,
+            next_from_playlist,
+        }
+    }
+
+    /// Returns a reference to the user queue for UI inspection.
+    pub fn user_queue_indices(&self) -> &VecDeque<usize> {
+        &self.user_queue
+    }
+
+    /// Returns the backward navigation history for UI inspection.
+    pub fn playback_history(&self) -> &[usize] {
+        &self.history
+    }
+}
+
+/// Snapshot of the current playback queue state for UI display.
+pub struct QueueView<'a> {
+    pub now_playing: Option<&'a Track>,
+    pub next_in_queue: Vec<&'a Track>,
+    pub next_from_playlist: Vec<&'a Track>,
 }
 
 #[cfg(test)]
@@ -601,8 +789,11 @@ mod tests {
         player.next();
         assert!(!player.engine.is_playing());
 
-        // Previous from Track 3 goes back to Track 2
+        // Previous from Track 3 goes back to Track 2 (via history)
         player.current_index = Some(2);
+        player.queue_pos = 2;
+        // Seed history so prev() can pop from it
+        player.history.push(1);
         player.prev();
         assert_eq!(player.current_index, Some(1));
         assert_eq!(player.current_track().unwrap().title, "Track 2");
@@ -623,11 +814,11 @@ mod tests {
         player.load_queue(tracks, 1);
         assert_eq!(player.current_index, Some(1));
 
-        // Next at end wraps to 0
+        // Next at end wraps to 0 (Repeat All)
         player.next();
         assert_eq!(player.current_index, Some(0));
 
-        // Prev at 0 wraps to end
+        // Prev at 0 goes back to 1 via history (next() pushed 1 to history)
         player.prev();
         assert_eq!(player.current_index, Some(1));
     }
@@ -751,9 +942,11 @@ mod tests {
         assert_eq!(player.peek_next_index(), Some(1));
 
         player.current_index = Some(1);
+        player.queue_pos = 1;
         assert_eq!(player.peek_next_index(), Some(2));
 
         player.current_index = Some(2);
+        player.queue_pos = 2;
         assert_eq!(player.peek_next_index(), None);
 
         player.repeat = RepeatMode::All;
@@ -804,5 +997,268 @@ mod tests {
         assert!(player.playback_source.is_local());
         assert!(!player.is_stream_active());
         assert!(player.active_stream_track.is_none());
+    }
+
+    fn dummy_track_with_artist(id: i64, title: &str, artist: &str) -> Track {
+        let mut t = dummy_track(id, title);
+        t.artist = artist.to_string();
+        t
+    }
+
+    #[test]
+    fn test_user_queue_add_and_play_next() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+        player.repeat = RepeatMode::Off;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+            dummy_track(4, "Track 4"),
+        ];
+        player.load_queue(tracks, 0);
+
+        // Add Track 4 to queue (back of user queue)
+        player.add_to_queue(3);
+        // Play Next Track 3 (front of user queue)
+        player.play_next(2);
+
+        assert_eq!(player.user_queue_indices().len(), 2);
+        assert_eq!(player.user_queue_indices()[0], 2);
+        assert_eq!(player.user_queue_indices()[1], 3);
+
+        // First next() should drain user queue front: Track 3 (index 2)
+        player.next();
+        assert_eq!(player.current_index, Some(2));
+        assert_eq!(player.current_track().unwrap().title, "Track 3");
+        assert_eq!(player.user_queue_indices().len(), 1);
+
+        // Second next() should drain user queue: Track 4 (index 3)
+        player.next();
+        assert_eq!(player.current_index, Some(3));
+        assert_eq!(player.current_track().unwrap().title, "Track 4");
+        assert_eq!(player.user_queue_indices().len(), 0);
+
+        // Third next() should resume playlist progression from queue_pos (which was 0 -> now 1)
+        player.next();
+        assert_eq!(player.current_index, Some(1));
+        assert_eq!(player.current_track().unwrap().title, "Track 2");
+    }
+
+    #[test]
+    fn test_user_queue_does_not_advance_queue_pos() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+        player.repeat = RepeatMode::Off;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+        ];
+        player.load_queue(tracks, 0);
+        assert_eq!(player.queue_pos, 0);
+
+        player.add_to_queue(2);
+        player.next(); // Plays index 2 from user queue
+        assert_eq!(player.current_index, Some(2));
+        // queue_pos should still be 0 because it was a user queue item
+        assert_eq!(player.queue_pos, 0);
+
+        // Next item should be from shuffle_order / linear at queue_pos + 1 = 1
+        player.next();
+        assert_eq!(player.current_index, Some(1));
+        assert_eq!(player.queue_pos, 1);
+    }
+
+    #[test]
+    fn test_history_stack_and_prev() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+        player.repeat = RepeatMode::Off;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+        ];
+        player.load_queue(tracks, 0);
+
+        // Advance to 1, then to 2
+        player.next();
+        assert_eq!(player.playback_history(), &[0]);
+        player.next();
+        assert_eq!(player.playback_history(), &[0, 1]);
+
+        // Prev should pop 1 from history
+        player.prev();
+        assert_eq!(player.current_index, Some(1));
+        assert_eq!(player.playback_history(), &[0]);
+
+        // Prev should pop 0 from history
+        player.prev();
+        assert_eq!(player.current_index, Some(0));
+        assert!(player.playback_history().is_empty());
+    }
+
+    #[test]
+    fn test_history_bounded_at_100() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+        player.repeat = RepeatMode::All;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+        ];
+        player.load_queue(tracks, 0);
+
+        for _ in 0..150 {
+            player.next();
+        }
+
+        assert_eq!(player.playback_history().len(), 100);
+    }
+
+    #[test]
+    fn test_shuffle_artist_spread() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let tracks = vec![
+            dummy_track_with_artist(1, "Song 1", "Artist A"),
+            dummy_track_with_artist(2, "Song 2", "Artist A"),
+            dummy_track_with_artist(3, "Song 3", "Artist B"),
+            dummy_track_with_artist(4, "Song 4", "Artist A"),
+            dummy_track_with_artist(5, "Song 5", "Artist C"),
+        ];
+        player.load_queue(tracks, 0);
+        player.toggle_shuffle();
+
+        assert!(player.shuffle);
+        assert_eq!(player.shuffle_order.len(), 5);
+        // Active track pinned at index 0
+        assert_eq!(player.shuffle_order[0], 0);
+
+        // Verify that not all Artist A tracks ended up clustered adjacent
+        let mut adjacent_same_artist_count = 0;
+        for i in 0..player.shuffle_order.len() - 1 {
+            let a1 = &player.queue[player.shuffle_order[i]].artist;
+            let a2 = &player.queue[player.shuffle_order[i + 1]].artist;
+            if a1 == a2 {
+                adjacent_same_artist_count += 1;
+            }
+        }
+        // With 3 Artist A, 1 B, 1 C, smart spread should prevent clustering
+        assert!(adjacent_same_artist_count <= 1);
+    }
+
+    #[test]
+    fn test_shuffle_off_resumes_linear() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+            dummy_track(4, "Track 4"),
+        ];
+        player.load_queue(tracks, 0);
+        player.toggle_shuffle();
+        assert!(player.shuffle);
+
+        // Force current to track 2
+        player.play_index(2);
+        assert_eq!(player.current_index, Some(2));
+
+        // Toggle shuffle off
+        player.toggle_shuffle();
+        assert!(!player.shuffle);
+
+        // Linear order should be 0..4, queue_pos should be 2
+        assert_eq!(player.shuffle_order, vec![0, 1, 2, 3]);
+        assert_eq!(player.queue_pos, 2);
+
+        // Next should play index 3
+        player.next();
+        assert_eq!(player.current_index, Some(3));
+    }
+
+    #[test]
+    fn test_play_index_syncs_queue_pos() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+        ];
+        player.load_queue(tracks, 0);
+
+        player.play_index(2);
+        assert_eq!(player.current_index, Some(2));
+        assert_eq!(player.queue_pos, 2);
+    }
+
+    #[test]
+    fn test_get_queue_view() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+            dummy_track(4, "Track 4"),
+        ];
+        player.load_queue(tracks, 0);
+
+        player.add_to_queue(3);
+
+        let view = player.get_queue_view();
+        assert_eq!(view.now_playing.map(|t| t.title.as_str()), Some("Track 1"));
+        assert_eq!(view.next_in_queue.len(), 1);
+        assert_eq!(view.next_in_queue[0].title, "Track 4");
+        // next_from_playlist should contain tracks 2 and 3 (indices 1 and 2, plus 3)
+        assert_eq!(view.next_from_playlist.len(), 3);
+        assert_eq!(view.next_from_playlist[0].title, "Track 2");
+    }
+
+    #[test]
+    fn test_clear_and_remove_user_queue() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+        ];
+        player.load_queue(tracks, 0);
+
+        player.add_to_queue(1);
+        player.add_to_queue(2);
+        assert_eq!(player.user_queue_indices().len(), 2);
+
+        // Remove item at index 0
+        let removed = player.remove_from_user_queue(0);
+        assert_eq!(removed, Some(1));
+        assert_eq!(player.user_queue_indices().len(), 1);
+        assert_eq!(player.user_queue_indices()[0], 2);
+
+        // Out of bounds remove
+        assert_eq!(player.remove_from_user_queue(5), None);
+
+        // Clear
+        player.clear_user_queue();
+        assert!(player.user_queue_indices().is_empty());
     }
 }
