@@ -670,6 +670,25 @@ impl PlayerController {
         }
     }
 
+    /// Enqueue a track into the user queue (Tier 1). If the track is not already in the
+    /// playback queue, it is appended to `self.queue` first.
+    pub fn enqueue_track(&mut self, track: Track, play_next: bool) {
+        let idx = if let Some(pos) = self.queue.iter().position(|t| t.id == track.id) {
+            pos
+        } else {
+            let new_pos = self.queue.len();
+            self.queue.push(track);
+            self.shuffle_order.push(new_pos);
+            self.shuffled_indices.push(new_pos);
+            new_pos
+        };
+        if play_next {
+            self.play_next(idx);
+        } else {
+            self.add_to_queue(idx);
+        }
+    }
+
     /// Remove a single item from the user queue by its position in `user_queue`.
     pub fn remove_from_user_queue(&mut self, queue_idx: usize) -> Option<usize> {
         if queue_idx < self.user_queue.len() {
@@ -1260,5 +1279,31 @@ mod tests {
         // Clear
         player.clear_user_queue();
         assert!(player.user_queue_indices().is_empty());
+    }
+
+    #[test]
+    fn test_enqueue_track_existing_and_new() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+        ];
+        player.load_queue(tracks, 0);
+
+        // Enqueue existing track (track 2, index 1)
+        player.enqueue_track(dummy_track(2, "Track 2"), false);
+        assert_eq!(player.user_queue_indices().len(), 1);
+        assert_eq!(player.user_queue_indices()[0], 1);
+        assert_eq!(player.queue.len(), 2);
+
+        // Enqueue brand new track (track 3)
+        player.enqueue_track(dummy_track(3, "Track 3"), true);
+        assert_eq!(player.queue.len(), 3);
+        assert_eq!(player.user_queue_indices().len(), 2);
+        // Play Next puts it at front
+        assert_eq!(player.user_queue_indices()[0], 2);
+        assert_eq!(player.user_queue_indices()[1], 1);
     }
 }

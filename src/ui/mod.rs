@@ -1,5 +1,6 @@
 ﻿pub mod art;
 pub mod components;
+pub mod context_menu;
 pub mod fonts;
 pub mod icons;
 pub mod pip;
@@ -11,6 +12,7 @@ pub mod theme;
 pub mod titlebar;
 pub mod views;
 
+pub use context_menu::{render_track_context_menu, TrackContextMenuAction, TrackContextMenuState};
 pub use playerbar::{current_playback_time, seek_to};
 
 use crate::audio::PlayerController;
@@ -58,6 +60,7 @@ pub struct EclipseApp {
     is_scanning: bool,
     status_msg: Option<(String, Instant)>,
     last_active_track_id: Option<i64>,
+    pub track_context_menu: Option<TrackContextMenuState>,
 }
 
 pub type UmbraApp = EclipseApp;
@@ -106,6 +109,7 @@ impl EclipseApp {
             is_scanning: false,
             status_msg: None,
             last_active_track_id: None,
+            track_context_menu: None,
         };
 
         app.reload_data();
@@ -496,6 +500,7 @@ impl App for EclipseApp {
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::Albums => {
@@ -554,6 +559,7 @@ impl App for EclipseApp {
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::MostPlayed => {
@@ -575,6 +581,7 @@ impl App for EclipseApp {
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::RecentlyAdded => {
@@ -595,6 +602,7 @@ impl App for EclipseApp {
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::Favorites => {
@@ -611,6 +619,7 @@ impl App for EclipseApp {
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::NeverPlayed => {
@@ -629,6 +638,7 @@ impl App for EclipseApp {
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::RandomDiscovery => {
@@ -651,6 +661,7 @@ impl App for EclipseApp {
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::Playlists => {
@@ -675,6 +686,7 @@ impl App for EclipseApp {
                                         &mut on_toggle_fav,
                                         &mut on_create_playlist,
                                         &mut on_delete_playlist,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::Playlist(id) => {
@@ -703,6 +715,7 @@ impl App for EclipseApp {
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
                                         &mut on_delete_playlist,
+                                        &mut self.track_context_menu,
                                     );
                                 }
                                 NavTab::Settings => {
@@ -967,6 +980,82 @@ impl App for EclipseApp {
         if prev_pip_enabled != self.cfg.pip.enabled {
             let _ = self.cfg.save();
         }
+
+        // Render Floating Track Context Menu Overlay (Portal)
+        if let Some(action) = render_track_context_menu(ctx, &mut self.track_context_menu, &self.playlists, &self.theme) {
+            match action {
+                TrackContextMenuAction::PlayNext(track) => {
+                    self.player.enqueue_track(track, true);
+                    self.set_status("Playing next");
+                }
+                TrackContextMenuAction::AddToQueue(track) => {
+                    self.player.enqueue_track(track, false);
+                    self.set_status("Added to queue");
+                }
+                TrackContextMenuAction::AddToPlaylist { playlist_id, track_id } => {
+                    let _ = self.db.add_track_to_playlist(playlist_id, track_id);
+                    self.reload_data();
+                    let pl_name = self
+                        .playlists
+                        .iter()
+                        .find(|p| p.id == playlist_id)
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("playlist");
+                    self.set_status(&format!("Added to '{}'", pl_name));
+                }
+                TrackContextMenuAction::CreatePlaylistAndAdd { name, track_id } => {
+                    if let Ok(pl_id) = self.db.create_playlist(&name) {
+                        let _ = self.db.add_track_to_playlist(pl_id, track_id);
+                        self.reload_data();
+                        self.set_status(&format!("Created '{}' and added track", name));
+                    }
+                }
+                TrackContextMenuAction::RemoveFromPlaylist { playlist_id, track_id } => {
+                    let _ = self.db.remove_from_playlist(playlist_id, track_id);
+                    self.reload_data();
+                    self.set_status("Removed from playlist");
+                }
+                TrackContextMenuAction::ToggleFavorite(track_id) => {
+                    if let Ok(new_fav) = self.db.toggle_favorite(track_id) {
+                        if let Some(t) = self.tracks.iter_mut().find(|t| t.id == track_id) {
+                            t.favorite = new_fav;
+                        }
+                        if self.player.current_track().is_some() {
+                            for q in &mut self.player.queue {
+                                if q.id == track_id {
+                                    q.favorite = new_fav;
+                                }
+                            }
+                        }
+                        let msg = if new_fav { "Added to Liked Songs" } else { "Removed from Liked Songs" };
+                        self.set_status(msg);
+                    }
+                }
+                TrackContextMenuAction::GoToArtist(artist) => {
+                    self.artists_state.selected_artist = Some(artist);
+                    self.navigate_to(NavTab::Artists);
+                }
+                TrackContextMenuAction::GoToAlbum(album) => {
+                    self.albums_state.selected_album = Some(album);
+                    self.navigate_to(NavTab::Albums);
+                }
+                TrackContextMenuAction::ShowInExplorer(path_str) => {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let path = std::path::Path::new(&path_str);
+                        if path.exists() {
+                            let _ = std::process::Command::new("explorer")
+                                .arg(format!("/select,\"{}\"", path.display()))
+                                .spawn();
+                        }
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let _ = path_str;
+                    }
+                }
+            }
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1081,6 +1170,7 @@ mod tests {
             is_scanning: false,
             status_msg: None,
             last_active_track_id: None,
+            track_context_menu: None,
         };
 
         // Create a temporary valid WAV file so engine.play() successfully initializes playback

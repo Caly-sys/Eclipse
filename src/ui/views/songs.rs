@@ -2,6 +2,7 @@
 use crate::library::model::Track;
 use crate::ui::art::AlbumArtManager;
 use crate::ui::components::{dark_pill_button, format_badge, white_pill_button};
+use crate::ui::context_menu::TrackContextMenuState;
 use crate::ui::icons::{icon_button, paint_icon, Icon};
 use crate::ui::theme::Theme;
 use egui::{
@@ -25,6 +26,7 @@ pub fn render_songs(
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_toggle_fav: &mut Option<i64>,
+    context_menu: &mut Option<TrackContextMenuState>,
 ) {
     render_songs_view(
         ui,
@@ -38,6 +40,7 @@ pub fn render_songs(
         theme,
         art_manager,
         on_toggle_fav,
+        context_menu,
     );
 }
 
@@ -54,6 +57,7 @@ pub fn render_songs_view(
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_toggle_fav: &mut Option<i64>,
+    context_menu: &mut Option<TrackContextMenuState>,
 ) {
     let query = search_query.trim().to_lowercase();
     let filtered_tracks: Vec<Track> = tracks
@@ -148,6 +152,8 @@ pub fn render_songs_view(
                 theme,
                 art_manager,
                 on_toggle_fav,
+                context_menu,
+                None,
             );
         }
     });
@@ -160,7 +166,7 @@ pub fn render_songs_view(
 /// - `ALBUM` (minmax 180px, 1.5fr, muted text #a1a1aa, properly separated column)
 /// - `ADDED` (90px, relative date e.g. "2 d")
 /// - `PLAYS` (70px, play count)
-/// - `TIME` (75px, right-aligned duration e.g. "5:06" + heart toggle)
+/// - `TIME` (75px, right-aligned duration e.g. "5:06" + heart toggle + more options)
 #[allow(clippy::too_many_arguments)]
 pub fn render_track_table(
     ui: &mut Ui,
@@ -171,6 +177,8 @@ pub fn render_track_table(
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_toggle_fav: &mut Option<i64>,
+    context_menu: &mut Option<TrackContextMenuState>,
+    from_playlist_id: Option<i64>,
 ) {
     let right_padding = 24.0;
     let total_width = (ui.available_width() - right_padding).max(280.0);
@@ -371,6 +379,7 @@ pub fn render_track_table(
                     pos2(row_rect.max.x - 4.0, row_rect.max.y),
                 );
                 let mut fav_clicked = false;
+                let mut more_clicked = false;
                 ui.allocate_new_ui(UiBuilder::new().max_rect(time_rect).layout(Layout::right_to_left(egui::Align::Center)), |time_ui| {
                     time_ui.label(RichText::new(track.formatted_duration()).size(12.0).color(Color32::from_rgb(161, 161, 170)));
 
@@ -386,17 +395,33 @@ pub fn render_track_table(
                         *on_toggle_fav = Some(track.id);
                         fav_clicked = true;
                     }
+
+                    // Optional More actions trigger ("•••") on hover or if context menu is open for this track
+                    let is_menu_open_for_this = context_menu.as_ref().is_some_and(|cm| cm.track.id == track.id);
+                    if row_resp.hovered() || is_menu_open_for_this {
+                        time_ui.add_space(6.0);
+                        let more_color = if is_menu_open_for_this { theme.accent } else { theme.text_muted };
+                        let more_resp = icon_button(time_ui, Icon::MoreHorizontal, 13.0, more_color);
+                        if more_resp.clicked() {
+                            more_clicked = true;
+                            let anchor = pos2(more_resp.rect.left(), more_resp.rect.bottom() + 4.0);
+                            *context_menu = Some(TrackContextMenuState::new(track.clone(), anchor, from_playlist_id));
+                        }
+                    }
                 });
 
-                if row_resp.hovered() && !fav_clicked {
+                if row_resp.hovered() && !fav_clicked && !more_clicked {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
 
-                if row_resp.double_clicked() && !fav_clicked {
+                if row_resp.secondary_clicked() {
+                    let click_pos = ui.input(|i| i.pointer.interact_pos()).unwrap_or(row_rect.center());
+                    *context_menu = Some(TrackContextMenuState::new(track.clone(), click_pos, from_playlist_id));
+                } else if row_resp.double_clicked() && !fav_clicked && !more_clicked {
                     let q = queue_tracks.unwrap_or(tracks);
                     let q_idx = q.iter().position(|t| t.id == track.id).unwrap_or(idx);
                     player.load_queue(q.to_vec(), q_idx);
-                } else if row_resp.clicked() && !fav_clicked {
+                } else if row_resp.clicked() && !fav_clicked && !more_clicked {
                     *selected_track_id = Some(track.id);
                 }
             }
@@ -456,6 +481,7 @@ mod tests {
                     &theme,
                     &mut art_manager,
                     &mut on_toggle_fav,
+                    &mut None,
                 );
             });
         });
@@ -472,6 +498,7 @@ mod tests {
                 let mut art_manager = AlbumArtManager::new();
                 let mut selected_id = None;
                 let mut on_toggle_fav = None;
+                let mut context_menu = None;
 
                 let tracks = vec![
                     sample_track(1, "Neon Horizon", "Solaris", "Midnight Echoes"),
@@ -487,6 +514,8 @@ mod tests {
                     &theme,
                     &mut art_manager,
                     &mut on_toggle_fav,
+                    &mut context_menu,
+                    None,
                 );
             });
         });

@@ -2,6 +2,7 @@
 use crate::library::model::{Playlist, Track};
 use crate::ui::art::AlbumArtManager;
 use crate::ui::components::{dark_pill_button, glass_button, white_pill_button};
+use crate::ui::context_menu::TrackContextMenuState;
 use crate::ui::icons::{icon_button, paint_icon, Icon};
 use crate::ui::theme::Theme;
 use crate::ui::views::songs::render_track_table;
@@ -32,6 +33,7 @@ pub fn render_playlists(
     on_toggle_fav: &mut Option<i64>,
     on_create_playlist: &mut Option<String>,
     on_delete_playlist: &mut Option<i64>,
+    context_menu: &mut Option<TrackContextMenuState>,
 ) {
     if playlists.is_empty() {
         ui.vertical_centered(|ui| {
@@ -146,6 +148,7 @@ pub fn render_playlists(
         art_manager,
         on_toggle_fav,
         on_delete_playlist,
+        context_menu,
     );
 }
 
@@ -160,6 +163,7 @@ pub fn render_playlist_detail(
     art_manager: &mut AlbumArtManager,
     on_toggle_fav: &mut Option<i64>,
     on_delete_playlist: &mut Option<i64>,
+    context_menu: &mut Option<TrackContextMenuState>,
 ) {
     ui.vertical(|ui| {
         // 1. Playlist Hero Header
@@ -224,6 +228,8 @@ pub fn render_playlist_detail(
                     theme,
                     art_manager,
                     on_toggle_fav,
+                    context_menu,
+                    Some(playlist.id),
                 );
             }
         }
@@ -486,6 +492,7 @@ mod tests {
                     &mut on_toggle_fav,
                     &mut on_create,
                     &mut on_delete,
+                    &mut None,
                 );
             });
         });
@@ -538,6 +545,7 @@ mod tests {
                     &mut art_manager,
                     &mut on_toggle_fav,
                     &mut on_delete,
+                    &mut None,
                 );
             });
         });
@@ -575,6 +583,7 @@ mod tests {
                     &mut art_manager,
                     &mut on_toggle_fav,
                     &mut on_delete,
+                    &mut None,
                 );
             });
         });
