@@ -302,3 +302,4 @@ Original licence: MIT License.
 ## ✦ License
 
 Released under the [MIT License](LICENSE).
+For third-party dependencies, open-source attributions, and licenses, see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
