@@ -133,6 +133,7 @@ pub struct AppearanceSettings {
     pub glass_opacity: f32,
     pub compact_sidebar: bool,
     pub show_spectrum_default: bool,
+    pub close_to_tray: bool,
 }
 
 impl Default for AppearanceSettings {
@@ -143,6 +144,7 @@ impl Default for AppearanceSettings {
             glass_opacity: 0.85,
             compact_sidebar: false,
             show_spectrum_default: true,
+            close_to_tray: true,
         }
     }
 }
@@ -276,6 +278,12 @@ pub struct AppConfig {
     pub resume_session: bool,
     pub last_played_track_id: Option<i64>,
     pub last_played_position_secs: f64,
+    // Playback and Queue State Persistence
+    pub active_playlist_id: Option<String>,
+    pub queue_current_index: Option<usize>,
+    pub queue_is_shuffled: bool,
+    pub queue_pos: usize,
+    pub user_queue: Vec<usize>,
 
     // Modular settings sub-structs
     pub audio: AudioSettings,
@@ -328,6 +336,11 @@ impl Default for AppConfig {
             resume_session: true,
             last_played_track_id: None,
             last_played_position_secs: 0.0,
+            active_playlist_id: None,
+            queue_current_index: None,
+            queue_is_shuffled: false,
+            queue_pos: 0,
+            user_queue: Vec::new(),
 
             audio: AudioSettings::default(),
             equalizer: EqualizerSettings::default(),
@@ -337,6 +350,7 @@ impl Default for AppConfig {
                 glass_opacity,
                 compact_sidebar: false,
                 show_spectrum_default: true,
+                close_to_tray: true,
             },
             library: LibrarySettings {
                 music_folders: folders,
@@ -505,6 +519,10 @@ impl AppConfig {
         self.music_folders = folders.clone();
         self.library.music_folders = folders;
     }
+
+    pub fn set_close_to_tray(&mut self, enabled: bool) {
+        self.appearance.close_to_tray = enabled;
+    }
 }
 
 #[cfg(test)]
@@ -547,6 +565,7 @@ mod tests {
         assert!((cfg.appearance.glass_opacity - 0.85).abs() < 1e-6);
         assert!(!cfg.appearance.compact_sidebar);
         assert!(cfg.appearance.show_spectrum_default);
+        assert!(cfg.appearance.close_to_tray);
 
         assert!(cfg.library.scan_on_startup);
         assert!(!cfg.library.ignore_short_clips);
@@ -627,6 +646,11 @@ mod tests {
         cfg.pip.pos_x = Some(240.0);
         cfg.pip.pos_y = Some(180.0);
         cfg.pip.click_through = true;
+        cfg.active_playlist_id = Some("playlist_42".to_string());
+        cfg.queue_current_index = Some(3);
+        cfg.queue_is_shuffled = true;
+        cfg.queue_pos = 1;
+        cfg.user_queue = vec![5, 8];
 
         let json = serde_json::to_string_pretty(&cfg).expect("Serialization failed");
         let decoded: AppConfig = serde_json::from_str(&json).expect("Deserialization failed");
@@ -642,6 +666,11 @@ mod tests {
         assert_eq!(decoded.pip.pos_x, Some(240.0));
         assert_eq!(decoded.pip.pos_y, Some(180.0));
         assert!(decoded.pip.click_through);
+        assert_eq!(decoded.active_playlist_id, Some("playlist_42".to_string()));
+        assert_eq!(decoded.queue_current_index, Some(3));
+        assert!(decoded.queue_is_shuffled);
+        assert_eq!(decoded.queue_pos, 1);
+        assert_eq!(decoded.user_queue, vec![5, 8]);
     }
 
     #[test]
@@ -693,6 +722,13 @@ mod tests {
         assert_eq!(decoded.pip.pos_x, None);
         assert_eq!(decoded.pip.pos_y, None);
         assert!(!decoded.pip.click_through);
+
+        // Verify queue state defaults on legacy JSON
+        assert_eq!(decoded.active_playlist_id, None);
+        assert_eq!(decoded.queue_current_index, None);
+        assert!(!decoded.queue_is_shuffled);
+        assert_eq!(decoded.queue_pos, 0);
+        assert!(decoded.user_queue.is_empty());
     }
 
     #[test]

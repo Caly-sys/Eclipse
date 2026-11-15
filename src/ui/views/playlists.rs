@@ -9,7 +9,6 @@ use crate::ui::views::songs::render_track_table;
 use egui::{
     pos2, vec2, Color32, Layout, Rect, RichText, Rounding, ScrollArea, Stroke, Ui, UiBuilder,
 };
-use rand::seq::SliceRandom;
 
 #[derive(Default, Clone)]
 pub struct PlaylistsViewState {
@@ -341,7 +340,7 @@ pub fn render_playlist_action_bar(
         // Left: Solid white Play pill button
         let play_resp = white_pill_button(ui, "Play", Some(Icon::Play));
         if play_resp.clicked() && !tracks.is_empty() {
-            player.load_queue(tracks.to_vec(), 0);
+            player.load_queue_with_context(Some(playlist_id.to_string()), tracks.to_vec(), 0);
         }
 
         ui.add_space(8.0);
@@ -349,10 +348,8 @@ pub fn render_playlist_action_bar(
         // Dark Shuffle pill button
         let shuf_resp = dark_pill_button(ui, "Shuffle", Some(Icon::Shuffle));
         if shuf_resp.clicked() && !tracks.is_empty() {
-            let mut list = tracks.to_vec();
-            let mut rng = rand::thread_rng();
-            list.shuffle(&mut rng);
-            player.load_queue(list, 0);
+            player.shuffle = true;
+            player.load_queue_with_context(Some(playlist_id.to_string()), tracks.to_vec(), 0);
         }
 
         ui.add_space(8.0);

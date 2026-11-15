@@ -517,6 +517,17 @@ fn render_appearance_tab(
 
     section_header(ui, "LAYOUT & NAVIGATION", theme);
 
+    // Keep playing when closed (System Tray background playback)
+    setting_row_card(
+        ui,
+        theme,
+        "Keep playing when closed",
+        "Minimize to system tray so music continues playing in the background when the window is closed.",
+        |ui| {
+            pill_toggle_switch(ui, &mut cfg.appearance.close_to_tray, theme);
+        },
+    );
+
     // 4. Compact sidebar
     setting_row_card(
         ui,
@@ -536,6 +547,27 @@ fn render_appearance_tab(
         "Always render real-time audio FFT bars on playerbar and cards.",
         |ui| {
             pill_toggle_switch(ui, &mut cfg.appearance.show_spectrum_default, theme);
+        },
+    );
+
+    // 6. Quit Application
+    setting_row_card(
+        ui,
+        theme,
+        "Quit Application",
+        "Completely close Eclipse and stop background playback (or press Ctrl+Q).",
+        |ui| {
+            let btn = egui::Button::new(
+                RichText::new("Exit Eclipse")
+                    .color(Color32::from_rgb(239, 68, 68))
+                    .size(12.0),
+            )
+            .fill(theme.surface)
+            .stroke(Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(239, 68, 68, 80)))
+            .rounding(Rounding::same(6.0));
+            if ui.add(btn).clicked() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         },
     );
 }

@@ -271,14 +271,14 @@ fn playlist_nav_button(
     // 3. Default (inactive): background: transparent, color: #a1a1aa, border: none
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 18), // rgba(255, 255, 255, 0.07)
+            Color32::from_white_alpha(18), // rgba(255, 255, 255, 0.07)
             Stroke::NONE,
             Color32::WHITE,
             Color32::WHITE,
         )
     } else if is_hovered {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 10), // rgba(255, 255, 255, 0.04)
+            Color32::from_white_alpha(10), // rgba(255, 255, 255, 0.04)
             Stroke::NONE,
             Color32::from_rgb(228, 228, 231), // #e4e4e7
             Color32::from_rgb(228, 228, 231), // #e4e4e7
@@ -333,18 +333,23 @@ fn playlist_nav_button(
     );
 
     // Truncated playlist title
+    let safe_name = if name.trim().is_empty() {
+        "Untitled Playlist"
+    } else {
+        name
+    };
     let text_left = rect.min.x + 34.0;
     let max_text_w = (rect.max.x - count_w - 20.0 - text_left).max(20.0);
     let label_font = egui::FontId::proportional(12.5);
     let text_w = ui
         .painter()
-        .layout_no_wrap(name.to_string(), label_font.clone(), text_color)
+        .layout_no_wrap(safe_name.to_string(), label_font.clone(), text_color)
         .rect
         .width();
 
     let display_name = if text_w > max_text_w {
         let mut truncated = String::new();
-        for c in name.chars() {
+        for c in safe_name.chars() {
             let candidate = format!("{}…", truncated);
             let w = ui
                 .painter()
@@ -358,7 +363,7 @@ fn playlist_nav_button(
         }
         format!("{}…", truncated)
     } else {
-        name.to_string()
+        safe_name.to_string()
     };
 
     ui.painter().text(
@@ -399,14 +404,14 @@ fn nav_button(
     // 3. Default (inactive): background: transparent, color: #a1a1aa, border: none
     let (fill, stroke, text_color, icon_color) = if is_selected {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 18), // rgba(255, 255, 255, 0.07)
+            Color32::from_white_alpha(18), // rgba(255, 255, 255, 0.07)
             Stroke::NONE,
             Color32::WHITE,
             Color32::WHITE,
         )
     } else if is_hovered {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 10), // rgba(255, 255, 255, 0.04)
+            Color32::from_white_alpha(10), // rgba(255, 255, 255, 0.04)
             Stroke::NONE,
             Color32::from_rgb(228, 228, 231), // #e4e4e7
             Color32::from_rgb(228, 228, 231), // #e4e4e7

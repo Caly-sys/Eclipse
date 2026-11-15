@@ -40,14 +40,16 @@ pub struct PlayerController {
     /// Legacy field kept for backward compatibility; now mirrors `shuffle_order`.
     shuffled_indices: Vec<usize>,
     // ── Two-Tier Queue State ──────────────────────────────────────────
+    /// Active playlist identifier (context tracking). None when playing un-scoped library.
+    pub active_playlist_id: Option<String>,
     /// Tier 1: User-queued track indices (via "Add to Queue" / "Play Next").
-    user_queue: VecDeque<usize>,
+    pub user_queue: VecDeque<usize>,
     /// Tier 2: Permutation shuffle order (or linear order when shuffle is off).
-    shuffle_order: Vec<usize>,
+    pub shuffle_order: Vec<usize>,
     /// Position pointer inside `shuffle_order`.
-    queue_pos: usize,
+    pub queue_pos: usize,
     /// Bounded backward navigation stack of previously played track indices.
-    history: Vec<usize>,
+    pub history: Vec<usize>,
 }
 
 impl PlayerController {
@@ -79,6 +81,7 @@ impl PlayerController {
             manual_search_rx: ms_rx,
             manual_search_tx: ms_tx,
             shuffled_indices: Vec::new(),
+            active_playlist_id: None,
             user_queue: VecDeque::new(),
             shuffle_order: Vec::new(),
             queue_pos: 0,
@@ -187,11 +190,18 @@ impl PlayerController {
         self.current_index.and_then(|idx| self.queue.get(idx))
     }
 
-    pub fn load_queue(&mut self, tracks: Vec<Track>, start_index: usize) {
+    pub fn load_queue_with_context(
+        &mut self,
+        playlist_id: Option<String>,
+        tracks: Vec<Track>,
+        start_index: usize,
+    ) {
         self.playback_source = PlaybackSource::Local;
         self.active_stream_track = None;
         self.user_queue.clear();
         self.history.clear();
+        self.active_playlist_id = playlist_id;
+
         if tracks.is_empty() {
             self.queue.clear();
             self.current_index = None;
@@ -213,14 +223,74 @@ impl PlayerController {
         self.play_index(idx);
     }
 
-    pub fn set_queue_paused(&mut self, tracks: Vec<Track>, start_index: usize) {
-        self.playback_source = PlaybackSource::Local;
-        self.active_stream_track = None;
-        self.user_queue.clear();
-        self.history.clear();
+    pub fn load_queue(&mut self, tracks: Vec<Track>, start_index: usize) {
+        self.load_queue_with_context(None, tracks, start_index);
+    }
+
+    /// Select and play a track within a playlist context.
+    ///
+    /// If the track belongs to a *different* playlist than `active_playlist_id`, the queue will:
+    /// 1. Clear old context.
+    /// 2. Adopt the new playlist ID.
+    /// 3. Update `total_tracks` bounds to the new playlist length.
+    /// 4. Rebuild the shuffle order using ONLY the new playlist context.
+    ///
+    /// If clicked within the *same* active playlist context, it seamlessly plays the track without re-shuffling.
+    pub fn play_track_in_playlist(
+        &mut self,
+        playlist_id: Option<String>,
+        tracks: Vec<Track>,
+        track_index: usize,
+    ) {
         if tracks.is_empty() {
+            self.active_playlist_id = playlist_id;
+            self.queue.clear();
+            self.current_index = None;
+            self.user_queue.clear();
+            self.shuffle_order.clear();
+            self.queue_pos = 0;
+            self.engine.stop();
             return;
         }
+
+        let idx = track_index.min(tracks.len() - 1);
+
+        let same_context = self.active_playlist_id.is_some()
+            && self.active_playlist_id == playlist_id
+            && self.queue.len() == tracks.len();
+
+        if same_context {
+            self.play_index(idx);
+        } else {
+            self.load_queue_with_context(playlist_id, tracks, idx);
+        }
+    }
+
+    pub fn set_queue_paused_with_context(
+        &mut self,
+        playlist_id: Option<String>,
+        tracks: Vec<Track>,
+        start_index: usize,
+        is_shuffled: bool,
+        queue_pos: Option<usize>,
+        user_queue: Option<VecDeque<usize>>,
+    ) {
+        self.playback_source = PlaybackSource::Local;
+        self.active_stream_track = None;
+        self.active_playlist_id = playlist_id;
+        self.user_queue = user_queue.unwrap_or_default();
+        self.history.clear();
+        self.shuffle = is_shuffled;
+
+        if tracks.is_empty() {
+            self.queue.clear();
+            self.current_index = None;
+            self.shuffled_indices.clear();
+            self.shuffle_order.clear();
+            self.queue_pos = 0;
+            return;
+        }
+
         self.queue = tracks;
         let idx = start_index.min(self.queue.len() - 1);
         self.current_index = Some(idx);
@@ -229,11 +299,23 @@ impl PlayerController {
         } else {
             self.rebuild_linear_order(idx);
         }
+
+        if let Some(pos) = queue_pos {
+            if pos < self.shuffle_order.len() {
+                self.queue_pos = pos;
+            }
+        }
+
         let track = self.queue[idx].clone();
         let path = Path::new(&track.path);
         let _ = self.engine.play_file(path, track.duration_secs);
         self.engine.pause();
         self.load_lyrics_for_track(&track);
+    }
+
+    pub fn set_queue_paused(&mut self, tracks: Vec<Track>, start_index: usize) {
+        let shuffle = self.shuffle;
+        self.set_queue_paused_with_context(None, tracks, start_index, shuffle, None, None);
     }
 
     pub fn play_index(&mut self, index: usize) {
@@ -1305,5 +1387,137 @@ mod tests {
         // Play Next puts it at front
         assert_eq!(player.user_queue_indices()[0], 2);
         assert_eq!(player.user_queue_indices()[1], 1);
+    }
+
+    #[test]
+    fn test_scoped_shuffle_to_active_playlist() {
+        let cfg = AppConfig {
+            shuffle: true,
+            ..Default::default()
+        };
+        let mut player = PlayerController::new(&cfg);
+
+        let pl_tracks = vec![
+            dummy_track(10, "PL Track 1"),
+            dummy_track(20, "PL Track 2"),
+            dummy_track(30, "PL Track 3"),
+            dummy_track(40, "PL Track 4"),
+            dummy_track(50, "PL Track 5"),
+        ];
+
+        player.load_queue_with_context(Some("pl_ambient".to_string()), pl_tracks, 0);
+
+        assert_eq!(player.active_playlist_id, Some("pl_ambient".to_string()));
+        assert!(player.shuffle);
+        assert_eq!(player.queue.len(), 5);
+        assert_eq!(player.shuffle_order.len(), 5);
+        assert_eq!(player.shuffle_order[0], 0);
+
+        for &idx in &player.shuffle_order {
+            assert!(idx < 5, "Index {} must be within playlist bounds 0..5", idx);
+        }
+
+        // Advance through all tracks; ensure none pull from outside the playlist
+        for _ in 0..4 {
+            player.next();
+            let curr = player.current_index.expect("Must have active track");
+            assert!(curr < 5);
+        }
+    }
+
+    #[test]
+    fn test_context_switching_different_playlist() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let pl1 = vec![dummy_track(1, "Track A"), dummy_track(2, "Track B")];
+        player.load_queue_with_context(Some("pl_1".to_string()), pl1, 0);
+        player.add_to_queue(1);
+        assert_eq!(player.active_playlist_id, Some("pl_1".to_string()));
+        assert_eq!(player.user_queue_indices().len(), 1);
+
+        // Switch to playlist 2 with 4 tracks
+        let pl2 = vec![
+            dummy_track(10, "Track C"),
+            dummy_track(20, "Track D"),
+            dummy_track(30, "Track E"),
+            dummy_track(40, "Track F"),
+        ];
+        player.play_track_in_playlist(Some("pl_2".to_string()), pl2, 1);
+
+        assert_eq!(player.active_playlist_id, Some("pl_2".to_string()));
+        assert_eq!(player.queue.len(), 4);
+        assert_eq!(player.current_index, Some(1));
+        assert_eq!(player.current_track().unwrap().title, "Track D");
+        // Old user_queue must be cleared
+        assert!(player.user_queue_indices().is_empty());
+        assert_eq!(player.shuffle_order.len(), 4);
+    }
+
+    #[test]
+    fn test_context_switching_same_playlist() {
+        let cfg = AppConfig {
+            shuffle: true,
+            ..Default::default()
+        };
+        let mut player = PlayerController::new(&cfg);
+
+        let pl1 = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+            dummy_track(4, "Track 4"),
+        ];
+        player.load_queue_with_context(Some("pl_lofi".to_string()), pl1.clone(), 0);
+        let original_order = player.shuffle_order.clone();
+
+        // Clicking track 2 in the same active playlist keeps the shuffle order intact
+        player.play_track_in_playlist(Some("pl_lofi".to_string()), pl1, 2);
+
+        assert_eq!(player.active_playlist_id, Some("pl_lofi".to_string()));
+        assert_eq!(player.current_index, Some(2));
+        assert_eq!(player.shuffle_order, original_order);
+        // queue_pos should be synced to position of 2 in original_order
+        let pos = player.shuffle_order.iter().position(|&x| x == 2).unwrap();
+        assert_eq!(player.queue_pos, pos);
+    }
+
+    #[test]
+    fn test_set_queue_paused_with_context_and_graceful_degradation() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        let pl_tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+        ];
+
+        let mut user_q = VecDeque::new();
+        user_q.push_back(1);
+
+        // Out-of-bounds start_index (99) safely clamped to 2
+        player.set_queue_paused_with_context(
+            Some("pl_saved".to_string()),
+            pl_tracks,
+            99,
+            true,
+            Some(1),
+            Some(user_q),
+        );
+
+        assert_eq!(player.active_playlist_id, Some("pl_saved".to_string()));
+        assert_eq!(player.queue.len(), 3);
+        assert_eq!(player.current_index, Some(2));
+        assert!(player.shuffle);
+        assert_eq!(player.user_queue_indices().len(), 1);
+        assert_eq!(player.user_queue_indices()[0], 1);
+        assert!(!player.engine.is_playing());
+
+        // Empty tracks list gracefully degrades without panic
+        player.set_queue_paused_with_context(Some("pl_deleted".to_string()), vec![], 0, false, None, None);
+        assert_eq!(player.active_playlist_id, Some("pl_deleted".to_string()));
+        assert!(player.queue.is_empty());
+        assert_eq!(player.current_index, None);
     }
 }

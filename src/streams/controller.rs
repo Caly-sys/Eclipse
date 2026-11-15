@@ -1317,13 +1317,15 @@ mod tests {
         assert!(controller.is_busy);
 
         let mut got_saved = false;
+        let mut saved_id = None;
         for _ in 0..20 {
             thread::sleep(Duration::from_millis(50));
             for ev in controller.update() {
-                if let StreamEvent::PlaylistSaved { name, track_count, .. } = ev {
+                if let StreamEvent::PlaylistSaved { id, name, track_count } = ev {
                     assert_eq!(name, "My Test Pl");
                     assert_eq!(track_count, 1);
                     got_saved = true;
+                    saved_id = Some(id);
                     break;
                 }
             }
@@ -1333,6 +1335,13 @@ mod tests {
         }
         assert!(got_saved);
         assert!(!controller.is_busy);
+
+        // Cleanup: ensure test playlist is never left in the user database
+        if let Some(id) = saved_id {
+            if let Ok(db) = crate::library::Database::open() {
+                let _ = db.delete_playlist(id);
+            }
+        }
     }
 
     #[test]

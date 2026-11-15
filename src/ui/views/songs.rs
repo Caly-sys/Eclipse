@@ -425,7 +425,8 @@ pub fn render_track_table(
                 } else if row_resp.double_clicked() && !fav_clicked && !more_clicked {
                     let q = queue_tracks.unwrap_or(tracks);
                     let q_idx = q.iter().position(|t| t.id == track.id).unwrap_or(idx);
-                    player.load_queue(q.to_vec(), q_idx);
+                    let pl_ctx = from_playlist_id.map(|id| id.to_string());
+                    player.play_track_in_playlist(pl_ctx, q.to_vec(), q_idx);
                 } else if row_resp.clicked() && !fav_clicked && !more_clicked {
                     *selected_track_id = Some(track.id);
                 }

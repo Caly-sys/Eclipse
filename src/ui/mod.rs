@@ -10,6 +10,7 @@ pub mod shortcuts;
 pub mod sidebar;
 pub mod theme;
 pub mod titlebar;
+pub mod tray;
 pub mod views;
 
 pub use context_menu::{render_track_context_menu, TrackContextMenuAction, TrackContextMenuState};
@@ -61,6 +62,10 @@ pub struct EclipseApp {
     status_msg: Option<(String, Instant)>,
     last_active_track_id: Option<i64>,
     pub track_context_menu: Option<TrackContextMenuState>,
+    pub tray_manager: Option<tray::TrayManager>,
+    pub is_window_visible: bool,
+    pub is_exiting: bool,
+    ipc_rx: Receiver<()>,
 }
 
 pub type UmbraApp = EclipseApp;
@@ -76,10 +81,43 @@ impl EclipseApp {
             eprintln!("[WARN] Failed to open Eclipse SQLite database: {}. Falling back to in-memory database.", e);
             Database::open_in_memory().expect("In-memory database should never fail to initialize")
         });
+
+        // Clean up any stray test playlists that may have been created during automated testing
+        if let Ok(pls) = db.get_playlists() {
+            for pl in pls {
+                if pl.name == "My Test Pl" {
+                    let _ = db.delete_playlist(pl.id);
+                }
+            }
+        }
+
         let mut player = PlayerController::new(&cfg);
         player.apply_audio_settings(&cfg.audio);
 
         let (scan_tx, scan_rx) = channel();
+
+        // 1. Initialize system tray icon
+        let tray_manager = tray::TrayManager::new(cc.egui_ctx.clone());
+
+        // 2. Single-instance IPC listener on localhost
+        let (ipc_tx, ipc_rx) = channel();
+        if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:49281") {
+            let ctx_clone = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming().flatten() {
+                    let mut reader = std::io::BufReader::new(stream);
+                    let mut line = String::new();
+                    if std::io::BufRead::read_line(&mut reader, &mut line).is_ok()
+                        && line.trim() == "SHOW"
+                    {
+                        #[cfg(windows)]
+                        tray::show_window_native();
+                        let _ = ipc_tx.send(());
+                        ctx_clone.request_repaint();
+                    }
+                }
+            });
+        }
 
         let mut app = Self {
             cfg,
@@ -110,19 +148,64 @@ impl EclipseApp {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            tray_manager,
+            is_window_visible: true,
+            is_exiting: false,
+            ipc_rx,
         };
 
         app.reload_data();
 
         // Restore last session if enabled
         if app.cfg.resume_session {
-            if let Some(last_id) = app.cfg.last_played_track_id {
-                if let Some(idx) = app.tracks.iter().position(|t| t.id == last_id) {
-                    app.player.set_queue_paused(app.tracks.clone(), idx);
-                    if app.cfg.last_played_position_secs > 0.0 {
-                        app.player.engine.seek(Duration::from_secs_f64(app.cfg.last_played_position_secs));
+            let mut restored = false;
+
+            // 1. Restore active playlist queue context if active_playlist_id was saved
+            if let Some(ref pl_id_str) = app.cfg.active_playlist_id {
+                if let Ok(pl_id) = pl_id_str.parse::<i64>() {
+                    if let Ok(playlist_tracks) = app.db.get_playlist_tracks(pl_id) {
+                        if !playlist_tracks.is_empty() {
+                            let start_idx = if let Some(idx) = app.cfg.queue_current_index {
+                                idx.min(playlist_tracks.len() - 1)
+                            } else if let Some(last_id) = app.cfg.last_played_track_id {
+                                playlist_tracks.iter().position(|t| t.id == last_id).unwrap_or(0)
+                            } else {
+                                0
+                            };
+
+                            let user_q = std::collections::VecDeque::from(app.cfg.user_queue.clone());
+                            app.player.set_queue_paused_with_context(
+                                Some(pl_id_str.clone()),
+                                playlist_tracks,
+                                start_idx,
+                                app.cfg.queue_is_shuffled,
+                                Some(app.cfg.queue_pos),
+                                Some(user_q),
+                            );
+
+                            if app.cfg.last_played_position_secs > 0.0 {
+                                app.player.engine.seek(Duration::from_secs_f64(app.cfg.last_played_position_secs));
+                            }
+                            if let Some(track) = app.player.current_track() {
+                                app.last_active_track_id = Some(track.id);
+                            }
+                            app.playlists_state.selected_playlist_id = Some(pl_id);
+                            restored = true;
+                        }
                     }
-                    app.last_active_track_id = Some(last_id);
+                }
+            }
+
+            // 2. Graceful fallback to general library tracks if not in a playlist or playlist was deleted
+            if !restored {
+                if let Some(last_id) = app.cfg.last_played_track_id {
+                    if let Some(idx) = app.tracks.iter().position(|t| t.id == last_id) {
+                        app.player.set_queue_paused(app.tracks.clone(), idx);
+                        if app.cfg.last_played_position_secs > 0.0 {
+                            app.player.engine.seek(Duration::from_secs_f64(app.cfg.last_played_position_secs));
+                        }
+                        app.last_active_track_id = Some(last_id);
+                    }
                 }
             }
         }
@@ -205,6 +288,13 @@ impl EclipseApp {
 
 impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(windows)]
+        {
+            if tray::MAIN_HWND.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                tray::get_main_hwnd();
+            }
+        }
+
         // High frame rate during playback for smooth spectrum visualizer and PiP overlay
         let is_stream_playing = self.stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false);
         if self.player.engine.is_playing()
@@ -295,11 +385,92 @@ impl App for EclipseApp {
 
         // Keyboard shortcuts listener
         let shortcut = shortcuts::handle_shortcuts(ctx, &mut self.player, Some(&self.stream_controller));
+        if shortcut.exit_app {
+            self.is_exiting = true;
+            self.on_exit(None);
+            std::process::exit(0);
+        }
         if let Some(msg) = shortcut.status_message {
             self.set_status(&msg);
         }
         if shortcut.focus_search {
             self.focus_search = true;
+        }
+
+        // Secondary instance IPC signal: Re-open window if user launches Eclipse again
+        if self.ipc_rx.try_recv().is_ok() {
+            self.is_window_visible = true;
+            #[cfg(windows)]
+            tray::show_window_native();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
+        }
+
+        // System tray actions and dynamic song tooltip
+        let mut exit_from_tray = false;
+        if let Some(ref mut tray) = self.tray_manager {
+            while let Some(action) = tray.try_recv_action() {
+                match action {
+                    tray::TrayAction::Show => {
+                        self.is_window_visible = true;
+                        #[cfg(windows)]
+                        tray::show_window_native();
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        ctx.request_repaint();
+                    }
+                    tray::TrayAction::TogglePlay => {
+                        if self.player.playback_source.is_stream() {
+                            let prov_id = self.player.stream_provider_id().unwrap_or("spotify");
+                            let is_playing = self.stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false);
+                            if is_playing {
+                                self.stream_controller.pause(prov_id);
+                            } else {
+                                self.stream_controller.resume(prov_id);
+                            }
+                        } else {
+                            self.player.toggle_playback();
+                        }
+                    }
+                    tray::TrayAction::Next => {
+                        if self.player.playback_source.is_stream() && self.stream_controller.has_next_in_queue() {
+                            self.stream_controller.play_next_in_queue();
+                        } else {
+                            self.player.next();
+                        }
+                    }
+                    tray::TrayAction::Previous => {
+                        self.player.prev();
+                    }
+                    tray::TrayAction::Exit => {
+                        exit_from_tray = true;
+                    }
+                }
+            }
+
+            let tooltip = if let Some(track) = self.player.current_track() {
+                let state_str = if self.player.engine.is_playing() { "Playing" } else { "Paused" };
+                format!("Eclipse ({}) — {} • {}", state_str, track.title, track.artist)
+            } else if let Some(ref stream_state) = self.stream_controller.active_state {
+                let state_str = if stream_state.is_playing { "Playing" } else { "Paused" };
+                if let Some(ref t) = stream_state.current_track {
+                    format!("Eclipse ({}) — {} • {}", state_str, t.title, t.artist)
+                } else {
+                    format!("Eclipse ({})", state_str)
+                }
+            } else {
+                "Eclipse — Music Player".to_string()
+            };
+            tray.update_tooltip(&tooltip);
+        }
+
+        if exit_from_tray {
+            self.is_exiting = true;
+            self.on_exit(None);
+            std::process::exit(0);
         }
 
         // Display toast when audio engine encounters a seek error
@@ -336,6 +507,7 @@ impl App for EclipseApp {
         let mut on_delete_playlist = None;
         let mut toggle_now_playing = false;
         let mut on_navigate = None;
+        let mut on_close = false;
 
         let can_back = self.can_go_back();
         let can_fwd = self.can_go_forward();
@@ -366,6 +538,7 @@ impl App for EclipseApp {
                         can_fwd,
                         &mut on_back,
                         &mut on_forward,
+                        &mut on_close,
                     );
                 });
 
@@ -1056,6 +1229,30 @@ impl App for EclipseApp {
                 }
             }
         }
+
+        // Handle window close: if close_to_tray is enabled, hide window and keep playing in background!
+        if on_close || ctx.input(|i| i.viewport().close_requested()) {
+            if !self.is_exiting && self.cfg.appearance.close_to_tray {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.is_window_visible = false;
+                #[cfg(windows)]
+                tray::hide_window_native();
+                // Note: Do NOT call egui::ViewportCommand::Visible(false) here because eframe
+                // suppresses App::update() when the viewport is marked invisible, which would
+                // prevent background audio progression, tray actions, and IPC wakeup signals.
+                // Win32 ShowWindow(SW_HIDE) already hides the window from the display and taskbar.
+                self.set_status("Eclipse is playing in background. Click tray icon to open.");
+            } else {
+                self.is_exiting = true;
+                self.on_exit(None);
+                std::process::exit(0);
+            }
+        }
+
+        // When window is hidden in background, keep audio loop, tray events, and queue progression ticking
+        if !self.is_window_visible {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1067,6 +1264,14 @@ impl App for EclipseApp {
         self.cfg.muted = self.player.engine.is_muted();
         self.cfg.shuffle = self.player.shuffle;
         self.cfg.repeat = self.player.repeat;
+
+        // Serialize Queue State on Exit
+        self.cfg.active_playlist_id = self.player.active_playlist_id.clone();
+        self.cfg.queue_current_index = self.player.current_index;
+        self.cfg.queue_is_shuffled = self.player.shuffle;
+        self.cfg.queue_pos = self.player.queue_pos;
+        self.cfg.user_queue = self.player.user_queue.iter().copied().collect();
+
         let _ = self.cfg.save();
     }
 }
@@ -1142,6 +1347,7 @@ mod tests {
     fn test_seek_error_toast_displayed_and_cleared() {
         let cfg = AppConfig::default();
         let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
         let mut app = EclipseApp {
             cfg: cfg.clone(),
             theme: Theme::from_name("Eclipse", None),
@@ -1171,6 +1377,10 @@ mod tests {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_exiting: false,
+            ipc_rx,
         };
 
         // Create a temporary valid WAV file so engine.play() successfully initializes playback

@@ -13,6 +13,7 @@ pub fn render_titlebar(
     can_go_forward: bool,
     on_back: &mut bool,
     on_forward: &mut bool,
+    on_close: &mut bool,
 ) {
     let titlebar_height = 36.0;
     let titlebar_rect = {
@@ -148,7 +149,7 @@ pub fn render_titlebar(
             let close_icon_rect = Rect::from_center_size(close_rect.center(), vec2(11.0, 11.0));
             paint_icon(ui.painter(), Icon::Close, close_icon_rect, close_color);
             if close_resp.clicked() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                *on_close = true;
             }
 
             // 2. Maximize / Restore Button
@@ -319,6 +320,7 @@ mod tests {
                 let mut focus_search = false;
                 let mut on_back = false;
                 let mut on_forward = false;
+                let mut on_close = false;
 
                 render_titlebar(
                     ui,
@@ -330,6 +332,7 @@ mod tests {
                     false,
                     &mut on_back,
                     &mut on_forward,
+                    &mut on_close,
                 );
             });
         });

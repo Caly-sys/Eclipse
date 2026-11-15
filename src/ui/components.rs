@@ -13,13 +13,13 @@ pub fn glass_button(ui: &mut Ui, label: &str, is_active: bool, theme: &Theme) ->
     };
 
     let fill_color = if is_active {
-        Color32::from_rgba_premultiplied(255, 255, 255, 18)
+        Color32::from_white_alpha(18)
     } else {
         theme.card
     };
 
     let stroke = if is_active {
-        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 25))
+        Stroke::new(1.0_f32, Color32::from_white_alpha(25))
     } else {
         Stroke::new(1.0_f32, theme.border)
     };
@@ -115,7 +115,7 @@ pub fn dark_pill_button(ui: &mut Ui, label: &str, icon: Option<Icon>) -> Respons
         Color32::from_rgb(34, 34, 38)
     };
 
-    let border_color = Color32::from_rgba_premultiplied(255, 255, 255, 20);
+    let border_color = Color32::from_white_alpha(20);
 
     ui.painter().rect_filled(rect, Rounding::same(15.0), bg_color);
     ui.painter().rect_stroke(rect, Rounding::same(15.0), Stroke::new(1.0_f32, border_color));
@@ -190,7 +190,7 @@ pub fn format_badge(ui: &mut Ui, format: &str, is_lossless: bool, _theme: &Theme
         Color32::from_rgb(161, 161, 170)
     };
     let fill_color = Color32::from_rgb(24, 24, 27);
-    let stroke_color = Color32::from_rgba_premultiplied(255, 255, 255, 20);
+    let stroke_color = Color32::from_white_alpha(20);
 
     ui.scope(|ui| {
         let padding = vec2(6.0, 2.0);

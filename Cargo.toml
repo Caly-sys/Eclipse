@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "eclipse"
 version = "1.2.3"
 edition = "2021"
@@ -29,6 +29,10 @@ sha2 = "0.10"
 base64 = "0.22"
 wry = "0.47"
 tao = "0.30"
+tray-icon = "0.26.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
 
 [profile.release]
 opt-level = 3

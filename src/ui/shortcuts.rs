@@ -5,9 +5,11 @@ use crate::streams::controller::StreamController;
 use crate::ui::playerbar::{current_playback_time, seek_to};
 use egui::{Context, Key};
 
+#[derive(Default)]
 pub struct ShortcutAction {
     pub status_message: Option<String>,
     pub focus_search: bool,
+    pub exit_app: bool,
 }
 
 pub fn handle_shortcuts(
@@ -17,6 +19,15 @@ pub fn handle_shortcuts(
 ) -> ShortcutAction {
     // 1. Global shortcuts that work even when an input has focus
     let ctrl_k = ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(Key::K));
+    let ctrl_q = ctx.input(|i| (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(Key::Q));
+
+    if ctrl_q {
+        return ShortcutAction {
+            status_message: Some("Exiting Eclipse...".to_string()),
+            focus_search: false,
+            exit_app: true,
+        };
+    }
 
     if ctx.input(|i| i.key_pressed(Key::F11)) {
         let is_full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
@@ -28,6 +39,7 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: None,
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
@@ -46,6 +58,7 @@ pub fn handle_shortcuts(
                 return ShortcutAction {
                     status_message: Some(msg.to_string()),
                     focus_search: ctrl_k,
+                    exit_app: false,
                 };
             }
         } else if player.current_track().is_some() {
@@ -54,12 +67,14 @@ pub fn handle_shortcuts(
             return ShortcutAction {
                 status_message: Some(msg.to_string()),
                 focus_search: ctrl_k,
+                exit_app: false,
             };
         } else if !player.queue.is_empty() {
             player.play_index(0);
             return ShortcutAction {
                 status_message: Some("Playing queue".to_string()),
                 focus_search: ctrl_k,
+                exit_app: false,
             };
         }
     }
@@ -71,6 +86,7 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: Some(format!("Seek -5s  [{}]", format_time_secs(new_pos))),
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
@@ -81,6 +97,7 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: Some(format!("Seek +5s  [{}]", format_time_secs(new_pos))),
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
@@ -93,6 +110,7 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: Some(format!("Volume: {}%", (new_vol * 100.0).round() as u32)),
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
@@ -102,6 +120,7 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: Some(format!("Volume: {}%", (new_vol * 100.0).round() as u32)),
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
@@ -116,6 +135,7 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: Some(msg),
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
@@ -125,6 +145,7 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: Some(msg.to_string()),
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
@@ -138,12 +159,14 @@ pub fn handle_shortcuts(
         return ShortcutAction {
             status_message: Some(msg.to_string()),
             focus_search: ctrl_k,
+            exit_app: false,
         };
     }
 
     ShortcutAction {
         status_message: None,
         focus_search: ctrl_k,
+        exit_app: false,
     }
 }
 

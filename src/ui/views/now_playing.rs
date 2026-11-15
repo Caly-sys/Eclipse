@@ -1,6 +1,7 @@
 ﻿use crate::audio::PlayerController;
 use crate::config::VisualizerStyle;
 use crate::library::format_time_secs;
+use crate::lyrics::LyricLine;
 use crate::streams::controller::StreamController;
 use crate::streams::provider::StreamTrack;
 use crate::ui::art::AlbumArtManager;
@@ -548,66 +549,13 @@ pub fn render_now_playing(
                                 }
                             });
                         } else if lyrics.is_synced {
-                            let current_idx = lyrics.current_index(pos_ms);
-                            let mut clicked_seek_secs = None;
-
-                            ScrollArea::vertical()
-                                .id_salt("synced_lyrics_scroll")
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
-
-                                    for (i, line) in lyrics.lines.iter().enumerate() {
-                                        let is_current = current_idx == Some(i);
-
-                                        let text_color = if is_current {
-                                            theme.text_primary
-                                        } else {
-                                            theme.text_muted
-                                        };
-
-                                        let size = if is_current { 18.0 } else { 14.5 };
-                                        let mut rich = RichText::new(&line.text)
-                                            .color(text_color)
-                                            .size(size);
-
-                                        if is_current {
-                                            rich = rich.strong();
-                                        }
-
-                                        let (fill, stroke) = if is_current {
-                                            (
-                                                Color32::from_rgba_premultiplied(
-                                                    theme.accent.r(),
-                                                    theme.accent.g(),
-                                                    theme.accent.b(),
-                                                    30,
-                                                ),
-                                                Stroke::new(1.0_f32, theme.border_accent),
-                                            )
-                                        } else {
-                                            (Color32::TRANSPARENT, Stroke::NONE)
-                                        };
-
-                                        let btn = ui.add(
-                                            egui::Button::new(rich)
-                                                .fill(fill)
-                                                .stroke(stroke)
-                                                .rounding(Rounding::same(8.0))
-                                                .wrap(),
-                                        );
-
-                                        if is_current {
-                                            btn.scroll_to_me(Some(egui::Align::Center));
-                                        }
-
-                                        if btn.clicked() {
-                                            clicked_seek_secs = Some(line.timestamp_ms as f64 / 1000.0);
-                                        }
-                                    }
-                                });
-
-                            if let Some(target) = clicked_seek_secs {
+                            if let Some(target) = render_synced_lyrics_list(
+                                ui,
+                                "synced_lyrics_scroll",
+                                &lyrics.lines,
+                                pos_ms,
+                                theme,
+                            ) {
                                 seek_to(player, None, target);
                             }
                         } else {
@@ -898,6 +846,209 @@ pub fn render_now_playing(
             });
         });
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayLyricLine {
+    pub timestamp_ms: u64,
+    pub text: String,
+    pub is_instrumental: bool,
+}
+
+pub fn is_line_instrumental(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed.eq_ignore_ascii_case("instrumental")
+        || trimmed.eq_ignore_ascii_case("(instrumental)")
+        || trimmed.eq_ignore_ascii_case("[instrumental]")
+        || trimmed.chars().all(|c| {
+            c == '.' || c == '\u{2022}' || c == '-' || c == '~' || c == ' '
+                || c == '\u{266a}'
+                || c == '\u{266b}'
+                || c == '\u{2669}'
+                || c == '\u{266c}'
+        })
+    {
+        return true;
+    }
+    false
+}
+
+pub fn build_display_lyrics(lines: &[LyricLine]) -> Vec<DisplayLyricLine> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::with_capacity(lines.len() + 4);
+
+    // 1. Check for massive intro gap (> 10s) before first lyric line
+    if let Some(first) = lines.first() {
+        if first.timestamp_ms > 10_000 && !is_line_instrumental(&first.text) {
+            result.push(DisplayLyricLine {
+                timestamp_ms: 0,
+                text: String::new(),
+                is_instrumental: true,
+            });
+        }
+    }
+
+    // 2. Iterate through lines and inject instrumental lines for empty lines or gaps > 10s
+    for i in 0..lines.len() {
+        let current = &lines[i];
+        let is_inst = is_line_instrumental(&current.text);
+
+        result.push(DisplayLyricLine {
+            timestamp_ms: current.timestamp_ms,
+            text: current.text.clone(),
+            is_instrumental: is_inst,
+        });
+
+        if i + 1 < lines.len() {
+            let next = &lines[i + 1];
+            let gap = next.timestamp_ms.saturating_sub(current.timestamp_ms);
+            // If there is a massive gap (> 10s) and neither line is already an instrumental break
+            if gap > 10_000 && !is_inst && !is_line_instrumental(&next.text) {
+                let mid_ts = current.timestamp_ms + gap / 2;
+                result.push(DisplayLyricLine {
+                    timestamp_ms: mid_ts,
+                    text: String::new(),
+                    is_instrumental: true,
+                });
+            }
+        }
+    }
+
+    result
+}
+
+pub fn current_display_index(lines: &[DisplayLyricLine], pos_ms: u64) -> Option<usize> {
+    if lines.is_empty() {
+        return None;
+    }
+    let mut idx = 0;
+    let mut found = false;
+    for (i, line) in lines.iter().enumerate() {
+        if pos_ms >= line.timestamp_ms {
+            idx = i;
+            found = true;
+        } else {
+            break;
+        }
+    }
+    if found {
+        Some(idx)
+    } else {
+        None
+    }
+}
+
+pub fn render_synced_lyrics_list(
+    ui: &mut Ui,
+    scroll_id: &str,
+    lines: &[LyricLine],
+    pos_ms: u64,
+    theme: &Theme,
+) -> Option<f64> {
+    let display_lines = build_display_lyrics(lines);
+    let current_idx = current_display_index(&display_lines, pos_ms);
+    let mut clicked_seek_secs = None;
+
+    ScrollArea::vertical()
+        .id_salt(scroll_id)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+
+            for (i, line) in display_lines.iter().enumerate() {
+                let is_current = current_idx == Some(i);
+
+                let size = if is_current { 18.0 } else { 14.5 };
+
+                let (fill, stroke) = if is_current {
+                    (
+                        Color32::from_rgba_premultiplied(
+                            theme.accent.r(),
+                            theme.accent.g(),
+                            theme.accent.b(),
+                            30,
+                        ),
+                        Stroke::new(1.0_f32, theme.border_accent),
+                    )
+                } else {
+                    (Color32::TRANSPARENT, Stroke::NONE)
+                };
+
+                let btn = if line.is_instrumental {
+                    let btn_resp = ui.add(
+                        egui::Button::new(RichText::new(" ").size(size))
+                            .fill(fill)
+                            .stroke(stroke)
+                            .rounding(Rounding::same(8.0))
+                            .min_size(vec2(if is_current { 48.0 } else { 38.0 }, 0.0)),
+                    );
+
+                    let icon_color = if is_current || btn_resp.hovered() {
+                        theme.text_primary
+                    } else {
+                        Color32::from_rgba_premultiplied(
+                            theme.text_muted.r(),
+                            theme.text_muted.g(),
+                            theme.text_muted.b(),
+                            130,
+                        )
+                    };
+
+                    if btn_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    if ui.is_rect_visible(btn_resp.rect) {
+                        let icon_size = if is_current { 15.0 } else { 12.0 };
+                        let icon_rect = Rect::from_center_size(
+                            btn_resp.rect.center(),
+                            vec2(icon_size, icon_size),
+                        );
+                        paint_icon(ui.painter(), Icon::Music, icon_rect, icon_color);
+                    }
+
+                    btn_resp
+                } else {
+                    let text_color = if is_current {
+                        theme.text_primary
+                    } else {
+                        theme.text_muted
+                    };
+
+                    let mut rich = RichText::new(&line.text)
+                        .color(text_color)
+                        .size(size);
+
+                    if is_current {
+                        rich = rich.strong();
+                    }
+
+                    ui.add(
+                        egui::Button::new(rich)
+                            .fill(fill)
+                            .stroke(stroke)
+                            .rounding(Rounding::same(8.0))
+                            .wrap(),
+                    )
+                };
+
+                if is_current {
+                    btn.scroll_to_me(Some(egui::Align::Center));
+                }
+
+                if btn.clicked() {
+                    clicked_seek_secs = Some(line.timestamp_ms as f64 / 1000.0);
+                }
+            }
+        });
+
+    clicked_seek_secs
 }
 
 fn get_lyrics_badge(player: &PlayerController) -> (&'static str, Color32, Color32) {
@@ -1342,66 +1493,13 @@ fn render_stream_now_playing(
                     if lyrics.lines.is_empty() {
                         render_stream_lyrics_empty_state(ui, theme, &mut is_search_open);
                     } else if lyrics.is_synced {
-                        let current_idx = lyrics.current_index(pos_ms);
-                        let mut clicked_stream_seek = None;
-
-                        ScrollArea::vertical()
-                            .id_salt("stream_synced_lyrics_scroll")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
-
-                                for (i, line) in lyrics.lines.iter().enumerate() {
-                                    let is_current = current_idx == Some(i);
-
-                                    let text_color = if is_current {
-                                        theme.text_primary
-                                    } else {
-                                        theme.text_muted
-                                    };
-
-                                    let size = if is_current { 18.0 } else { 14.5 };
-                                    let mut rich = RichText::new(&line.text)
-                                        .color(text_color)
-                                        .size(size);
-
-                                    if is_current {
-                                        rich = rich.strong();
-                                    }
-
-                                    let (fill, stroke) = if is_current {
-                                        (
-                                            Color32::from_rgba_premultiplied(
-                                                theme.accent.r(),
-                                                theme.accent.g(),
-                                                theme.accent.b(),
-                                                30,
-                                            ),
-                                            Stroke::new(1.0_f32, theme.border_accent),
-                                        )
-                                    } else {
-                                        (Color32::TRANSPARENT, Stroke::NONE)
-                                    };
-
-                                    let btn = ui.add(
-                                        egui::Button::new(rich)
-                                            .fill(fill)
-                                            .stroke(stroke)
-                                            .rounding(Rounding::same(8.0))
-                                            .wrap(),
-                                    );
-
-                                    if is_current {
-                                        btn.scroll_to_me(Some(egui::Align::Center));
-                                    }
-
-                                    if btn.clicked() {
-                                        clicked_stream_seek = Some(line.timestamp_ms as f64 / 1000.0);
-                                    }
-                                }
-                            });
-
-                        if let Some(target) = clicked_stream_seek {
+                        if let Some(target) = render_synced_lyrics_list(
+                            ui,
+                            "stream_synced_lyrics_scroll",
+                            &lyrics.lines,
+                            pos_ms,
+                            theme,
+                        ) {
                             seek_to(player, stream_controller, target);
                         }
                     } else {
@@ -1906,6 +2004,151 @@ mod tests {
                 });
 
                 render_now_playing(ui, &mut player, &theme, &mut art_manager, Some(&stream_ctrl));
+            });
+        });
+    }
+
+    #[test]
+    fn test_is_line_instrumental_detection() {
+        assert!(super::is_line_instrumental(""));
+        assert!(super::is_line_instrumental("   "));
+        assert!(super::is_line_instrumental("instrumental"));
+        assert!(super::is_line_instrumental("(Instrumental)"));
+        assert!(super::is_line_instrumental("[INSTRUMENTAL]"));
+        assert!(super::is_line_instrumental("\u{266a}"));
+        assert!(super::is_line_instrumental("\u{266b} \u{266a}"));
+        assert!(super::is_line_instrumental("..."));
+        assert!(super::is_line_instrumental("\u{2022} \u{2022} \u{2022}"));
+        assert!(super::is_line_instrumental("---"));
+        assert!(super::is_line_instrumental("~ ~"));
+
+        assert!(!super::is_line_instrumental("Hello darkness my old friend"));
+        assert!(!super::is_line_instrumental("Just a regular lyric line"));
+        assert!(!super::is_line_instrumental("Guitar solo coming up"));
+    }
+
+    #[test]
+    fn test_build_display_lyrics_empty_and_gap_injection() {
+        use crate::lyrics::LyricLine;
+
+        // 1. Empty lines input
+        let empty_res = super::build_display_lyrics(&[]);
+        assert!(empty_res.is_empty());
+
+        // 2. Explicit empty lines are preserved with is_instrumental = true
+        let lines_with_empty = vec![
+            LyricLine {
+                timestamp_ms: 5000,
+                text: "Intro vocal".into(),
+            },
+            LyricLine {
+                timestamp_ms: 10000,
+                text: "".into(),
+            },
+            LyricLine {
+                timestamp_ms: 15000,
+                text: "Next vocal".into(),
+            },
+        ];
+        let disp1 = super::build_display_lyrics(&lines_with_empty);
+        assert_eq!(disp1.len(), 3);
+        assert!(!disp1[0].is_instrumental);
+        assert!(disp1[1].is_instrumental);
+        assert_eq!(disp1[1].timestamp_ms, 10000);
+        assert!(!disp1[2].is_instrumental);
+
+        // 3. Massive intro gap (> 10s) injects dummy line at 0ms
+        let lines_late_intro = vec![
+            LyricLine {
+                timestamp_ms: 25000,
+                text: "Verse 1 starts late".into(),
+            },
+        ];
+        let disp2 = super::build_display_lyrics(&lines_late_intro);
+        assert_eq!(disp2.len(), 2);
+        assert!(disp2[0].is_instrumental);
+        assert_eq!(disp2[0].timestamp_ms, 0);
+        assert_eq!(disp2[1].timestamp_ms, 25000);
+
+        // 4. Massive gap (> 10s) between consecutive lines injects halfway instrumental line
+        let lines_with_solo = vec![
+            LyricLine {
+                timestamp_ms: 10000,
+                text: "Solo begins".into(),
+            },
+            LyricLine {
+                timestamp_ms: 40000,
+                text: "Solo ends".into(),
+            },
+        ];
+        let disp3 = super::build_display_lyrics(&lines_with_solo);
+        assert_eq!(disp3.len(), 3);
+        assert_eq!(disp3[0].text, "Solo begins");
+        assert!(!disp3[0].is_instrumental);
+        assert!(disp3[1].is_instrumental);
+        assert_eq!(disp3[1].timestamp_ms, 25000); // 10000 + (40000 - 10000) / 2
+        assert_eq!(disp3[2].text, "Solo ends");
+        assert!(!disp3[2].is_instrumental);
+
+        // 5. Short gap (<= 10s) does not inject dummy lines
+        let lines_short_gaps = vec![
+            LyricLine {
+                timestamp_ms: 2000,
+                text: "Line A".into(),
+            },
+            LyricLine {
+                timestamp_ms: 6000,
+                text: "Line B".into(),
+            },
+            LyricLine {
+                timestamp_ms: 10000,
+                text: "Line C".into(),
+            },
+        ];
+        let disp4 = super::build_display_lyrics(&lines_short_gaps);
+        assert_eq!(disp4.len(), 3);
+
+        // 6. Test current_display_index
+        assert_eq!(super::current_display_index(&disp3, 5000), None);
+        assert_eq!(super::current_display_index(&disp3, 10000), Some(0));
+        assert_eq!(super::current_display_index(&disp3, 20000), Some(0));
+        assert_eq!(super::current_display_index(&disp3, 25000), Some(1));
+        assert_eq!(super::current_display_index(&disp3, 35000), Some(1));
+        assert_eq!(super::current_display_index(&disp3, 40000), Some(2));
+    }
+
+    #[test]
+    fn test_synced_lyrics_empty_and_instrumental_indicator_rendering() {
+        use crate::lyrics::LyricLine;
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let lines = vec![
+                    LyricLine {
+                        timestamp_ms: 5000,
+                        text: "First sung lyric".into(),
+                    },
+                    LyricLine {
+                        timestamp_ms: 10000,
+                        text: "".into(), // Explicit empty line
+                    },
+                    LyricLine {
+                        timestamp_ms: 35000, // Gap of 25s to next line
+                        text: "Next sung lyric".into(),
+                    },
+                ];
+
+                // Render at pos_ms = 12000 (empty line active with music note indicator)
+                let clicked = super::render_synced_lyrics_list(
+                    ui,
+                    "test_lyrics_scroll",
+                    &lines,
+                    12000,
+                    &theme,
+                );
+                assert!(clicked.is_none());
             });
         });
     }
