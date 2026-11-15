@@ -8,6 +8,18 @@
 .vscode/
 .idea/
 
+# Audio files & music downloads
+*.mp3
+*.flac
+*.wav
+*.m4a
+*.opus
+*.ogg
+*.aac
+*.alac
+*.aiff
+*.wma
+
 # Agent workflows, task coordination & internal handoffs
 PLAN.md
 plan.md
