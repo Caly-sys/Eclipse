@@ -14,6 +14,8 @@ pub fn render_titlebar(
     on_back: &mut bool,
     on_forward: &mut bool,
     on_close: &mut bool,
+    active_downloads: usize,
+    show_downloads: &mut bool,
 ) {
     let titlebar_height = 36.0;
     let titlebar_rect = {
@@ -242,13 +244,70 @@ pub fn render_titlebar(
             if scan_resp.clicked() {
                 *on_scan = true;
             }
+
+            ui.add_space(6.0);
+
+            // Downloads Pill Button (immediately to the left of Scan in right_to_left layout)
+            let dl_label = if active_downloads > 0 {
+                format!("Downloads ({})", active_downloads)
+            } else {
+                "Downloads".to_string()
+            };
+            let dl_w = if active_downloads > 0 { 108.0 } else { 94.0 };
+            let (dl_rect, dl_resp) = ui.allocate_exact_size(vec2(dl_w, 24.0), egui::Sense::click());
+            let dl_bg = if *show_downloads {
+                Color32::from_rgba_premultiplied(124, 77, 255, 45)
+            } else if dl_resp.hovered() {
+                theme.surface_hover
+            } else if active_downloads > 0 {
+                Color32::from_rgba_premultiplied(124, 77, 255, 20)
+            } else {
+                theme.surface
+            };
+            let dl_stroke = if *show_downloads || active_downloads > 0 {
+                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(124, 77, 255, 120))
+            } else if dl_resp.hovered() {
+                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 30))
+            } else {
+                Stroke::new(1.0_f32, theme.border)
+            };
+            ui.painter().rect_filled(dl_rect, Rounding::same(8.0), dl_bg);
+            ui.painter().rect_stroke(dl_rect, Rounding::same(8.0), dl_stroke);
+
+            let dl_icon_rect = Rect::from_center_size(
+                egui::pos2(dl_rect.min.x + 14.0, dl_rect.center().y),
+                vec2(12.0, 12.0),
+            );
+            let dl_color = if *show_downloads || active_downloads > 0 {
+                theme.accent
+            } else if dl_resp.hovered() {
+                theme.text_primary
+            } else {
+                theme.text_secondary
+            };
+            paint_icon(ui.painter(), Icon::Download, dl_icon_rect, dl_color);
+
+            ui.painter().text(
+                egui::pos2(dl_rect.min.x + 28.0, dl_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                &dl_label,
+                egui::FontId::proportional(11.5),
+                dl_color,
+            );
+
+            if dl_resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if dl_resp.clicked() {
+                *show_downloads = !*show_downloads;
+            }
         });
     });
 
     // Center Column: Centered Pill Search Bar (max-width: 380px)
     let search_max_w = 380.0_f32;
     let available_w = titlebar_rect.width();
-    let search_w = search_max_w.min((available_w - 440.0).max(180.0));
+    let search_w = search_max_w.min((available_w - 550.0).max(150.0));
     let search_rect = Rect::from_center_size(
         egui::pos2(titlebar_rect.center().x, titlebar_rect.center().y),
         vec2(search_w, 28.0),
@@ -322,6 +381,8 @@ mod tests {
                 let mut on_forward = false;
                 let mut on_close = false;
 
+                let mut show_downloads = false;
+
                 render_titlebar(
                     ui,
                     &theme,
@@ -333,6 +394,8 @@ mod tests {
                     &mut on_back,
                     &mut on_forward,
                     &mut on_close,
+                    0,
+                    &mut show_downloads,
                 );
             });
         });

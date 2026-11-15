@@ -193,6 +193,7 @@ pub struct StreamingSettings {
     pub show_spotify: bool,
     pub show_youtube_music: bool,
     pub enable_streaming: bool,
+    pub preferred_download_format: String,
 }
 
 impl Default for StreamingSettings {
@@ -201,6 +202,7 @@ impl Default for StreamingSettings {
             show_spotify: true,
             show_youtube_music: true,
             enable_streaming: false,
+            preferred_download_format: "FLAC".to_string(),
         }
     }
 }
@@ -808,5 +810,15 @@ mod tests {
     fn test_app_settings_type_alias() {
         let settings: AppSettings = AppConfig::default();
         assert_eq!(settings.theme, "Eclipse");
+    }
+
+    #[test]
+    fn test_streaming_settings_preferred_download_format() {
+        let default_cfg = AppConfig::default();
+        assert_eq!(default_cfg.streaming.preferred_download_format, "FLAC");
+
+        let json = r#"{"show_spotify":true,"show_youtube_music":true,"enable_streaming":false}"#;
+        let streaming: StreamingSettings = serde_json::from_str(json).expect("deserialize legacy streaming settings");
+        assert_eq!(streaming.preferred_download_format, "FLAC");
     }
 }

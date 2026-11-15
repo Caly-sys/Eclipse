@@ -1,10 +1,11 @@
 use crate::streams::credentials::CredentialStore;
 use crate::streams::playback::{
-    prefetch_next_track_match, resolve_or_cached_match, search_youtube_alternatives,
-    select_alternative_match, YouTubeAlternativeMatch, YouTubeWebviewPlayer,
+    prefetch_next_track_match, search_youtube_alternatives, select_alternative_match,
+    YouTubeAlternativeMatch, YouTubeWebviewPlayer,
 };
 use crate::streams::provider::{
-    StreamPlaybackState, StreamPlaylist, StreamProvider, StreamTrack,
+    DownloadFormat, DownloadJob, DownloadStatus, StreamPlaybackState, StreamPlaylist,
+    StreamProvider, StreamTrack,
 };
 use crate::streams::spotify::SpotifyProvider;
 use crate::streams::spotify_public::{
@@ -50,6 +51,19 @@ pub enum StreamCommand {
         query: String,
     },
     PrefetchNextTrack(StreamTrack),
+    DownloadTrack {
+        track: StreamTrack,
+        format: DownloadFormat,
+    },
+    DownloadBatch {
+        tracks: Vec<StreamTrack>,
+        format: DownloadFormat,
+    },
+    CancelDownload(String),
+    CancelAllDownloads,
+    RetryDownload(String),
+    RetryAllFailedDownloads,
+    ClearCompletedDownloads,
     Shutdown,
 }
 
@@ -95,6 +109,23 @@ pub enum StreamEvent {
         track_count: usize,
     },
     StreamTrackEnded,
+    StreamPlaybackReady {
+        spotify_id: String,
+        cache_path: std::path::PathBuf,
+        track: StreamTrack,
+    },
+    DownloadUpdated(DownloadJob),
+    DownloadCompleted {
+        job_id: String,
+        path: std::path::PathBuf,
+        local_track_id: i64,
+        sample_rate: u32,
+        bit_depth: u16,
+    },
+    DownloadFailed {
+        job_id: String,
+        error: String,
+    },
     AlternativesLoaded {
         spotify_id: String,
         alternatives: Vec<YouTubeAlternativeMatch>,
@@ -128,6 +159,8 @@ pub struct StreamController {
     pub alternatives: HashMap<String, Vec<YouTubeAlternativeMatch>>,
     pub stream_queue: Vec<StreamTrack>,
     pub stream_queue_index: Option<usize>,
+    pub download_jobs: Vec<DownloadJob>,
+    pub selected_download_format: DownloadFormat,
 }
 
 impl StreamController {
@@ -174,6 +207,8 @@ impl StreamController {
             alternatives: HashMap::new(),
             stream_queue: Vec::new(),
             stream_queue_index: None,
+            download_jobs: Vec::new(),
+            selected_download_format: DownloadFormat::Flac,
         }
     }
 
@@ -429,6 +464,146 @@ impl StreamController {
         let _ = self.send(StreamCommand::SaveImportedPlaylist { name, tracks });
     }
 
+    /// Set the default audio format for future downloads.
+    pub fn set_download_format(&mut self, format: DownloadFormat) {
+        self.selected_download_format = format;
+    }
+
+    /// Queue a stream track for background download with an explicit audio format without setting `is_busy`.
+    pub fn download_track_with_format(&mut self, track: StreamTrack, format: DownloadFormat) {
+        let job_id = if !track.id.is_empty() {
+            track.id.clone()
+        } else {
+            track.uri.clone()
+        };
+        let job = DownloadJob::with_format(job_id.clone(), track.clone(), format);
+        if let Some(existing) = self.download_jobs.iter_mut().find(|j| j.id == job_id) {
+            *existing = job;
+        } else {
+            self.download_jobs.push(job);
+        }
+        let _ = self.send(StreamCommand::DownloadTrack { track, format });
+    }
+
+    /// Queue a stream track for background download without setting `is_busy`.
+    pub fn download_track(&mut self, track: StreamTrack) {
+        self.download_track_with_format(track, self.selected_download_format);
+    }
+
+    /// Enqueue a batch of stream tracks for background download.
+    /// Filters out tracks that already have a local match or are already active/queued in download jobs.
+    /// Enqueues all remaining tracks immediately as DownloadJob entries with DownloadStatus::Queued
+    /// using the selected download format. Dispatches command to background scheduler.
+    /// Returns the count of newly queued tracks.
+    pub fn download_tracks_batch(&mut self, tracks: Vec<StreamTrack>) -> usize {
+        let mut to_enqueue = Vec::new();
+
+        for t in tracks {
+            // Filter out tracks that already have a local match
+            if t.is_available_locally() || t.local_track_id.is_some() || t.local_path.is_some() {
+                continue;
+            }
+
+            // Filter out tracks that are already active/queued in self.download_jobs
+            let is_active_or_queued = self.download_jobs.iter().any(|job| {
+                (job.track.id == t.id || job.id == t.id || (!t.uri.is_empty() && (job.track.uri == t.uri || job.id == t.uri)))
+                    && !job.is_failed()
+                    && !job.is_completed()
+            });
+
+            if is_active_or_queued {
+                continue;
+            }
+
+            to_enqueue.push(t);
+        }
+
+        if to_enqueue.is_empty() {
+            return 0;
+        }
+
+        let count = to_enqueue.len();
+        let format = self.selected_download_format;
+
+        for t in &to_enqueue {
+            let job_id = if !t.id.is_empty() {
+                t.id.clone()
+            } else {
+                t.uri.clone()
+            };
+            let job = DownloadJob::with_format(job_id.clone(), t.clone(), format);
+            if let Some(existing) = self.download_jobs.iter_mut().find(|j| j.id == job_id) {
+                *existing = job;
+            } else {
+                self.download_jobs.push(job);
+            }
+        }
+
+        let _ = self.send(StreamCommand::DownloadBatch {
+            tracks: to_enqueue,
+            format,
+        });
+
+        count
+    }
+
+    /// Cancel an in-progress or queued download.
+    pub fn cancel_download(&mut self, id: &str) {
+        if let Some(job) = self.download_jobs.iter_mut().find(|j| j.id == id) {
+            if !job.is_completed() {
+                job.status = DownloadStatus::Failed("Download cancelled".to_string());
+                job.error = Some("Download cancelled".to_string());
+            }
+        }
+        let _ = self.send(StreamCommand::CancelDownload(id.to_string()));
+    }
+
+    /// Cancel all Queued, Resolving, and Downloading jobs in self.download_jobs and dispatch cancellation to background workers.
+    pub fn cancel_all_downloads(&mut self) {
+        for job in &mut self.download_jobs {
+            if matches!(
+                job.status,
+                DownloadStatus::Queued | DownloadStatus::Resolving | DownloadStatus::Downloading(_) | DownloadStatus::Tagging
+            ) {
+                job.status = DownloadStatus::Failed("Download cancelled".to_string());
+                job.error = Some("Download cancelled".to_string());
+            }
+        }
+        let _ = self.send(StreamCommand::CancelAllDownloads);
+    }
+
+    /// Retry a failed or completed download.
+    pub fn retry_download(&mut self, id: &str) {
+        if let Some(job) = self.download_jobs.iter_mut().find(|j| j.id == id) {
+            job.status = DownloadStatus::Queued;
+            job.error = None;
+            let _ = self.send(StreamCommand::RetryDownload(id.to_string()));
+        }
+    }
+
+    /// Re-queue all jobs currently in DownloadStatus::Failed(_), changing their status back to Queued
+    /// and triggering the download scheduler.
+    pub fn retry_all_failed_downloads(&mut self) {
+        for job in &mut self.download_jobs {
+            if job.is_failed() {
+                job.status = DownloadStatus::Queued;
+                job.error = None;
+            }
+        }
+        let _ = self.send(StreamCommand::RetryAllFailedDownloads);
+    }
+
+    /// Clear all completed downloads from the queue list.
+    pub fn clear_completed_downloads(&mut self) {
+        self.download_jobs.retain(|j| !j.is_completed());
+        let _ = self.send(StreamCommand::ClearCompletedDownloads);
+    }
+
+    /// Return the number of currently active (non-terminal) downloads.
+    pub fn active_downloads_count(&self) -> usize {
+        self.download_jobs.iter().filter(|j| j.is_active()).count()
+    }
+
     /// Drain incoming events non-blockingly on the UI frame loop.
     pub fn update(&mut self) -> Vec<StreamEvent> {
         let mut events = Vec::new();
@@ -503,6 +678,58 @@ impl StreamController {
                         state.is_playing = false;
                     }
                 }
+                StreamEvent::StreamPlaybackReady { track, .. } => {
+                    self.is_busy = false;
+                    let mut state = self.active_state.clone().unwrap_or_default();
+                    state.current_track = Some(track.clone());
+                    state.is_playing = true;
+                    self.active_state = Some(state);
+                }
+                StreamEvent::DownloadUpdated(job) => {
+                    if let Some(existing) = self.download_jobs.iter_mut().find(|j| j.id == job.id) {
+                        *existing = job.clone();
+                    } else {
+                        self.download_jobs.push(job.clone());
+                    }
+                }
+                StreamEvent::DownloadCompleted {
+                    job_id,
+                    path,
+                    local_track_id,
+                    sample_rate: _,
+                    bit_depth: _,
+                } => {
+                    let path_str = path.to_string_lossy().to_string();
+                    if let Some(job) = self.download_jobs.iter_mut().find(|j| j.id == *job_id || j.track.id == *job_id) {
+                        job.status = DownloadStatus::Completed(path.clone());
+                        job.track.set_local_match(*local_track_id, &path_str);
+                    }
+                    if let Some(Ok(ref mut import_res)) = self.last_spotify_import {
+                        for t in &mut import_res.tracks {
+                            if t.id == *job_id || t.uri == *job_id {
+                                t.set_local_match(*local_track_id, &path_str);
+                            }
+                        }
+                    }
+                    for t in &mut self.stream_queue {
+                        if t.id == *job_id || t.uri == *job_id {
+                            t.set_local_match(*local_track_id, &path_str);
+                        }
+                    }
+                    for tracks_vec in self.playlist_tracks.values_mut() {
+                        for t in tracks_vec {
+                            if t.id == *job_id || t.uri == *job_id {
+                                t.set_local_match(*local_track_id, &path_str);
+                            }
+                        }
+                    }
+                }
+                StreamEvent::DownloadFailed { job_id, error } => {
+                    if let Some(job) = self.download_jobs.iter_mut().find(|j| j.id == *job_id || j.track.id == *job_id) {
+                        job.status = DownloadStatus::Failed(error.clone());
+                        job.error = Some(error.clone());
+                    }
+                }
                 StreamEvent::AlternativesLoaded {
                     spotify_id,
                     alternatives,
@@ -557,6 +784,7 @@ fn run_stream_worker(
 
     let mut active_provider_id: Option<String> = None;
     let mut webview_player: Option<YouTubeWebviewPlayer> = None;
+    let download_manager = Arc::new(crate::streams::downloader::DownloadManager::new(event_tx.clone()));
     let poll_interval = std::time::Duration::from_millis(200);
 
     loop {
@@ -575,38 +803,48 @@ fn run_stream_worker(
                     break;
                 }
                 StreamCommand::PlayStreamTrack(track) => {
-                    active_provider_id = Some("youtube".to_string());
+                    active_provider_id = Some("stream".to_string());
                     let tx = event_tx.clone();
                     let track_clone = track.clone();
-                    match crate::library::Database::open() {
-                        Ok(db) => {
-                            let api_key = CredentialStore::get_youtube_api_key().ok().flatten();
-                            match resolve_or_cached_match(&db, api_key.as_deref(), &track) {
-                                Ok(matched) => {
-                                    let player = webview_player.get_or_insert_with(YouTubeWebviewPlayer::new);
-                                    let _ = player.play_video(&matched.video_id, &track_clone);
-                                    let _ = tx.send(StreamEvent::TrackStarted {
-                                        provider_id: "youtube".to_string(),
-                                        track: track_clone,
-                                    });
+
+                    std::thread::Builder::new()
+                        .name("stream-playback-worker".to_string())
+                        .spawn(move || {
+                            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                match crate::streams::downloader::cache_stream_track(&track_clone) {
+                                    Ok((spotify_id, cache_path)) => {
+                                        let _ = tx.send(StreamEvent::StreamPlaybackReady {
+                                            spotify_id,
+                                            cache_path,
+                                            track: track_clone,
+                                        });
+                                    }
+                                    Err(err) => {
+                                        let _ = tx.send(StreamEvent::Error {
+                                            provider_id: "stream".to_string(),
+                                            action: "play_stream_track".to_string(),
+                                            message: err,
+                                        });
+                                    }
                                 }
-                                Err(e) => {
-                                    let _ = tx.send(StreamEvent::Error {
-                                        provider_id: "youtube".to_string(),
-                                        action: "play_stream_track".to_string(),
-                                        message: e,
-                                    });
-                                }
+                            }));
+
+                            if let Err(panic_err) = res {
+                                let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                                    s.to_string()
+                                } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                                    s.clone()
+                                } else {
+                                    "Stream playback worker panicked".to_string()
+                                };
+                                let _ = tx.send(StreamEvent::Error {
+                                    provider_id: "stream".to_string(),
+                                    action: "play_stream_track".to_string(),
+                                    message: format!("Stream playback worker panicked: {msg}"),
+                                });
                             }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(StreamEvent::Error {
-                                provider_id: "youtube".to_string(),
-                                action: "play_stream_track".to_string(),
-                                message: format!("Failed to open database: {e}"),
-                            });
-                        }
-                    }
+                        })
+                        .ok();
                 }
                 StreamCommand::PauseStream => {
                     if let Some(ref p) = webview_player {
@@ -939,8 +1177,20 @@ fn run_stream_worker(
                 StreamCommand::ImportSpotifyLink(url) => {
                     let tx = event_tx.clone();
                     thread::spawn(move || {
-                        let fetcher = PublicSpotifyFetcher::new();
-                        let res = fetcher.fetch_metadata(&url);
+                        let db_opt = crate::library::Database::open().ok();
+                        let fetcher = match &db_opt {
+                            Some(db) => PublicSpotifyFetcher::with_db(db.clone()),
+                            None => PublicSpotifyFetcher::new(),
+                        };
+                        let mut res = fetcher.fetch_metadata(&url);
+                        if let Ok(ref mut import_result) = res {
+                            let db_to_use = db_opt.or_else(|| crate::library::Database::open().ok());
+                            if let Some(ref db) = db_to_use {
+                                if let Ok(matched) = crate::streams::matcher::find_in_my_library(db, &import_result.tracks) {
+                                    import_result.tracks = matched;
+                                }
+                            }
+                        }
                         let _ = tx.send(StreamEvent::SpotifyImportComplete(res));
                     });
                 }
@@ -1003,6 +1253,27 @@ fn run_stream_worker(
                             }
                         }
                     });
+                }
+                StreamCommand::DownloadTrack { track, format } => {
+                    download_manager.start_download(track, format);
+                }
+                StreamCommand::DownloadBatch { tracks, format } => {
+                    download_manager.start_download_batch(tracks, format);
+                }
+                StreamCommand::CancelDownload(id) => {
+                    download_manager.cancel_download(&id);
+                }
+                StreamCommand::CancelAllDownloads => {
+                    download_manager.cancel_all_downloads();
+                }
+                StreamCommand::RetryDownload(id) => {
+                    download_manager.retry_download(&id);
+                }
+                StreamCommand::RetryAllFailedDownloads => {
+                    download_manager.retry_all_failed();
+                }
+                StreamCommand::ClearCompletedDownloads => {
+                    download_manager.clear_completed();
                 }
             }
         }
@@ -1276,6 +1547,85 @@ mod tests {
     }
 
     #[test]
+    fn test_stream_controller_import_spotify_link_local_matching() {
+        // Pre-populate stream cache so public fetcher doesn't invoke real network
+        let target_uri = "spotify:track:4cOdK2wGLETKBW3PvgPWqT";
+        let target_url = "https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT";
+
+        let sample_item = SpotifyImportResult {
+            resource_type: crate::streams::spotify_public::SpotifyResourceType::Track,
+            id: "4cOdK2wGLETKBW3PvgPWqT".to_string(),
+            title: "Never Gonna Give You Up".to_string(),
+            subtitle: Some("Rick Astley".to_string()),
+            cover_url: None,
+            tracks: vec![StreamTrack::new(
+                "4cOdK2wGLETKBW3PvgPWqT",
+                "Never Gonna Give You Up",
+                "Rick Astley",
+                "Whenever You Need Somebody",
+                213.0,
+                None,
+                target_uri,
+                "spotify",
+            )],
+            total_tracks: 1,
+            is_truncated: false,
+            truncation_message: None,
+            original_url: target_url.to_string(),
+        };
+
+        if let Ok(db) = crate::library::Database::open() {
+            let serialized = serde_json::to_string(&sample_item).expect("serialize");
+            let _ = db.set_stream_cache(target_uri, "spotify", "track", &serialized);
+
+            // Insert a local track matching Never Gonna Give You Up
+            let local_trk = crate::library::Track {
+                id: 0,
+                path: "C:/music/test_rick_astley.flac".to_string(),
+                title: "Never Gonna Give You Up".to_string(),
+                artist: "Rick Astley".to_string(),
+                album: "Whenever You Need Somebody".to_string(),
+                duration_secs: 213.0,
+                format: "FLAC".to_string(),
+                ..Default::default()
+            };
+            let local_id = db.upsert_track(&local_trk).expect("upsert local track");
+
+            let (provider, _) = TestProvider::new();
+            let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+            controller.import_spotify_link(target_url);
+
+            let mut matched_local = false;
+            for _ in 0..30 {
+                thread::sleep(Duration::from_millis(50));
+                for ev in controller.update() {
+                    if let StreamEvent::SpotifyImportComplete(Ok(res)) = ev {
+                        assert_eq!(res.tracks.len(), 1);
+                        if res.tracks[0].is_available_locally() {
+                            assert_eq!(res.tracks[0].local_track_id, Some(local_id));
+                            assert_eq!(
+                                res.tracks[0].local_path.as_deref(),
+                                Some("C:/music/test_rick_astley.flac")
+                            );
+                            matched_local = true;
+                        }
+                    }
+                }
+                if matched_local {
+                    break;
+                }
+            }
+
+            // Cleanup local test track
+            let conn = db.lock_conn();
+            let _ = conn.execute("DELETE FROM tracks WHERE id = ?1", rusqlite::params![local_id]);
+
+            assert!(matched_local, "Imported tracks must be automatically matched against local library");
+        }
+    }
+
+    #[test]
     fn test_stream_controller_matcher_and_playlist_commands() {
         let (provider, _) = TestProvider::new();
         let mut controller = StreamController::new(vec![Box::new(provider)]);
@@ -1403,5 +1753,303 @@ mod tests {
 
         // Test StreamTrackEnded handling
         let _ = controller.send(StreamCommand::Shutdown);
+    }
+
+    #[test]
+    fn test_stream_controller_download_queue_state_machine_and_is_busy_decoupling() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        let track = StreamTrack::new(
+            "spotify_track_dl_1",
+            "Starboy",
+            "The Weeknd",
+            "Starboy",
+            230.0,
+            Some("https://example.com/cover.jpg".to_string()),
+            "spotify:track:spotify_track_dl_1",
+            "spotify",
+        );
+
+        // Populate last_spotify_import so we verify automatic local matching upon download completion
+        controller.last_spotify_import = Some(Ok(SpotifyImportResult {
+            resource_type: crate::streams::spotify_public::SpotifyResourceType::Playlist,
+            id: "pl_starboy".to_string(),
+            title: "Pop Hits".to_string(),
+            subtitle: None,
+            cover_url: None,
+            tracks: vec![track.clone()],
+            total_tracks: 1,
+            is_truncated: false,
+            truncation_message: None,
+            original_url: "https://open.spotify.com/playlist/pl_starboy".to_string(),
+        }));
+
+        assert!(!controller.is_busy);
+        assert_eq!(controller.active_downloads_count(), 0);
+
+        // 1. Download track: MUST NEVER set is_busy = true
+        controller.download_track(track.clone());
+        assert!(!controller.is_busy, "download_track must NEVER trigger global is_busy loading state");
+        assert_eq!(controller.active_downloads_count(), 1);
+        assert_eq!(controller.download_jobs.len(), 1);
+        assert_eq!(controller.download_jobs[0].status, DownloadStatus::Queued);
+        assert_eq!(controller.download_jobs[0].format, DownloadFormat::Flac);
+
+        // 2. Cancel download
+        controller.cancel_download(&track.id);
+        assert_eq!(controller.active_downloads_count(), 0);
+        assert!(controller.download_jobs[0].is_failed());
+
+        // 3. Retry download
+        controller.retry_download(&track.id);
+        assert_eq!(controller.active_downloads_count(), 1);
+        assert_eq!(controller.download_jobs[0].status, DownloadStatus::Queued);
+
+        // 4. Test DownloadUpdated and DownloadCompleted event routing
+        let mut updated_job = controller.download_jobs[0].clone();
+        updated_job.status = DownloadStatus::Downloading(0.65);
+
+        // Synthesize worker events
+        let dl_path = std::path::PathBuf::from("C:\\music\\Downloads\\The Weeknd - Starboy.mp3");
+        let complete_ev = StreamEvent::DownloadCompleted {
+            job_id: track.id.clone(),
+            path: dl_path.clone(),
+            local_track_id: 101,
+            sample_rate: 44100,
+            bit_depth: 16,
+        };
+
+        // Deliver synthesized complete event to event receiver channel
+        let (cmd_tx, _cmd_rx) = channel::<StreamCommand>();
+        let (event_tx, event_rx) = channel::<StreamEvent>();
+        event_tx.send(StreamEvent::DownloadUpdated(updated_job)).unwrap();
+        event_tx.send(complete_ev).unwrap();
+
+        controller.cmd_tx = cmd_tx;
+        controller.event_rx = event_rx;
+
+        let events = controller.update();
+        assert_eq!(events.len(), 2);
+
+        // Verify job marked completed
+        assert_eq!(controller.active_downloads_count(), 0);
+        assert_eq!(controller.download_jobs.len(), 1);
+        assert!(controller.download_jobs[0].is_completed());
+
+        // Verify track in last_spotify_import was automatically matched locally
+        let import_tracks = &controller.last_spotify_import.as_ref().unwrap().as_ref().unwrap().tracks;
+        assert!(import_tracks[0].is_available_locally());
+        assert_eq!(import_tracks[0].local_track_id, Some(101));
+        assert_eq!(
+            import_tracks[0].local_path.as_deref(),
+            Some(dl_path.to_string_lossy().as_ref())
+        );
+
+        // 5. Clear completed downloads
+        controller.clear_completed_downloads();
+        assert_eq!(controller.download_jobs.len(), 0);
+        assert_eq!(controller.active_downloads_count(), 0);
+    }
+
+    #[test]
+    fn test_stream_controller_download_format_selection() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        // 1. Verify default selected format is FLAC
+        assert_eq!(controller.selected_download_format, DownloadFormat::Flac);
+
+        let track1 = StreamTrack::new(
+            "tr_1",
+            "Track 1",
+            "Artist 1",
+            "Album 1",
+            150.0,
+            None,
+            "spotify:track:tr_1",
+            "spotify",
+        );
+
+        // 2. download_track uses default format
+        controller.download_track(track1);
+        assert_eq!(controller.download_jobs.len(), 1);
+        assert_eq!(controller.download_jobs[0].format, DownloadFormat::Flac);
+
+        // 3. Update format via set_download_format
+        controller.set_download_format(DownloadFormat::Opus);
+        assert_eq!(controller.selected_download_format, DownloadFormat::Opus);
+
+        let track2 = StreamTrack::new(
+            "tr_2",
+            "Track 2",
+            "Artist 2",
+            "Album 2",
+            180.0,
+            None,
+            "spotify:track:tr_2",
+            "spotify",
+        );
+        controller.download_track(track2);
+        assert_eq!(controller.download_jobs.len(), 2);
+        assert_eq!(controller.download_jobs[1].format, DownloadFormat::Opus);
+
+        // 4. Explicitly download with a specific format
+        let track3 = StreamTrack::new(
+            "tr_3",
+            "Track 3",
+            "Artist 3",
+            "Album 3",
+            210.0,
+            None,
+            "spotify:track:tr_3",
+            "spotify",
+        );
+        controller.download_track_with_format(track3, DownloadFormat::Wav);
+        assert_eq!(controller.download_jobs.len(), 3);
+        assert_eq!(controller.download_jobs[2].format, DownloadFormat::Wav);
+    }
+
+    #[test]
+    fn test_stream_playback_ready_event_routing_and_state() {
+        let (cmd_tx, _cmd_rx) = channel::<StreamCommand>();
+        let (event_tx, event_rx) = channel::<StreamEvent>();
+
+        let mut controller = StreamController {
+            cmd_tx,
+            event_rx,
+            worker_handle: None,
+            connected_providers: HashMap::new(),
+            search_results: HashMap::new(),
+            playlists: HashMap::new(),
+            playlist_tracks: HashMap::new(),
+            active_state: None,
+            is_busy: true,
+            last_error: None,
+            last_spotify_import: None,
+            stream_queue: Vec::new(),
+            stream_queue_index: None,
+            alternatives: HashMap::new(),
+            download_jobs: Vec::new(),
+            selected_download_format: DownloadFormat::default(),
+        };
+
+        let track = StreamTrack::new(
+            "playback_ready_1",
+            "Starboy",
+            "The Weeknd",
+            "Starboy",
+            230.0,
+            None,
+            "spotify:track:playback_ready_1",
+            "spotify",
+        );
+
+        let cache_path = std::path::PathBuf::from("C:\\temp\\eclipse_stream_cache\\eclipse_stream_playback_ready_1.mp3");
+        event_tx
+            .send(StreamEvent::StreamPlaybackReady {
+                spotify_id: "playback_ready_1".to_string(),
+                cache_path: cache_path.clone(),
+                track: track.clone(),
+            })
+            .unwrap();
+
+        let events = controller.update();
+        assert_eq!(events.len(), 1);
+        assert!(!controller.is_busy);
+        let state = controller.active_state.as_ref().expect("state set");
+        assert!(state.is_playing);
+        assert_eq!(state.current_track.as_ref().unwrap().id, "playback_ready_1");
+    }
+
+    #[test]
+    fn test_stream_controller_download_tracks_batch_contract() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+        controller.set_download_format(DownloadFormat::Flac);
+
+        // Track 1: Available locally via local_track_id
+        let mut t1 = StreamTrack::new(
+            "trk_local_1",
+            "Local Song 1",
+            "Artist 1",
+            "Album 1",
+            120.0,
+            None,
+            "spotify:track:trk_local_1",
+            "spotify",
+        );
+        t1.local_track_id = Some(42);
+
+        // Track 2: Available locally via local_path
+        let mut t2 = StreamTrack::new(
+            "trk_local_2",
+            "Local Song 2",
+            "Artist 2",
+            "Album 2",
+            150.0,
+            None,
+            "spotify:track:trk_local_2",
+            "spotify",
+        );
+        t2.local_path = Some("C:\\music\\track2.flac".to_string());
+
+        // Track 3: Already active in download_jobs
+        let t3 = StreamTrack::new(
+            "trk_active_3",
+            "Active Song 3",
+            "Artist 3",
+            "Album 3",
+            200.0,
+            None,
+            "spotify:track:trk_active_3",
+            "spotify",
+        );
+        controller.download_jobs.push(DownloadJob::with_format(
+            "trk_active_3",
+            t3.clone(),
+            DownloadFormat::Flac,
+        ));
+
+        // Track 4 & 5: Unmatched, not queued yet
+        let t4 = StreamTrack::new(
+            "trk_new_4",
+            "New Song 4",
+            "Artist 4",
+            "Album 4",
+            180.0,
+            None,
+            "spotify:track:trk_new_4",
+            "spotify",
+        );
+        let t5 = StreamTrack::new(
+            "trk_new_5",
+            "New Song 5",
+            "Artist 5",
+            "Album 5",
+            210.0,
+            None,
+            "spotify:track:trk_new_5",
+            "spotify",
+        );
+
+        let input_tracks = vec![t1, t2, t3, t4, t5];
+        let queued_count = controller.download_tracks_batch(input_tracks);
+
+        // Only tracks 4 & 5 should be newly queued
+        assert_eq!(queued_count, 2);
+
+        // Verify download_jobs list has 3 items total (1 existing + 2 newly queued)
+        assert_eq!(controller.download_jobs.len(), 3);
+        assert!(controller.download_jobs.iter().any(|j| j.id == "trk_new_4" && j.status == DownloadStatus::Queued));
+        assert!(controller.download_jobs.iter().any(|j| j.id == "trk_new_5" && j.status == DownloadStatus::Queued));
+
+        // Test cancel_all_downloads
+        controller.cancel_all_downloads();
+        assert!(controller.download_jobs.iter().all(|j| j.is_failed()));
+
+        // Test retry_all_failed_downloads
+        controller.retry_all_failed_downloads();
+        assert!(controller.download_jobs.iter().all(|j| j.status == DownloadStatus::Queued));
     }
 }

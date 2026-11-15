@@ -16,7 +16,9 @@ pub fn get_main_hwnd() -> isize {
     }
 
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetParent, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+    };
 
     let target_pid = std::process::id();
 
@@ -24,15 +26,41 @@ pub fn get_main_hwnd() -> isize {
         let mut pid = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
         if pid == target_pid_param as u32 {
-            MAIN_HWND.store(hwnd, Ordering::SeqCst);
-            0 // Stop enumerating
-        } else {
-            1 // Continue
+            let mut title = [0u16; 256];
+            let len = GetWindowTextW(hwnd, title.as_mut_ptr(), 256);
+            if len > 0 {
+                let title_str = String::from_utf16_lossy(&title[..len as usize]);
+                if title_str.contains("Eclipse") {
+                    MAIN_HWND.store(hwnd, Ordering::SeqCst);
+                    return 0; // Found main Eclipse window
+                }
+            }
         }
+        1
     }
 
     unsafe {
         EnumWindows(Some(enum_proc), target_pid as LPARAM);
+    }
+
+    let found = MAIN_HWND.load(Ordering::SeqCst);
+    if found != 0 {
+        return found;
+    }
+
+    // Secondary pass: look for a visible top-level window without parent
+    unsafe extern "system" fn visible_top_level_proc(hwnd: HWND, target_pid_param: LPARAM) -> BOOL {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == target_pid_param as u32 && GetParent(hwnd) == 0 && IsWindowVisible(hwnd) != 0 {
+            MAIN_HWND.store(hwnd, Ordering::SeqCst);
+            return 0;
+        }
+        1
+    }
+
+    unsafe {
+        EnumWindows(Some(visible_top_level_proc), target_pid as LPARAM);
     }
 
     MAIN_HWND.load(Ordering::SeqCst)
@@ -227,15 +255,26 @@ pub fn show_window_native() {
     }
 }
 
+#[cfg(not(windows))]
+pub fn show_window_native() {}
+
 #[cfg(windows)]
-pub fn hide_window_native() {
+pub fn hide_window_native() -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
     let hwnd = get_main_hwnd();
     if hwnd != 0 {
         unsafe {
             ShowWindow(hwnd, SW_HIDE);
         }
+        true
+    } else {
+        false
     }
+}
+
+#[cfg(not(windows))]
+pub fn hide_window_native() -> bool {
+    false
 }
 
 fn load_tray_icon() -> Option<Icon> {

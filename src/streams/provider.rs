@@ -99,6 +99,51 @@ impl StreamTrack {
         self.local_path = None;
     }
 
+    /// Convert this `StreamTrack` to a playable library `Track`.
+    /// - If matched locally and local path is present, returns a local `Track`.
+    /// - If unmatched, returns a streaming `Track` with `format = "STREAM"`.
+    pub fn to_track(&self) -> crate::library::Track {
+        if self.is_available_locally() {
+            if let Some(ref local_path) = self.local_path {
+                let id = self.local_track_id.unwrap_or(0);
+                let format = std::path::Path::new(local_path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|s| s.to_uppercase())
+                    .unwrap_or_else(|| "FLAC".to_string());
+                return crate::library::Track {
+                    id,
+                    path: local_path.clone(),
+                    title: self.title.clone(),
+                    artist: self.artist.clone(),
+                    album_artist: self.artist.clone(),
+                    album: self.album.clone(),
+                    duration_secs: self.duration_secs,
+                    format,
+                    ..Default::default()
+                };
+            }
+        }
+
+        let stream_path = if !self.uri.trim().is_empty() {
+            self.uri.clone()
+        } else {
+            format!("stream:{}:{}", self.provider, self.id)
+        };
+
+        crate::library::Track {
+            id: 0,
+            path: stream_path,
+            title: self.title.clone(),
+            artist: self.artist.clone(),
+            album_artist: self.artist.clone(),
+            album: self.album.clone(),
+            duration_secs: self.duration_secs,
+            format: "STREAM".to_string(),
+            ..Default::default()
+        }
+    }
+
     pub fn display_title(&self) -> &str {
         if self.title.trim().is_empty() {
             "Unknown Title"
@@ -128,6 +173,150 @@ impl StreamTrack {
         let mins = total_secs / 60;
         let secs = total_secs % 60;
         format!("{}:{:02}", mins, secs)
+    }
+}
+
+/// Supported audio download formats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum DownloadFormat {
+    #[default]
+    Flac,
+    Mp3,
+    Opus,
+    M4a,
+    Wav,
+}
+
+impl DownloadFormat {
+    pub const ALL: [DownloadFormat; 5] = [
+        Self::Flac,
+        Self::Mp3,
+        Self::Opus,
+        Self::M4a,
+        Self::Wav,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Flac => "FLAC",
+            Self::Mp3 => "MP3",
+            Self::Opus => "OPUS",
+            Self::M4a => "M4A",
+            Self::Wav => "WAV",
+        }
+    }
+
+    pub fn ext(&self) -> &'static str {
+        match self {
+            Self::Flac => "flac",
+            Self::Mp3 => "mp3",
+            Self::Opus => "opus",
+            Self::M4a => "m4a",
+            Self::Wav => "wav",
+        }
+    }
+
+    pub fn from_ext(ext: &str) -> Option<Self> {
+        match ext.trim().to_lowercase().as_str() {
+            "flac" => Some(Self::Flac),
+            "mp3" => Some(Self::Mp3),
+            "opus" => Some(Self::Opus),
+            "m4a" => Some(Self::M4a),
+            "wav" => Some(Self::Wav),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn is_lossless(&self) -> bool {
+        matches!(self, Self::Flac | Self::Wav)
+    }
+}
+
+impl std::fmt::Display for DownloadFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
+/// Download queue item status state machine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DownloadStatus {
+    Queued,
+    Resolving,
+    Downloading(f32), // progress 0.0 .. 1.0
+    Tagging,
+    Completed(std::path::PathBuf),
+    Failed(String),
+}
+
+/// A track download queue job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadJob {
+    pub id: String, // track.id or unique job id
+    pub track: StreamTrack,
+    #[serde(default)]
+    pub format: DownloadFormat,
+    pub status: DownloadStatus,
+    pub created_at_secs: u64,
+    pub error: Option<String>,
+}
+
+impl DownloadJob {
+    pub fn new(id: impl Into<String>, track: StreamTrack) -> Self {
+        Self::with_format(id, track, DownloadFormat::default())
+    }
+
+    pub fn with_format(id: impl Into<String>, track: StreamTrack, format: DownloadFormat) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Self {
+            id: id.into(),
+            track,
+            format,
+            status: DownloadStatus::Queued,
+            created_at_secs: now,
+            error: None,
+        }
+    }
+
+    #[inline]
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.status,
+            DownloadStatus::Queued
+                | DownloadStatus::Resolving
+                | DownloadStatus::Downloading(_)
+                | DownloadStatus::Tagging
+        )
+    }
+
+    #[inline]
+    pub fn is_queued(&self) -> bool {
+        matches!(self.status, DownloadStatus::Queued)
+    }
+
+    #[inline]
+    pub fn is_cancellable(&self) -> bool {
+        matches!(
+            self.status,
+            DownloadStatus::Queued
+                | DownloadStatus::Resolving
+                | DownloadStatus::Downloading(_)
+                | DownloadStatus::Tagging
+        )
+    }
+
+    #[inline]
+    pub fn is_completed(&self) -> bool {
+        matches!(self.status, DownloadStatus::Completed(_))
+    }
+
+    #[inline]
+    pub fn is_failed(&self) -> bool {
+        matches!(self.status, DownloadStatus::Failed(_))
     }
 }
 
@@ -367,5 +556,76 @@ mod tests {
         assert!(!track.is_available_locally());
         assert_eq!(track.local_track_id, None);
         assert_eq!(track.local_path, None);
+    }
+
+    #[test]
+    fn test_stream_track_to_track_conversion() {
+        // 1. Unmatched streaming track
+        let stream_track = StreamTrack::new(
+            "trk_abc",
+            "Streaming Song",
+            "Stream Artist",
+            "Stream Album",
+            215.5,
+            Some("https://example.com/cover.jpg".to_string()),
+            "spotify:track:trk_abc",
+            "spotify",
+        );
+        let trk = stream_track.to_track();
+        assert_eq!(trk.id, 0);
+        assert_eq!(trk.title, "Streaming Song");
+        assert_eq!(trk.artist, "Stream Artist");
+        assert_eq!(trk.album, "Stream Album");
+        assert_eq!(trk.duration_secs, 215.5);
+        assert_eq!(trk.format, "STREAM");
+        assert_eq!(trk.path, "spotify:track:trk_abc");
+        assert!(trk.is_stream());
+
+        // 2. Matched local track
+        let mut matched_track = stream_track.clone();
+        matched_track.set_local_match(99, "D:/Music/song.flac");
+        let local_trk = matched_track.to_track();
+        assert_eq!(local_trk.id, 99);
+        assert_eq!(local_trk.path, "D:/Music/song.flac");
+        assert_eq!(local_trk.title, "Streaming Song");
+        assert_eq!(local_trk.artist, "Stream Artist");
+        assert_eq!(local_trk.album, "Stream Album");
+        assert_eq!(local_trk.duration_secs, 215.5);
+        assert_eq!(local_trk.format, "FLAC");
+        assert!(!local_trk.is_stream());
+    }
+
+    #[test]
+    fn test_download_format_properties_and_serde() {
+        assert_eq!(DownloadFormat::default(), DownloadFormat::Flac);
+        assert_eq!(DownloadFormat::ALL.len(), 5);
+
+        for fmt in DownloadFormat::ALL {
+            assert_eq!(DownloadFormat::from_ext(fmt.ext()), Some(fmt));
+            assert_eq!(format!("{}", fmt), fmt.label());
+        }
+
+        let track = StreamTrack::new(
+            "dl_fmt_test",
+            "Fmt Title",
+            "Fmt Artist",
+            "Fmt Album",
+            120.0,
+            None,
+            "spotify:track:dl_fmt_test",
+            "spotify",
+        );
+
+        let job_default = DownloadJob::new("dl_1", track.clone());
+        assert_eq!(job_default.format, DownloadFormat::Flac);
+
+        let job_opus = DownloadJob::with_format("dl_2", track, DownloadFormat::Opus);
+        assert_eq!(job_opus.format, DownloadFormat::Opus);
+
+        // Verify JSON serde backwards-compatibility when format field is absent
+        let mut job_val = serde_json::to_value(&job_opus).expect("serialize job");
+        job_val.as_object_mut().unwrap().remove("format");
+        let deserialized: DownloadJob = serde_json::from_value(job_val).expect("deserialize legacy job");
+        assert_eq!(deserialized.format, DownloadFormat::Flac);
     }
 }

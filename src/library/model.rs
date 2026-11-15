@@ -123,6 +123,69 @@ impl Track {
             _ => "1 mo".to_string(),
         }
     }
+
+    /// Whether this track represents an external audio stream rather than a local file.
+    pub fn is_stream(&self) -> bool {
+        self.format.eq_ignore_ascii_case("STREAM")
+            || self.path.starts_with("stream:")
+            || self.path.starts_with("spotify:")
+            || self.path.starts_with("youtube:")
+            || self.path.starts_with("http://")
+            || self.path.starts_with("https://")
+    }
+
+    /// Convert a streaming track into a `StreamTrack` representation.
+    /// Returns `None` if this track is a local audio file.
+    pub fn to_stream_track(&self) -> Option<crate::streams::StreamTrack> {
+        if !self.is_stream() {
+            return None;
+        }
+
+        let (provider, id) = if self.path.starts_with("stream:") {
+            let parts: Vec<&str> = self.path.split(':').collect();
+            let prov = parts.get(1).copied().unwrap_or("spotify");
+            let track_id = parts.get(2).copied().unwrap_or(&self.path);
+            (prov.to_string(), track_id.to_string())
+        } else if self.path.starts_with("spotify:") {
+            let parts: Vec<&str> = self.path.split(':').collect();
+            let track_id = parts.last().copied().unwrap_or(&self.path);
+            ("spotify".to_string(), track_id.to_string())
+        } else if self.path.starts_with("youtube:") {
+            let parts: Vec<&str> = self.path.split(':').collect();
+            let track_id = parts.last().copied().unwrap_or(&self.path);
+            ("youtube".to_string(), track_id.to_string())
+        } else if self.path.contains("youtube.com") || self.path.contains("youtu.be") {
+            ("youtube".to_string(), self.path.clone())
+        } else {
+            (
+                "spotify".to_string(),
+                if self.id > 0 {
+                    self.id.to_string()
+                } else {
+                    self.path.clone()
+                },
+            )
+        };
+
+        let uri = if !self.path.trim().is_empty() {
+            self.path.clone()
+        } else {
+            format!("spotify:track:{id}")
+        };
+
+        Some(crate::streams::StreamTrack {
+            id,
+            title: self.display_title().to_string(),
+            artist: self.display_artist().to_string(),
+            album: self.display_album().to_string(),
+            duration_secs: self.duration_secs,
+            art_url: None,
+            uri,
+            provider,
+            local_track_id: None,
+            local_path: None,
+        })
+    }
 }
 
 pub fn format_time_secs(secs: f64) -> String {
@@ -331,6 +394,32 @@ mod tests {
         let mut t3 = sample_track();
         t3.duration_secs = 3600.0;
         assert_eq!(Playlist::formatted_total_duration(&[t3]), "1 h");
+    }
+
+    #[test]
+    fn test_track_is_stream_and_to_stream_track() {
+        let mut local = sample_track();
+        local.path = "C:/Music/test.flac".to_string();
+        local.format = "FLAC".to_string();
+        assert!(!local.is_stream());
+        assert_eq!(local.to_stream_track(), None);
+
+        let mut stream_track = sample_track();
+        stream_track.path = "spotify:track:4cOdK2wGLETKBW3PvgPWqT".to_string();
+        stream_track.format = "STREAM".to_string();
+        assert!(stream_track.is_stream());
+        let st = stream_track.to_stream_track().expect("stream track");
+        assert_eq!(st.provider, "spotify");
+        assert_eq!(st.id, "4cOdK2wGLETKBW3PvgPWqT");
+        assert_eq!(st.uri, "spotify:track:4cOdK2wGLETKBW3PvgPWqT");
+
+        let mut yt_track = sample_track();
+        yt_track.path = "stream:youtube:dQw4w9WgXcQ".to_string();
+        yt_track.format = "STREAM".to_string();
+        assert!(yt_track.is_stream());
+        let yt_st = yt_track.to_stream_track().expect("yt stream track");
+        assert_eq!(yt_st.provider, "youtube");
+        assert_eq!(yt_st.id, "dQw4w9WgXcQ");
     }
 }
 

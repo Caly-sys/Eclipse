@@ -24,6 +24,13 @@ pub fn current_playback_time(
     stream_controller: Option<&StreamController>,
 ) -> (f64, f64) {
     if player.playback_source.is_stream() {
+        if player.engine.is_playing() || player.engine.position().as_secs_f64() > 0.0 || player.engine.current_path().is_some() {
+            let pos = player.engine.position().as_secs_f64();
+            let dur = player.active_stream_track.as_ref().map(|t| t.duration_secs)
+                .or_else(|| player.current_track().map(|t| t.duration_secs))
+                .unwrap_or(0.0);
+            return (pos, dur);
+        }
         let pos = stream_controller
             .and_then(|sc| sc.active_state.as_ref())
             .map(|s| s.position_secs)
@@ -49,7 +56,9 @@ pub fn seek_to(
     target_secs: f64,
 ) {
     let target = target_secs.max(0.0);
-    if player.playback_source.is_stream() {
+    if player.playback_source.is_stream() && (player.engine.is_playing() || player.engine.current_path().is_some()) {
+        player.engine.seek(Duration::from_secs_f64(target));
+    } else if player.playback_source.is_stream() {
         let prov_id = player.stream_provider_id().unwrap_or("spotify");
         if let Some(sc) = stream_controller {
             sc.seek(prov_id, target);
@@ -71,21 +80,36 @@ pub fn render_playerbar(
     on_toggle_fav: &mut Option<i64>,
     art_manager: &mut AlbumArtManager,
 ) -> egui::Response {
+    let full_w = ui.available_width();
+    ui.set_width(full_w);
+    ui.set_min_width(full_w);
+
     let frame = egui::Frame::none()
         .fill(Color32::from_rgb(16, 16, 19)) // #101013
         .inner_margin(egui::Margin::symmetric(20.0, 5.0)); // padding: 5px vertical, 20px horizontal
 
     let is_stream = player.playback_source.is_stream();
     let prov_id = player.stream_provider_id().unwrap_or("spotify").to_string();
+    let is_buffering = player.is_buffering_stream
+        || (is_stream
+            && player.active_stream_track.is_some()
+            && !player.engine.is_playing()
+            && !player.engine.is_paused());
 
     let inner = frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.set_min_width(ui.available_width());
+
         let total_w = ui.available_width();
+        let spacing = ui.spacing().item_spacing.x;
         let side_w = 300.0_f32.min((total_w - 260.0) / 2.0).max(180.0);
         let left_w = side_w;
         let right_w = side_w;
-        let center_w = (total_w - side_w * 2.0).max(220.0);
+        let center_w = (total_w - left_w - right_w - spacing * 2.0).max(180.0);
 
         ui.horizontal(|ui| {
+            ui.set_width(total_w);
+            ui.set_min_width(total_w);
             // =================================================================
             // 1. LEFT COLUMN: Now Playing Snippet (Art, Title, Artist, Badge, Fav)
             // =================================================================
@@ -162,6 +186,14 @@ pub fn render_playerbar(
                                             _ => "STREAM",
                                         };
                                         format_badge(ui, badge_text, false, theme);
+
+                                        if is_buffering {
+                                            ui.label(
+                                                RichText::new("Buffering stream...")
+                                                    .color(theme.accent)
+                                                    .size(11.0),
+                                            );
+                                        }
                                     });
                                 },
                             );
@@ -174,8 +206,13 @@ pub fn render_playerbar(
 
                             ui.add_space(8.0);
                             ui.vertical(|ui| {
-                                ui.label(RichText::new("Streaming Ready").color(theme.text_muted).size(13.0));
-                                ui.label(RichText::new("Select a stream track").color(theme.text_muted).size(10.5));
+                                if is_buffering {
+                                    ui.label(RichText::new("Buffering stream...").color(theme.accent).size(13.0));
+                                    ui.label(RichText::new("Fetching audio stream").color(theme.text_muted).size(10.5));
+                                } else {
+                                    ui.label(RichText::new("Streaming Ready").color(theme.text_muted).size(13.0));
+                                    ui.label(RichText::new("Select a stream track").color(theme.text_muted).size(10.5));
+                                }
                             });
                         }
                     } else if let Some(track) = player.current_track() {
@@ -329,7 +366,13 @@ pub fn render_playerbar(
 
                         // Big Circular Solid White Play / Pause Button (40x40px)
                         let is_playing = if is_stream {
-                            stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false)
+                            if player.engine.is_playing() {
+                                true
+                            } else if player.engine.current_path().is_some() && player.engine.is_paused() {
+                                false
+                            } else {
+                                stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false)
+                            }
                         } else {
                             player.engine.is_playing()
                         };
@@ -365,7 +408,9 @@ pub fn render_playerbar(
 
                         if play_resp.clicked() {
                             if is_stream {
-                                if is_playing {
+                                if player.engine.current_path().is_some() {
+                                    player.engine.toggle_play_pause();
+                                } else if is_playing {
                                     stream_controller.pause(&prov_id);
                                 } else {
                                     stream_controller.resume(&prov_id);
@@ -435,11 +480,19 @@ pub fn render_playerbar(
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
 
-                        ui.label(
-                            RichText::new(format_time_secs(display_pos))
-                                .color(theme.text_muted)
-                                .size(11.0),
-                        );
+                        if is_buffering {
+                            ui.label(
+                                RichText::new("Buffering stream...")
+                                    .color(theme.accent)
+                                    .size(11.0),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new(format_time_secs(display_pos))
+                                    .color(theme.text_muted)
+                                    .size(11.0),
+                            );
+                        }
 
                         let seekbar_w = (center_w - 90.0).max(60.0);
                         render_custom_seekbar(
@@ -550,7 +603,7 @@ pub fn render_playerbar(
                     }
 
                     // Real-Time Mini Spectrum Visualizer (12-16 Animated Bars) or Stream Badge
-                    if is_stream {
+                    if is_stream && !player.engine.is_playing() && player.engine.current_path().is_none() {
                         pill_badge(
                             ui,
                             "STREAM",
@@ -570,13 +623,14 @@ pub fn render_playerbar(
         });
     });
 
-    // Seamless top border: 1px solid rgba(255, 255, 255, 0.06)
+    // Seamless top border: 1px solid rgba(255, 255, 255, 0.06) spanning full available width
+    let bar_rect = inner.response.rect;
     ui.painter().line_segment(
         [
-            pos2(inner.response.rect.min.x, inner.response.rect.min.y),
-            pos2(inner.response.rect.max.x, inner.response.rect.min.y),
+            pos2(bar_rect.min.x, bar_rect.min.y),
+            pos2(bar_rect.min.x + full_w, bar_rect.min.y),
         ],
-        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)),
+        Stroke::new(1.0_f32, Color32::from_white_alpha(15)),
     );
 
     inner.response
@@ -815,11 +869,11 @@ fn render_resize_grip(ui: &mut Ui, _theme: &Theme) {
     // Render 3 diagonal grip lines /// in the corner
     let painter = ui.painter();
     let color = if is_maximized {
-        Color32::from_rgba_premultiplied(255, 255, 255, 15)
+        Color32::from_white_alpha(15)
     } else if is_hovered || is_dragged {
         Color32::WHITE
     } else {
-        Color32::from_rgba_premultiplied(255, 255, 255, 45)
+        Color32::from_white_alpha(45)
     };
 
     let p = rect.right_bottom() - vec2(1.0, 3.0);

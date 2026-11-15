@@ -59,15 +59,15 @@ Eclipse is portable and self-contained. It requires no administrative installers
 
 ### Option 1: Standalone Portable Executable (Recommended)
 
-1. Download the latest release package (`eclipse.exe` or `eclipse-v1.2.3-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
+1. Download the latest release package (`eclipse.exe` or `eclipse-v1.2.4-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
 2. Move `eclipse.exe` into any preferred directory (such as `%LOCALAPPDATA%\Programs\Eclipse`).
 3. Double-click `eclipse.exe` to launch.
 
-#### Release SHA-256 Checksums (v1.2.3)
+#### Release SHA-256 Checksums (v1.2.4)
 | File | SHA-256 Checksum |
 |---|---|
-| `eclipse.exe` (x64 MSVC) | `03BFC942025395D889C98673CD41EA92ACE5FC19D9EFB0F46366DDD3072D43E2` |
-| `eclipse-v1.2.3-windows-x64.zip` | `CA3F62088AF91EEBBC6DFF43D0D9F93DF7689A49780643057DCFC44D9742C02C` |
+| `eclipse.exe` (x64 MSVC) | `6C0DCFD803AA911B4FB8978BD6F6800F2310B67E1BE72426717B5E7B4EA59B31` |
+| `eclipse-v1.2.4-windows-x64.zip` | `6BA47902BA7F9970BE28C0FC983EA076319F88255D57DDC47ADEBF72599A7D93` |
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**

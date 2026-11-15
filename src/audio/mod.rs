@@ -28,6 +28,8 @@ pub struct PlayerController {
     pub repeat: RepeatMode,
     pub playback_source: PlaybackSource,
     pub active_stream_track: Option<StreamTrack>,
+    pub pending_stream_play: Option<StreamTrack>,
+    pub is_buffering_stream: bool,
     pub lyrics: Option<Lyrics>,
     pub is_loading_lyrics: bool,
     pub is_searching_lyrics: bool,
@@ -71,6 +73,8 @@ impl PlayerController {
             repeat: cfg.repeat,
             playback_source: PlaybackSource::Local,
             active_stream_track: None,
+            pending_stream_play: None,
+            is_buffering_stream: false,
             lyrics: None,
             is_loading_lyrics: false,
             is_searching_lyrics: false,
@@ -118,14 +122,26 @@ impl PlayerController {
     }
 
     pub fn play_pause(&mut self) {
-        if self.playback_source.is_local() {
+        if self.playback_source.is_local() || self.engine.is_playing() || self.engine.is_paused() {
             self.engine.toggle_play_pause();
         }
     }
 
     pub fn toggle_playback(&mut self) {
-        if self.playback_source.is_local() {
+        if self.playback_source.is_local() || self.engine.is_playing() || self.engine.is_paused() {
             self.engine.toggle_play_pause();
+        }
+    }
+
+    pub fn pause(&mut self) {
+        if self.playback_source.is_local() || self.engine.is_playing() || self.engine.is_paused() {
+            self.engine.pause();
+        }
+    }
+
+    pub fn play(&mut self) {
+        if self.playback_source.is_local() || self.engine.is_playing() || self.engine.is_paused() {
+            self.engine.play();
         }
     }
 
@@ -149,6 +165,11 @@ impl PlayerController {
     pub fn switch_to_local(&mut self) {
         self.playback_source = PlaybackSource::Local;
         self.active_stream_track = None;
+        self.is_buffering_stream = false;
+    }
+
+    pub fn take_pending_stream_play(&mut self) -> Option<StreamTrack> {
+        self.pending_stream_play.take()
     }
 
     pub fn set_active_stream_track(&mut self, track: Option<StreamTrack>) {
@@ -198,6 +219,7 @@ impl PlayerController {
     ) {
         self.playback_source = PlaybackSource::Local;
         self.active_stream_track = None;
+        self.is_buffering_stream = false;
         self.user_queue.clear();
         self.history.clear();
         self.active_playlist_id = playlist_id;
@@ -277,6 +299,7 @@ impl PlayerController {
     ) {
         self.playback_source = PlaybackSource::Local;
         self.active_stream_track = None;
+        self.is_buffering_stream = false;
         self.active_playlist_id = playlist_id;
         self.user_queue = user_queue.unwrap_or_default();
         self.history.clear();
@@ -327,8 +350,6 @@ impl PlayerController {
             return;
         }
 
-        self.playback_source = PlaybackSource::Local;
-        self.active_stream_track = None;
         self.current_index = Some(index);
 
         // Sync queue_pos to current position in shuffle_order / linear order if requested
@@ -339,24 +360,38 @@ impl PlayerController {
         }
 
         let track = self.queue[index].clone();
-        let path = Path::new(&track.path);
 
-        let (rg_track, rg_album) = engine::read_replaygain_from_file(path);
-        let mode = self.engine.volume_leveling_mode().to_string();
-        let target_lufs = self.engine.smart_target_lufs();
-        self.engine.set_volume_leveling(
-            &mode,
-            target_lufs,
-            None,
-            rg_track,
-            rg_album,
-        );
+        if track.is_stream() {
+            self.engine.stop();
+            if let Some(stream_track) = track.to_stream_track() {
+                self.switch_to_stream("spotify", Some(stream_track.clone()));
+                self.pending_stream_play = Some(stream_track);
+                self.is_buffering_stream = true;
+            }
+        } else {
+            self.playback_source = PlaybackSource::Local;
+            self.active_stream_track = None;
+            self.pending_stream_play = None;
+            self.is_buffering_stream = false;
 
-        if let Err(e) = self.engine.play_file(path, track.duration_secs) {
-            eprintln!("Playback error: {}", e);
+            let path = Path::new(&track.path);
+            let (rg_track, rg_album) = engine::read_replaygain_from_file(path);
+            let mode = self.engine.volume_leveling_mode().to_string();
+            let target_lufs = self.engine.smart_target_lufs();
+            self.engine.set_volume_leveling(
+                &mode,
+                target_lufs,
+                None,
+                rg_track,
+                rg_album,
+            );
+
+            if let Err(e) = self.engine.play_file(path, track.duration_secs) {
+                eprintln!("Playback error: {}", e);
+            }
+
+            self.load_lyrics_for_track(&track);
         }
-
-        self.load_lyrics_for_track(&track);
     }
 
     pub fn load_lyrics_for_track(&mut self, track: &Track) {
@@ -537,7 +572,11 @@ impl PlayerController {
     }
 
     pub fn toggle_shuffle(&mut self) {
-        self.shuffle = !self.shuffle;
+        self.set_shuffle(!self.shuffle);
+    }
+
+    pub fn set_shuffle(&mut self, shuffle: bool) {
+        self.shuffle = shuffle;
         if self.shuffle {
             self.rebuild_shuffle();
         } else {
@@ -1098,6 +1137,52 @@ mod tests {
         assert!(player.playback_source.is_local());
         assert!(!player.is_stream_active());
         assert!(player.active_stream_track.is_none());
+    }
+
+    #[test]
+    fn test_player_controller_pending_stream_play_resolution() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        // Prepare hybrid queue: Track 0 is streaming, Track 1 is local
+        let mut stream_track = dummy_track(0, "Spotify Stream Song");
+        stream_track.path = "spotify:track:4cOdK2wGLETKBW3PvgPWqT".to_string();
+        stream_track.format = "STREAM".to_string();
+        stream_track.artist = "Rick Astley".to_string();
+
+        let local_track = dummy_track(1, "Local Song");
+
+        player.queue = vec![stream_track, local_track];
+        player.shuffle_order = vec![0, 1];
+
+        // Play streaming track (index 0)
+        player.play_index(0);
+
+        assert!(player.is_stream_active());
+        assert_eq!(player.stream_provider_id(), Some("spotify"));
+        assert!(player.active_stream_track.is_some());
+        assert!(player.is_buffering_stream);
+        assert_eq!(
+            player.active_stream_track.as_ref().map(|t| t.title.as_str()),
+            Some("Spotify Stream Song")
+        );
+
+        // Verify pending_stream_play is set and taken correctly
+        assert!(player.pending_stream_play.is_some());
+        let pending = player.take_pending_stream_play();
+        assert!(pending.is_some());
+        let p = pending.unwrap();
+        assert_eq!(p.id, "4cOdK2wGLETKBW3PvgPWqT");
+        assert_eq!(p.title, "Spotify Stream Song");
+        assert!(player.pending_stream_play.is_none());
+
+        // Play local track (index 1)
+        player.play_index(1);
+        assert!(player.playback_source.is_local());
+        assert!(!player.is_stream_active());
+        assert!(player.active_stream_track.is_none());
+        assert!(!player.is_buffering_stream);
+        assert!(player.take_pending_stream_play().is_none());
     }
 
     fn dummy_track_with_artist(id: i64, title: &str, artist: &str) -> Track {

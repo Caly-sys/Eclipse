@@ -208,6 +208,10 @@ impl Database {
         Ok(tracks.len())
     }
 
+    pub fn insert_track(&self, t: &Track) -> Result<i64> {
+        self.upsert_track(t)
+    }
+
     pub fn upsert_track(&self, t: &Track) -> Result<i64> {
         let conn = self.lock_conn();
         conn.execute(

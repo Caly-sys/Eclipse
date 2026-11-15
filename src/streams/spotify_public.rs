@@ -236,6 +236,9 @@ fn clean_spotify_id(id_raw: &str) -> String {
     if let Some(pos) = id.find('#') {
         id = &id[..pos];
     }
+    if let Some(pos) = id.find('&') {
+        id = &id[..pos];
+    }
     id.trim_matches('/').to_string()
 }
 
@@ -998,10 +1001,20 @@ mod tests {
         assert_eq!(target.resource_type, SpotifyResourceType::Track);
         assert_eq!(target.id, "4cOdK2wGLETKBW3PvgPWqT");
 
+        let track_uri_with_query = "spotify:track:4cOdK2wGLETKBW3PvgPWqT?si=abc123xyz";
+        let target_query = parse_spotify_link(track_uri_with_query).expect("parse track uri with query");
+        assert_eq!(target_query.resource_type, SpotifyResourceType::Track);
+        assert_eq!(target_query.id, "4cOdK2wGLETKBW3PvgPWqT");
+
         let album_uri = "spotify:album:4aawyAB9vmqN3uQ7FjRGTy";
         let target_album = parse_spotify_link(album_uri).expect("parse album uri");
         assert_eq!(target_album.resource_type, SpotifyResourceType::Album);
         assert_eq!(target_album.id, "4aawyAB9vmqN3uQ7FjRGTy");
+
+        let album_uri_fragment = "spotify:album:4aawyAB9vmqN3uQ7FjRGTy#fragment";
+        let target_album_frag = parse_spotify_link(album_uri_fragment).expect("parse album uri with fragment");
+        assert_eq!(target_album_frag.resource_type, SpotifyResourceType::Album);
+        assert_eq!(target_album_frag.id, "4aawyAB9vmqN3uQ7FjRGTy");
 
         let playlist_uri = "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M";
         let target_pl = parse_spotify_link(playlist_uri).expect("parse playlist uri");
@@ -1012,6 +1025,11 @@ mod tests {
         let target_user_pl = parse_spotify_link(user_pl_uri).expect("parse user playlist uri");
         assert_eq!(target_user_pl.resource_type, SpotifyResourceType::Playlist);
         assert_eq!(target_user_pl.id, "37i9dQZF1DXcBWIGoYBM5M");
+
+        let user_pl_uri_with_si = "spotify:user:spotify:playlist:37i9dQZF1DXcBWIGoYBM5M?si=pl999";
+        let target_user_pl_si = parse_spotify_link(user_pl_uri_with_si).expect("parse user pl with si");
+        assert_eq!(target_user_pl_si.resource_type, SpotifyResourceType::Playlist);
+        assert_eq!(target_user_pl_si.id, "37i9dQZF1DXcBWIGoYBM5M");
     }
 
     #[test]

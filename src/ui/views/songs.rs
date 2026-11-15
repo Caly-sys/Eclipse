@@ -273,10 +273,10 @@ pub fn render_track_table(
 
                 let row_bg = if is_current {
                     theme.accent_glow
-                } else if is_row_hovered {
-                    Color32::from_rgb(28, 28, 31) // theme.surface_hover #1c1c1f
                 } else if is_selected {
-                    Color32::from_rgba_premultiplied(180, 140, 255, 18)
+                    Color32::from_rgba_premultiplied(124, 77, 255, if is_row_hovered { 50 } else { 35 })
+                } else if is_row_hovered {
+                    Color32::from_rgba_premultiplied(124, 77, 255, 20)
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -291,12 +291,17 @@ pub fn render_track_table(
                     let icon_r = Rect::from_center_size(pos2(row_rect.min.x + 20.0, row_rect.center().y), vec2(14.0, 14.0));
                     paint_icon(ui.painter(), play_state_icon, icon_r, theme.accent);
                 } else {
+                    let num_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        theme.text_muted
+                    };
                     ui.painter().text(
                         pos2(row_rect.min.x + 20.0, row_rect.center().y),
                         Align2::CENTER_CENTER,
                         format!("{}", idx + 1),
                         FontId::proportional(12.0),
-                        theme.text_muted,
+                        num_color,
                     );
                 }
 
@@ -337,23 +342,39 @@ pub fn render_track_table(
                 ui.allocate_new_ui(UiBuilder::new().max_rect(lines_rect).layout(Layout::top_down(egui::Align::Min)), |lines_ui| {
                     lines_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
-                    let title_color = if is_current { theme.accent } else { Color32::from_rgb(244, 244, 245) };
+                    let title_color = if is_current {
+                        theme.accent
+                    } else if is_selected || is_row_hovered {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(244, 244, 245)
+                    };
                     lines_ui.add(egui::Label::new(RichText::new(track.display_title()).size(13.5).color(title_color).strong()).truncate());
 
                     lines_ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
                         format_badge(ui, &track.format, track.is_lossless(), theme);
-                        ui.add(egui::Label::new(RichText::new(track.display_artist()).size(11.5).color(Color32::from_rgb(161, 161, 170))).truncate());
+                        let artist_color = if is_selected || is_row_hovered {
+                            Color32::from_rgb(212, 212, 216)
+                        } else {
+                            Color32::from_rgb(161, 161, 170)
+                        };
+                        ui.add(egui::Label::new(RichText::new(track.display_artist()).size(11.5).color(artist_color)).truncate());
                     });
                 });
 
-                // Col 2: ALBUM (properly separated column, muted text #a1a1aa)
+                // Col 2: ALBUM (properly separated column, high contrast on hover/select)
                 let album_rect = Rect::from_min_max(
                     pos2(row_rect.min.x + x2, row_rect.min.y),
                     pos2(row_rect.min.x + x2 + col_album_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(album_rect).layout(Layout::left_to_right(egui::Align::Center)), |album_ui| {
-                    album_ui.add(egui::Label::new(RichText::new(track.display_album()).size(12.0).color(Color32::from_rgb(161, 161, 170))).truncate());
+                    let album_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        Color32::from_rgb(161, 161, 170)
+                    };
+                    album_ui.add(egui::Label::new(RichText::new(track.display_album()).size(12.0).color(album_color)).truncate());
                 });
 
                 // Col 3: ADDED (90px)
@@ -362,7 +383,12 @@ pub fn render_track_table(
                     pos2(row_rect.min.x + x3 + col_added_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(added_rect).layout(Layout::left_to_right(egui::Align::Center)), |added_ui| {
-                    added_ui.label(RichText::new(track.relative_added_str()).size(12.0).color(Color32::from_rgb(161, 161, 170)));
+                    let added_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        Color32::from_rgb(161, 161, 170)
+                    };
+                    added_ui.label(RichText::new(track.relative_added_str()).size(12.0).color(added_color));
                 });
 
                 // Col 4: PLAYS (70px)
@@ -371,7 +397,12 @@ pub fn render_track_table(
                     pos2(row_rect.min.x + x4 + col_plays_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(plays_rect).layout(Layout::left_to_right(egui::Align::Center)), |plays_ui| {
-                    plays_ui.label(RichText::new(format!("{}", track.play_count)).size(12.0).color(Color32::from_rgb(161, 161, 170)));
+                    let plays_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        Color32::from_rgb(161, 161, 170)
+                    };
+                    plays_ui.label(RichText::new(format!("{}", track.play_count)).size(12.0).color(plays_color));
                 });
 
                 // Col 5: TIME (right-aligned duration + favorite button, fits cleanly inside total_width)
@@ -382,7 +413,12 @@ pub fn render_track_table(
                 let mut fav_clicked = false;
                 let mut more_clicked = false;
                 ui.allocate_new_ui(UiBuilder::new().max_rect(time_rect).layout(Layout::right_to_left(egui::Align::Center)), |time_ui| {
-                    time_ui.label(RichText::new(track.formatted_duration()).size(12.0).color(Color32::from_rgb(161, 161, 170)));
+                    let time_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        Color32::from_rgb(161, 161, 170)
+                    };
+                    time_ui.label(RichText::new(track.formatted_duration()).size(12.0).color(time_color));
 
                     time_ui.add_space(8.0);
 

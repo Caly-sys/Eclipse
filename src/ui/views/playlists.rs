@@ -1,5 +1,7 @@
 ﻿use crate::audio::PlayerController;
 use crate::library::model::{Playlist, Track};
+use crate::streams::controller::StreamController;
+use crate::streams::provider::StreamTrack;
 use crate::ui::art::AlbumArtManager;
 use crate::ui::components::{dark_pill_button, glass_button, white_pill_button};
 use crate::ui::context_menu::TrackContextMenuState;
@@ -27,6 +29,7 @@ pub fn render_playlists(
     playlist_tracks: &[Track],
     state: &mut PlaylistsViewState,
     player: &mut PlayerController,
+    stream_controller: &mut StreamController,
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_toggle_fav: &mut Option<i64>,
@@ -143,6 +146,7 @@ pub fn render_playlists(
         playlist_tracks,
         state,
         player,
+        stream_controller,
         theme,
         art_manager,
         on_toggle_fav,
@@ -158,6 +162,7 @@ pub fn render_playlist_detail(
     tracks: &[Track],
     state: &mut PlaylistsViewState,
     player: &mut PlayerController,
+    stream_controller: &mut StreamController,
     theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_toggle_fav: &mut Option<i64>,
@@ -176,6 +181,7 @@ pub fn render_playlist_detail(
             tracks,
             state,
             player,
+            stream_controller,
             theme,
             on_delete_playlist,
             playlist.id,
@@ -327,20 +333,37 @@ pub fn render_playlist_hero_header(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_playlist_action_bar(
     ui: &mut Ui,
     tracks: &[Track],
     state: &mut PlaylistsViewState,
     player: &mut PlayerController,
+    stream_controller: &mut StreamController,
     theme: &Theme,
     on_delete_playlist: &mut Option<i64>,
     playlist_id: i64,
 ) {
     ui.horizontal(|ui| {
-        // Left: Solid white Play pill button
-        let play_resp = white_pill_button(ui, "Play", Some(Icon::Play));
+        let is_this_playlist_active = player.active_playlist_id.as_deref() == Some(&playlist_id.to_string());
+        let is_playing = player.engine.is_playing() && is_this_playlist_active;
+
+        let (label, icon) = if is_playing {
+            ("Pause", Icon::Pause)
+        } else {
+            ("Play", Icon::Play)
+        };
+
+        // Left: Solid white Play/Pause pill button
+        let play_resp = white_pill_button(ui, label, Some(icon));
         if play_resp.clicked() && !tracks.is_empty() {
-            player.load_queue_with_context(Some(playlist_id.to_string()), tracks.to_vec(), 0);
+            if is_playing {
+                player.pause();
+            } else if is_this_playlist_active && player.engine.is_paused() {
+                player.toggle_playback();
+            } else {
+                player.load_queue_with_context(Some(playlist_id.to_string()), tracks.to_vec(), 0);
+            }
         }
 
         ui.add_space(8.0);
@@ -352,6 +375,34 @@ pub fn render_playlist_action_bar(
             player.load_queue_with_context(Some(playlist_id.to_string()), tracks.to_vec(), 0);
         }
 
+        // "Download Missing" Button if any tracks are external streams
+        let missing_count = tracks.iter().filter(|t| t.is_stream()).count();
+        if missing_count > 0 {
+            ui.add_space(8.0);
+            let dl_label = format!("Download Missing ({})", missing_count);
+            if dark_pill_button(ui, &dl_label, Some(Icon::Download)).clicked() {
+                let missing_stream_tracks: Vec<StreamTrack> = tracks
+                    .iter()
+                    .filter(|t| t.is_stream())
+                    .map(|t| {
+                        t.to_stream_track().unwrap_or_else(|| {
+                            StreamTrack::new(
+                                &t.path,
+                                &t.title,
+                                &t.artist,
+                                &t.album,
+                                t.duration_secs,
+                                None,
+                                t.path.clone(),
+                                "spotify",
+                            )
+                        })
+                    })
+                    .collect();
+                stream_controller.download_tracks_batch(missing_stream_tracks);
+            }
+        }
+
         ui.add_space(8.0);
 
         // More menu button (30x30 circle with vector Icon::MoreHorizontal)
@@ -360,7 +411,7 @@ pub fn render_playlist_action_bar(
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         let more_bg = if more_resp.hovered() { Color32::from_rgb(42, 42, 47) } else { Color32::from_rgb(34, 34, 38) };
-        let more_stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20));
+        let more_stroke = Stroke::new(1.0_f32, Color32::from_white_alpha(20));
         ui.painter().rect_filled(more_rect, Rounding::same(15.0), more_bg);
         ui.painter().rect_stroke(more_rect, Rounding::same(15.0), more_stroke);
         let dot_rect = Rect::from_center_size(more_rect.center(), vec2(14.0, 14.0));
@@ -472,6 +523,7 @@ mod tests {
                 let theme = Theme::from_name("Eclipse", None);
                 let cfg = AppConfig::default();
                 let mut player = PlayerController::new(&cfg);
+                let mut stream_controller = StreamController::default();
                 let mut art_manager = AlbumArtManager::new();
                 let mut state = PlaylistsViewState::default();
                 let mut on_create = None;
@@ -484,6 +536,7 @@ mod tests {
                     &[],
                     &mut state,
                     &mut player,
+                    &mut stream_controller,
                     &theme,
                     &mut art_manager,
                     &mut on_toggle_fav,
@@ -521,6 +574,7 @@ mod tests {
                 let theme = Theme::from_name("Eclipse", None);
                 let cfg = AppConfig::default();
                 let mut player = PlayerController::new(&cfg);
+                let mut stream_controller = StreamController::default();
                 let mut art_manager = AlbumArtManager::new();
                 let mut state = PlaylistsViewState::default();
                 let mut on_toggle_fav = None;
@@ -538,6 +592,7 @@ mod tests {
                     &tracks,
                     &mut state,
                     &mut player,
+                    &mut stream_controller,
                     &theme,
                     &mut art_manager,
                     &mut on_toggle_fav,
@@ -556,6 +611,7 @@ mod tests {
                 let theme = Theme::from_name("Eclipse", None);
                 let cfg = AppConfig::default();
                 let mut player = PlayerController::new(&cfg);
+                let mut stream_controller = StreamController::default();
                 let mut art_manager = AlbumArtManager::new();
                 let mut state = PlaylistsViewState {
                     filter_query: "Rainy".to_string(),
@@ -576,12 +632,91 @@ mod tests {
                     &tracks,
                     &mut state,
                     &mut player,
+                    &mut stream_controller,
                     &theme,
                     &mut art_manager,
                     &mut on_toggle_fav,
                     &mut on_delete,
                     &mut None,
                 );
+            });
+        });
+    }
+
+    #[test]
+    fn test_playlist_action_bar_play_pause_state() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let mut stream_controller = StreamController::default();
+                let mut state = PlaylistsViewState::default();
+                let mut on_delete = None;
+                let tracks = vec![sample_track(1, "Track A", "Artist A", "Album A")];
+
+                // When stopped or playlist not active, button is "Play"
+                render_playlist_action_bar(ui, &tracks, &mut state, &mut player, &mut stream_controller, &theme, &mut on_delete, 42);
+
+                // Set active playlist context
+                player.active_playlist_id = Some("42".to_string());
+
+                // Render with active playlist context
+                render_playlist_action_bar(ui, &tracks, &mut state, &mut player, &mut stream_controller, &theme, &mut on_delete, 42);
+            });
+        });
+    }
+
+    #[test]
+    fn test_playlist_action_bar_download_missing() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let mut stream_controller = StreamController::default();
+                let mut state = PlaylistsViewState::default();
+                let mut on_delete = None;
+
+                let mut stream_trk1 = sample_track(1, "Track 1", "Artist 1", "Album 1");
+                stream_trk1.format = "STREAM".to_string();
+                stream_trk1.path = "spotify:track:stream1".to_string();
+
+                let mut stream_trk2 = sample_track(2, "Track 2", "Artist 2", "Album 2");
+                stream_trk2.format = "STREAM".to_string();
+                stream_trk2.path = "spotify:track:stream2".to_string();
+
+                let local_trk = sample_track(3, "Local Track", "Artist 3", "Album 3");
+
+                let tracks = vec![stream_trk1, stream_trk2, local_trk];
+                assert_eq!(tracks.iter().filter(|t| t.is_stream()).count(), 2);
+
+                // Render action bar with missing tracks
+                render_playlist_action_bar(
+                    ui,
+                    &tracks,
+                    &mut state,
+                    &mut player,
+                    &mut stream_controller,
+                    &theme,
+                    &mut on_delete,
+                    100,
+                );
+
+                // Convert to stream tracks and batch download
+                let missing_stream_tracks: Vec<StreamTrack> = tracks
+                    .iter()
+                    .filter(|t| t.is_stream())
+                    .map(|t| t.to_stream_track().expect("must convert to stream track"))
+                    .collect();
+                assert_eq!(missing_stream_tracks.len(), 2);
+
+                let count = stream_controller.download_tracks_batch(missing_stream_tracks);
+                assert_eq!(count, 2);
+                assert_eq!(stream_controller.download_jobs.len(), 2);
+                assert_eq!(stream_controller.active_downloads_count(), 2);
             });
         });
     }

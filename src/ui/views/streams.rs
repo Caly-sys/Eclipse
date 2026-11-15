@@ -5,7 +5,8 @@ use crate::audio::PlayerController;
 use crate::library::model::Track;
 use crate::streams::controller::StreamController;
 use crate::streams::credentials::CredentialStore;
-use crate::streams::provider::StreamTrack;
+use crate::streams::{DownloadStatus, StreamTrack};
+use crate::streams::spotify_public::SpotifyImportResult;
 use crate::ui::art::AlbumArtManager;
 use crate::ui::components::{dark_pill_button, format_badge, pill_badge, white_pill_button};
 use crate::ui::icons::{paint_icon, render_icon, Icon};
@@ -15,7 +16,6 @@ use egui::{
     pos2, vec2, Align2, Color32, FontId, Layout, Rect, RichText, Rounding, ScrollArea, Sense,
     Stroke, TextEdit, Ui, UiBuilder,
 };
-use rand::seq::SliceRandom;
 
 #[derive(Debug, Clone, Default)]
 pub struct StreamsViewState {
@@ -135,11 +135,12 @@ pub fn render_spotify_view(
                             // Right button: White pill button "Import"
                             let import_btn = white_pill_button(ui, "Import", Some(Icon::Search));
 
-                            let enter_hit = text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let enter_hit = (text_resp.has_focus() || text_resp.lost_focus())
+                                && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             if (import_btn.clicked() || enter_hit) && !state.spotify_url_input.trim().is_empty() {
                                 let url = state.spotify_url_input.trim().to_string();
-                                stream_controller.import_spotify_link(&url);
                                 state.status_msg = None;
+                                stream_controller.import_spotify_link(&url);
                             }
                         });
                     });
@@ -168,20 +169,22 @@ pub fn render_spotify_view(
                             render_truncation_notice(ui, note, theme);
                         }
 
-                        // Summary & Action Buttons Bar
-                        render_action_bar(
+                        // Summary & Action Buttons Header
+                        render_imported_header(
                             ui,
-                            import.title.as_str(),
-                            import.subtitle.as_deref().unwrap_or("Spotify Import"),
-                            &import.tracks,
+                            import,
+                            player,
                             stream_controller,
+                            state,
                             theme,
+                            art_manager,
                             on_navigate,
                         );
 
                         // Tracks Table
                         render_imported_track_table(
                             ui,
+                            &import.id,
                             &import.tracks,
                             player,
                             stream_controller,
@@ -203,70 +206,236 @@ pub fn render_spotify_view(
         });
 }
 
-/// Render the Action Buttons Bar above the tracklist
-fn render_action_bar(
+/// Render the Imported Results Header with Cover Art, Metadata, Badges, and Action Buttons
+#[allow(clippy::too_many_arguments)]
+fn render_imported_header(
     ui: &mut Ui,
-    title: &str,
-    subtitle: &str,
-    tracks: &[StreamTrack],
+    import: &SpotifyImportResult,
+    player: &mut PlayerController,
     stream_controller: &mut StreamController,
+    state: &mut StreamsViewState,
     theme: &Theme,
+    art_manager: &mut AlbumArtManager,
     on_navigate: &mut Option<NavTab>,
 ) {
-    let bar_frame = theme.card_frame(12.0);
-    bar_frame.show(ui, |ui| {
+    let header_frame = theme.card_frame(14.0);
+    header_frame.show(ui, |ui| {
         ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 10.0);
+            ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
 
-            // Summary Title & Track Count
+            // Row 1: Cover Art + Header Metadata & Badges + Clear Button
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(title)
-                        .size(18.0)
-                        .color(theme.text_primary)
-                        .strong(),
-                );
-                ui.label(
-                    RichText::new(format!("· {subtitle}"))
-                        .size(13.0)
-                        .color(theme.text_muted),
-                );
+                // Cover Art (104x104px)
+                let cover_size = vec2(104.0, 104.0);
+                let (cover_rect, _) = ui.allocate_exact_size(cover_size, Sense::hover());
 
-                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                    pill_badge(
-                        ui,
-                        &format!("{} TRACKS", tracks.len()),
-                        Color32::from_rgba_unmultiplied(30, 215, 96, 25),
-                        Color32::from_rgb(30, 215, 96),
+                let mut painted_cover = false;
+                let cover_url = import
+                    .cover_url
+                    .as_deref()
+                    .or_else(|| import.tracks.iter().find_map(|t| t.art_url.as_deref()));
+
+                if let Some(url) = cover_url {
+                    if let Some(tex) = art_manager.get_or_load(ui.ctx(), url) {
+                        let img = egui::Image::new(tex).rounding(Rounding::same(10.0));
+                        img.paint_at(ui, cover_rect);
+                        ui.painter().rect_stroke(
+                            cover_rect,
+                            Rounding::same(10.0),
+                            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
+                        );
+                        painted_cover = true;
+                    }
+                }
+
+                if !painted_cover {
+                    ui.painter().rect_filled(
+                        cover_rect,
+                        Rounding::same(10.0),
+                        Color32::from_rgb(20, 20, 24),
                     );
+                    ui.painter().rect_stroke(
+                        cover_rect,
+                        Rounding::same(10.0),
+                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)),
+                    );
+                    let icon_box = Rect::from_center_size(cover_rect.center(), vec2(38.0, 38.0));
+                    paint_icon(ui.painter(), Icon::Spotify, icon_box, Color32::from_rgb(30, 215, 96));
+                }
+
+                ui.add_space(14.0);
+
+                // Right of cover art: Subtitle, Title, Badges
+                ui.vertical(|meta_ui| {
+                    meta_ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+
+                    // Top line: Subtitle on left, "Clear Import" on right
+                    meta_ui.horizontal(|ui| {
+                        let sub_text = import
+                            .subtitle
+                            .as_deref()
+                            .unwrap_or("Spotify Import")
+                            .to_uppercase();
+                        ui.label(
+                            RichText::new(sub_text)
+                                .size(10.5)
+                                .color(theme.text_muted)
+                                .strong(),
+                        );
+
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            if dark_pill_button(ui, "Clear Import", Some(Icon::Close)).clicked() {
+                                stream_controller.last_spotify_import = None;
+                                state.spotify_url_input.clear();
+                                state.status_msg = None;
+                            }
+                        });
+                    });
+
+                    // Title
+                    meta_ui.add(
+                        egui::Label::new(
+                            RichText::new(&import.title)
+                                .size(24.0)
+                                .color(theme.text_primary)
+                                .strong(),
+                        )
+                        .truncate(),
+                    );
+
+                    meta_ui.add_space(2.0);
+
+                    // Badges: TRACKS, LOCAL, STREAM
+                    let local_count = import.tracks.iter().filter(|t| t.is_available_locally()).count();
+                    let stream_count = import.tracks.len().saturating_sub(local_count);
+
+                    meta_ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+
+                        pill_badge(
+                            ui,
+                            &format!("{} TRACKS", import.tracks.len()),
+                            Color32::from_rgba_premultiplied(255, 255, 255, 14),
+                            theme.text_secondary,
+                        );
+
+                        pill_badge(
+                            ui,
+                            &format!("{} LOCAL", local_count),
+                            Color32::from_rgba_unmultiplied(168, 85, 247, 30),
+                            Color32::from_rgb(192, 132, 252),
+                        );
+
+                        pill_badge(
+                            ui,
+                            &format!("{} STREAM", stream_count),
+                            Color32::from_rgba_unmultiplied(30, 215, 96, 25),
+                            Color32::from_rgb(30, 215, 96),
+                        );
+                    });
                 });
             });
 
             ui.separator();
 
-            // Actions: Play all, Shuffle, Save all as playlist, Find in my library, Recently streamed
+            // Row 2: Action buttons
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
 
-                if white_pill_button(ui, "Play all", Some(Icon::Play)).clicked() && !tracks.is_empty() {
-                    stream_controller.load_stream_queue(tracks.to_vec(), 0);
+                if white_pill_button(ui, "Play", Some(Icon::Play)).clicked() && !import.tracks.is_empty() {
+                    let tracks: Vec<Track> = import.tracks.iter().map(|st| st.to_track()).collect();
+                    player.load_queue_with_context(Some(format!("spotify:{}", import.id)), tracks, 0);
                 }
 
-                if dark_pill_button(ui, "Shuffle", Some(Icon::Shuffle)).clicked() && !tracks.is_empty() {
-                    let mut shuffled = tracks.to_vec();
-                    let mut rng = rand::thread_rng();
-                    shuffled.shuffle(&mut rng);
-                    stream_controller.load_stream_queue(shuffled, 0);
+                if dark_pill_button(ui, "Shuffle", Some(Icon::Shuffle)).clicked() && !import.tracks.is_empty() {
+                    let tracks: Vec<Track> = import.tracks.iter().map(|st| st.to_track()).collect();
+                    player.set_shuffle(true);
+                    player.load_queue_with_context(Some(format!("spotify:{}", import.id)), tracks, 0);
                 }
 
-                if dark_pill_button(ui, "Save all as playlist", Some(Icon::Playlist)).clicked() && !tracks.is_empty() {
-                    let pl_name = title.to_string();
-                    stream_controller.save_imported_playlist(pl_name, tracks.to_vec());
+                if dark_pill_button(ui, "Save as Playlist", Some(Icon::Playlist)).clicked() && !import.tracks.is_empty() {
+                    stream_controller.save_imported_playlist(import.title.clone(), import.tracks.clone());
                 }
 
-                if dark_pill_button(ui, "Find in my library", Some(Icon::Search)).clicked() && !tracks.is_empty() {
-                    stream_controller.match_library(tracks.to_vec());
+                if dark_pill_button(ui, "Find in my library", Some(Icon::Search)).clicked() && !import.tracks.is_empty() {
+                    stream_controller.match_library(import.tracks.clone());
                 }
+
+                // "Download All" Button / Live Progress / All Downloaded Status Badge
+                if !import.tracks.is_empty() {
+                    let stream_tracks: Vec<StreamTrack> = import
+                        .tracks
+                        .iter()
+                        .filter(|t| !t.is_available_locally())
+                        .cloned()
+                        .collect();
+
+                    if stream_tracks.is_empty() {
+                        pill_badge(
+                            ui,
+                            "All Downloaded",
+                            Color32::from_rgba_unmultiplied(30, 215, 96, 25),
+                            Color32::from_rgb(30, 215, 96),
+                        );
+                    } else {
+                        let active_count = stream_tracks
+                            .iter()
+                            .filter(|t| {
+                                let tid = if !t.id.is_empty() { &t.id } else { &t.uri };
+                                stream_controller
+                                    .download_jobs
+                                    .iter()
+                                    .any(|j| j.id == *tid && j.is_active())
+                            })
+                            .count();
+
+                        if active_count > 0 {
+                            let total_count = stream_tracks.len();
+                            let completed_count = total_count.saturating_sub(active_count);
+                            let label = format!("Downloading ({}/{})...", completed_count, total_count);
+                            let _ = dark_pill_button(ui, &label, Some(Icon::Download));
+                        } else {
+                            let label = format!("Download All ({})", stream_tracks.len());
+                            if dark_pill_button(ui, &label, Some(Icon::Download)).clicked() {
+                                stream_controller.download_tracks_batch(stream_tracks);
+                            }
+                        }
+                    }
+                }
+
+                // Audio Download Format Selector / Dropdown
+                let current_format = stream_controller.selected_download_format;
+                let fmt_btn_text = format!("Format: {}", current_format.label());
+                let fmt_btn = dark_pill_button(ui, &fmt_btn_text, Some(Icon::Download))
+                    .on_hover_text(format!(
+                        "Download audio format: {}\nClick to cycle (FLAC -> MP3 -> OPUS -> M4A -> WAV)\nRight-click for format menu",
+                        current_format.label()
+                    ));
+
+                if fmt_btn.clicked() {
+                    let all = crate::streams::DownloadFormat::ALL;
+                    if let Some(idx) = all.iter().position(|&f| f == current_format) {
+                        let next = all[(idx + 1) % all.len()];
+                        stream_controller.set_download_format(next);
+                    }
+                }
+
+                fmt_btn.context_menu(|ui| {
+                    ui.label(
+                        RichText::new("Choose Download Format")
+                            .size(11.0)
+                            .color(theme.text_muted)
+                            .strong(),
+                    );
+                    ui.separator();
+                    for fmt in crate::streams::DownloadFormat::ALL {
+                        let is_sel = current_format == fmt;
+                        if ui.selectable_label(is_sel, fmt.label()).clicked() {
+                            stream_controller.set_download_format(fmt);
+                            ui.close_menu();
+                        }
+                    }
+                });
 
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     let recent_btn = ui.add(
@@ -292,8 +461,10 @@ fn render_action_bar(
 }
 
 /// Render the multi-column Track Table matching the reference layout
+#[allow(clippy::too_many_arguments)]
 fn render_imported_track_table(
     ui: &mut Ui,
+    import_id: &str,
     tracks: &[StreamTrack],
     player: &mut PlayerController,
     stream_controller: &mut StreamController,
@@ -385,20 +556,27 @@ fn render_imported_track_table(
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
+            let playlist_ctx = format!("spotify:{}", import_id);
             for (idx, track) in tracks.iter().enumerate() {
-                let is_current = player.playback_source.is_stream()
-                    && player.active_stream_track.as_ref().map(|t| &t.id) == Some(&track.id);
+                let is_same_context = player.active_playlist_id.as_deref() == Some(&playlist_ctx);
+                let is_current = if is_same_context {
+                    player.current_index == Some(idx)
+                } else {
+                    player.playback_source.is_stream()
+                        && player.active_stream_track.as_ref().map(|t| &t.id) == Some(&track.id)
+                };
                 let is_selected = state.selected_track_id.as_deref() == Some(&track.id);
 
                 let row_height = 48.0;
                 let (row_rect, row_resp) = ui.allocate_exact_size(vec2(total_width, row_height), Sense::click());
+                let is_row_hovered = row_resp.hovered();
 
                 let row_bg = if is_current {
                     theme.accent_glow
-                } else if row_resp.hovered() {
-                    Color32::from_rgb(28, 28, 31)
                 } else if is_selected {
-                    Color32::from_rgba_premultiplied(180, 140, 255, 18)
+                    Color32::from_rgba_premultiplied(124, 77, 255, if is_row_hovered { 50 } else { 35 })
+                } else if is_row_hovered {
+                    Color32::from_rgba_premultiplied(124, 77, 255, 20)
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -409,20 +587,40 @@ fn render_imported_track_table(
 
                 // Col 0: # / Play Icon on Hover
                 if is_current {
-                    let is_playing = stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(true);
-                    let play_icon = if is_playing { Icon::Play } else { Icon::Pause };
-                    let icon_r = Rect::from_center_size(pos2(row_rect.min.x + 20.0, row_rect.center().y), vec2(14.0, 14.0));
-                    paint_icon(ui.painter(), play_icon, icon_r, theme.accent);
-                } else if row_resp.hovered() {
+                    if player.is_buffering_stream {
+                        let icon_r = Rect::from_center_size(pos2(row_rect.min.x + 20.0, row_rect.center().y), vec2(14.0, 14.0));
+                        paint_icon(ui.painter(), Icon::Hourglass, icon_r, theme.accent);
+                    } else {
+                        let is_playing = if player.playback_source.is_stream() {
+                            if player.engine.is_playing() {
+                                true
+                            } else if player.engine.current_path().is_some() && player.engine.is_paused() {
+                                false
+                            } else {
+                                stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(true)
+                            }
+                        } else {
+                            player.engine.is_playing()
+                        };
+                        let play_icon = if is_playing { Icon::Play } else { Icon::Pause };
+                        let icon_r = Rect::from_center_size(pos2(row_rect.min.x + 20.0, row_rect.center().y), vec2(14.0, 14.0));
+                        paint_icon(ui.painter(), play_icon, icon_r, theme.accent);
+                    }
+                } else if is_row_hovered {
                     let icon_r = Rect::from_center_size(pos2(row_rect.min.x + 20.0, row_rect.center().y), vec2(13.0, 13.0));
                     paint_icon(ui.painter(), Icon::Play, icon_r, Color32::WHITE);
                 } else {
+                    let num_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        theme.text_muted
+                    };
                     ui.painter().text(
                         pos2(row_rect.min.x + 20.0, row_rect.center().y),
                         Align2::CENTER_CENTER,
                         format!("{}", idx + 1),
                         FontId::proportional(12.0),
-                        theme.text_muted,
+                        num_color,
                     );
                 }
 
@@ -458,7 +656,7 @@ fn render_imported_track_table(
                     paint_icon(ui.painter(), Icon::Spotify, icon_r, Color32::from_rgb(30, 215, 96));
                 }
 
-                // 2 stacked lines: Title and (SP badge + Artist)
+                // 2 stacked lines: Title and (LOCAL/STREAM badge + Artist)
                 let lines_rect = Rect::from_min_max(
                     pos2(title_start_x + 48.0, row_rect.min.y + 5.0),
                     pos2((title_start_x + col_title_w - 4.0).max(title_start_x + 50.0), row_rect.max.y - 5.0),
@@ -466,26 +664,43 @@ fn render_imported_track_table(
                 ui.allocate_new_ui(UiBuilder::new().max_rect(lines_rect).layout(Layout::top_down(egui::Align::Min)), |lines_ui| {
                     lines_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
-                    let title_color = if is_current { theme.accent } else { Color32::from_rgb(244, 244, 245) };
+                    let title_color = if is_current {
+                        theme.accent
+                    } else if is_selected || is_row_hovered {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_rgb(244, 244, 245)
+                    };
                     lines_ui.add(egui::Label::new(RichText::new(track.display_title()).size(13.5).color(title_color).strong()).truncate());
 
                     lines_ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(5.0, 0.0);
 
-                        // Official Spotify Green "SP" badge
-                        pill_badge(
-                            ui,
-                            "SP",
-                            Color32::from_rgba_unmultiplied(30, 215, 96, 28),
-                            Color32::from_rgb(30, 215, 96),
-                        );
-
-                        // If matched in local library, display subtle lossless/local badge
-                        if track.is_available_locally() {
+                        // Visual badge indicating LOCAL vs STREAM vs BUFFERING
+                        if is_current && player.is_buffering_stream {
+                            pill_badge(
+                                ui,
+                                "BUFFERING",
+                                Color32::from_rgba_unmultiplied(124, 77, 255, 40),
+                                theme.accent,
+                            );
+                        } else if track.is_available_locally() {
                             format_badge(ui, "LOCAL", true, theme);
+                        } else {
+                            pill_badge(
+                                ui,
+                                "STREAM",
+                                Color32::from_rgba_unmultiplied(30, 215, 96, 28),
+                                Color32::from_rgb(30, 215, 96),
+                            );
                         }
 
-                        ui.add(egui::Label::new(RichText::new(track.display_artist()).size(11.5).color(Color32::from_rgb(161, 161, 170))).truncate());
+                        let artist_color = if is_selected || is_row_hovered {
+                            Color32::from_rgb(212, 212, 216)
+                        } else {
+                            Color32::from_rgb(161, 161, 170)
+                        };
+                        ui.add(egui::Label::new(RichText::new(track.display_artist()).size(11.5).color(artist_color)).truncate());
                     });
                 });
 
@@ -495,7 +710,12 @@ fn render_imported_track_table(
                     pos2(row_rect.min.x + x2 + col_album_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(album_rect).layout(Layout::left_to_right(egui::Align::Center)), |album_ui| {
-                    album_ui.add(egui::Label::new(RichText::new(track.display_album()).size(12.0).color(Color32::from_rgb(161, 161, 170))).truncate());
+                    let album_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        Color32::from_rgb(161, 161, 170)
+                    };
+                    album_ui.add(egui::Label::new(RichText::new(track.display_album()).size(12.0).color(album_color)).truncate());
                 });
 
                 // Col 3: ADDED ("1 d")
@@ -504,16 +724,115 @@ fn render_imported_track_table(
                     pos2(row_rect.min.x + x3 + col_added_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(added_rect).layout(Layout::left_to_right(egui::Align::Center)), |added_ui| {
-                    added_ui.label(RichText::new("1 d").size(12.0).color(Color32::from_rgb(161, 161, 170)));
+                    let added_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        Color32::from_rgb(161, 161, 170)
+                    };
+                    added_ui.label(RichText::new("1 d").size(12.0).color(added_color));
                 });
 
-                // Col 4: PLAYS / Download arrow
+                // Col 4: PLAYS / Download arrow (ISOLATED button with progress/status indicator)
+                let mut download_clicked = false;
+                let active_job = stream_controller
+                    .download_jobs
+                    .iter()
+                    .find(|j| j.track.id == track.id || (!j.id.is_empty() && j.id == track.id))
+                    .cloned();
+
+                let is_locally_available = track.is_available_locally()
+                    || active_job.as_ref().map(|j| j.is_completed()).unwrap_or(false);
+
+                let is_job_active = active_job.as_ref().map(|j| j.is_active()).unwrap_or(false);
+
                 let plays_rect = Rect::from_min_max(
                     pos2(row_rect.min.x + x4, row_rect.min.y),
                     pos2(row_rect.min.x + x4 + col_plays_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(plays_rect).layout(Layout::left_to_right(egui::Align::Center)), |plays_ui| {
-                    render_icon(plays_ui, Icon::Download, 13.0, theme.text_muted);
+                    if is_locally_available {
+                        // LOCAL / SAVED badge with disabled local indicator
+                        pill_badge(
+                            plays_ui,
+                            "SAVED",
+                            Color32::from_rgba_unmultiplied(34, 197, 94, 25),
+                            Color32::from_rgb(34, 197, 94),
+                        );
+                    } else if is_job_active {
+                        // Inline spinner / status indicator
+                        if let Some(ref job) = active_job {
+                            match &job.status {
+                                DownloadStatus::Downloading(pct) => {
+                                    let p_text = format!("{} {:.0}%", job.format.label(), pct * 100.0);
+                                    pill_badge(
+                                        plays_ui,
+                                        &p_text,
+                                        Color32::from_rgba_premultiplied(124, 77, 255, 30),
+                                        theme.accent,
+                                    );
+                                }
+                                DownloadStatus::Resolving => {
+                                    pill_badge(
+                                        plays_ui,
+                                        job.format.label(),
+                                        Color32::from_rgba_premultiplied(124, 77, 255, 30),
+                                        theme.accent,
+                                    );
+                                }
+                                DownloadStatus::Tagging => {
+                                    pill_badge(
+                                        plays_ui,
+                                        "TAG",
+                                        Color32::from_rgba_premultiplied(124, 77, 255, 30),
+                                        theme.accent,
+                                    );
+                                }
+                                _ => {
+                                    pill_badge(
+                                        plays_ui,
+                                        job.format.label(),
+                                        Color32::from_rgba_premultiplied(255, 255, 255, 15),
+                                        theme.text_secondary,
+                                    );
+                                }
+                            }
+                        }
+                    } else {
+                        // Isolated per-row download button (does NOT trigger row click/playback!)
+                        let (btn_rect, btn_resp) = plays_ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+                        let btn_color = if btn_resp.hovered() {
+                            theme.accent
+                        } else {
+                            theme.text_muted
+                        };
+                        let icon_r = Rect::from_center_size(btn_rect.center(), vec2(13.0, 13.0));
+                        paint_icon(plays_ui.painter(), Icon::Download, icon_r, btn_color);
+
+                        let current_fmt = stream_controller.selected_download_format.label();
+                        let btn_resp = btn_resp.on_hover_text(format!("Download as {}", current_fmt));
+
+                        if btn_resp.hovered() {
+                            plays_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        if btn_resp.clicked() {
+                            download_clicked = true;
+                            stream_controller.download_track(track.clone());
+                        }
+
+                        // Compact format badge / label beside download icon
+                        plays_ui.add_space(2.0);
+                        let fmt_color = if btn_resp.hovered() || is_row_hovered {
+                            theme.accent
+                        } else {
+                            Color32::from_rgba_premultiplied(255, 255, 255, 70)
+                        };
+                        plays_ui.label(
+                            RichText::new(current_fmt)
+                                .size(9.5)
+                                .color(fmt_color)
+                                .strong(),
+                        );
+                    }
                 });
 
                 // Col 5: TIME
@@ -522,35 +841,27 @@ fn render_imported_track_table(
                     pos2(row_rect.max.x - 4.0, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(time_rect).layout(Layout::right_to_left(egui::Align::Center)), |time_ui| {
-                    time_ui.label(RichText::new(track.formatted_duration()).size(12.0).color(Color32::from_rgb(161, 161, 170)));
+                    let time_color = if is_selected || is_row_hovered {
+                        Color32::from_rgb(212, 212, 216)
+                    } else {
+                        Color32::from_rgb(161, 161, 170)
+                    };
+                    time_ui.label(RichText::new(track.formatted_duration()).size(12.0).color(time_color));
                 });
 
-                if row_resp.hovered() {
+                if row_resp.hovered() && !download_clicked {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
 
-                // Row Click / Double-Click Play Interaction
-                if row_resp.double_clicked() || row_resp.clicked() {
+                // Row Click / Double-Click Play Interaction (Clicking Download icon does NOT trigger play!)
+                if !download_clicked && (row_resp.double_clicked() || row_resp.clicked()) {
                     state.selected_track_id = Some(track.id.clone());
 
-                    // If track is already matched in local library, play local lossless file!
-                    if track.is_available_locally() {
-                        if let Some(ref path_str) = track.local_path {
-                            let local_track = Track {
-                                id: track.local_track_id.unwrap_or(0),
-                                path: path_str.clone(),
-                                title: track.title.clone(),
-                                artist: track.artist.clone(),
-                                album: track.album.clone(),
-                                duration_secs: track.duration_secs,
-                                ..Default::default()
-                            };
-                            player.load_queue(vec![local_track], 0);
-                        }
-                    } else {
-                        // Stream via official embedded webview player
-                        stream_controller.play_stream_track(track.clone());
-                        if let Some(next_t) = tracks.get(idx + 1) {
+                    let track_list: Vec<Track> = tracks.iter().map(|st| st.to_track()).collect();
+                    player.play_track_in_playlist(Some(format!("spotify:{}", import_id)), track_list, idx);
+
+                    if let Some(next_t) = tracks.get(idx + 1) {
+                        if !next_t.is_available_locally() {
                             stream_controller.prefetch_next_track(next_t.clone());
                         }
                     }
@@ -633,6 +944,7 @@ fn render_empty_guide(
 
                     if link_resp.clicked() {
                         state.spotify_url_input = sample_url.to_string();
+                        state.status_msg = None;
                         stream_controller.import_spotify_link(sample_url);
                     }
 
@@ -707,6 +1019,7 @@ fn render_error_card(
                 if dark_pill_button(ui, "Retry", Some(Icon::Refresh)).clicked() {
                     let url = state.spotify_url_input.trim().to_string();
                     if !url.is_empty() {
+                        state.status_msg = None;
                         stream_controller.import_spotify_link(&url);
                     }
                 }
@@ -748,7 +1061,7 @@ fn render_truncation_notice(ui: &mut Ui, note: &str, _theme: &Theme) {
 pub fn render_youtube_view(
     ui: &mut Ui,
     stream_controller: &mut StreamController,
-    _player: &mut PlayerController,
+    player: &mut PlayerController,
     theme: &Theme,
     state: &mut StreamsViewState,
     on_navigate: &mut Option<NavTab>,
@@ -961,6 +1274,8 @@ pub fn render_youtube_view(
                                     row_ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                                         ui.add_space(8.0);
                                         if dark_pill_button(ui, "Play", Some(Icon::Play)).clicked() {
+                                            player.switch_to_stream("youtube", Some(track.clone()));
+                                            player.is_buffering_stream = true;
                                             stream_controller.play_stream_track(track.clone());
                                         }
                                         ui.add_space(8.0);
@@ -972,6 +1287,8 @@ pub fn render_youtube_view(
                                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                 }
                                 if row_resp.clicked() {
+                                    player.switch_to_stream("youtube", Some(track.clone()));
+                                    player.is_buffering_stream = true;
                                     stream_controller.play_stream_track(track.clone());
                                 }
                             }
@@ -1075,6 +1392,121 @@ mod tests {
     }
 
     #[test]
+    fn test_render_spotify_view_with_imported_data() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut ctrl = StreamController::new(vec![]);
+                let cfg = crate::config::AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let theme = Theme::from_name("Eclipse", None);
+                let mut state = StreamsViewState::default();
+                let mut art_manager = AlbumArtManager::new();
+                let mut on_navigate = None;
+
+                let mut local_t = StreamTrack::new(
+                    "track_1",
+                    "Local Song",
+                    "Local Artist",
+                    "Local Album",
+                    200.0,
+                    None,
+                    "spotify:track:track_1",
+                    "spotify",
+                );
+                local_t.local_path = Some("C:\\music\\track1.flac".to_string());
+                local_t.local_track_id = Some(42);
+
+                let stream_t = StreamTrack::new(
+                    "track_2",
+                    "Stream Song",
+                    "Stream Artist",
+                    "Stream Album",
+                    180.0,
+                    None,
+                    "spotify:track:track_2",
+                    "spotify",
+                );
+
+                ctrl.last_spotify_import = Some(Ok(SpotifyImportResult {
+                    resource_type: crate::streams::spotify_public::SpotifyResourceType::Playlist,
+                    id: "test_pl_123".to_string(),
+                    title: "Test Imported Playlist".to_string(),
+                    subtitle: Some("By Tester".to_string()),
+                    cover_url: Some("https://example.com/art.jpg".to_string()),
+                    tracks: vec![local_t, stream_t],
+                    total_tracks: 2,
+                    is_truncated: false,
+                    truncation_message: None,
+                    original_url: "https://open.spotify.com/playlist/test_pl_123".to_string(),
+                }));
+
+                render_spotify_view(
+                    ui,
+                    &mut ctrl,
+                    &mut player,
+                    &theme,
+                    &mut state,
+                    &mut art_manager,
+                    &mut on_navigate,
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn test_render_spotify_view_truncated_and_error() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut ctrl = StreamController::new(vec![]);
+                let cfg = crate::config::AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let theme = Theme::from_name("Eclipse", None);
+                let mut state = StreamsViewState::default();
+                let mut art_manager = AlbumArtManager::new();
+                let mut on_navigate = None;
+
+                // Truncated test
+                ctrl.last_spotify_import = Some(Ok(SpotifyImportResult {
+                    resource_type: crate::streams::spotify_public::SpotifyResourceType::Playlist,
+                    id: "test_truncated".to_string(),
+                    title: "Large Playlist".to_string(),
+                    subtitle: None,
+                    cover_url: None,
+                    tracks: vec![],
+                    total_tracks: 250,
+                    is_truncated: true,
+                    truncation_message: Some("Limited to 100 tracks".to_string()),
+                    original_url: "https://open.spotify.com/playlist/test_truncated".to_string(),
+                }));
+
+                render_spotify_view(
+                    ui,
+                    &mut ctrl,
+                    &mut player,
+                    &theme,
+                    &mut state,
+                    &mut art_manager,
+                    &mut on_navigate,
+                );
+
+                // Error test
+                ctrl.last_spotify_import = Some(Err("Network timeout fetching embed".to_string()));
+                render_spotify_view(
+                    ui,
+                    &mut ctrl,
+                    &mut player,
+                    &theme,
+                    &mut state,
+                    &mut art_manager,
+                    &mut on_navigate,
+                );
+            });
+        });
+    }
+
+    #[test]
     fn test_render_youtube_view_smoke() {
         let ctx = egui::Context::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
@@ -1092,6 +1524,100 @@ mod tests {
                     &mut player,
                     &theme,
                     &mut state,
+                    &mut on_navigate,
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn test_render_spotify_view_download_all_states() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut ctrl = StreamController::new(vec![]);
+                let cfg = crate::config::AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let theme = Theme::from_name("Eclipse", None);
+                let mut state = StreamsViewState::default();
+                let mut art_manager = AlbumArtManager::new();
+                let mut on_navigate = None;
+
+                let stream_t1 = StreamTrack::new(
+                    "t_dl_1",
+                    "Download Me 1",
+                    "Artist 1",
+                    "Album 1",
+                    180.0,
+                    None,
+                    "spotify:track:t_dl_1",
+                    "spotify",
+                );
+                let stream_t2 = StreamTrack::new(
+                    "t_dl_2",
+                    "Download Me 2",
+                    "Artist 2",
+                    "Album 2",
+                    210.0,
+                    None,
+                    "spotify:track:t_dl_2",
+                    "spotify",
+                );
+
+                ctrl.last_spotify_import = Some(Ok(SpotifyImportResult {
+                    resource_type: crate::streams::spotify_public::SpotifyResourceType::Playlist,
+                    id: "pl_download_all".to_string(),
+                    title: "Batch Download Playlist".to_string(),
+                    subtitle: None,
+                    cover_url: None,
+                    tracks: vec![stream_t1.clone(), stream_t2.clone()],
+                    total_tracks: 2,
+                    is_truncated: false,
+                    truncation_message: None,
+                    original_url: "https://open.spotify.com/playlist/pl_download_all".to_string(),
+                }));
+
+                // State 1: 2 stream tracks, not yet downloading
+                render_spotify_view(
+                    ui,
+                    &mut ctrl,
+                    &mut player,
+                    &theme,
+                    &mut state,
+                    &mut art_manager,
+                    &mut on_navigate,
+                );
+
+                // Queue batch download
+                let queued = ctrl.download_tracks_batch(vec![stream_t1.clone(), stream_t2.clone()]);
+                assert_eq!(queued, 2);
+                assert_eq!(ctrl.active_downloads_count(), 2);
+
+                // State 2: Actively downloading
+                render_spotify_view(
+                    ui,
+                    &mut ctrl,
+                    &mut player,
+                    &theme,
+                    &mut state,
+                    &mut art_manager,
+                    &mut on_navigate,
+                );
+
+                // State 3: Both tracks marked as local
+                if let Some(Ok(ref mut import)) = ctrl.last_spotify_import {
+                    for trk in &mut import.tracks {
+                        trk.local_track_id = Some(100);
+                        trk.local_path = Some("C:\\music\\done.flac".to_string());
+                    }
+                }
+                render_spotify_view(
+                    ui,
+                    &mut ctrl,
+                    &mut player,
+                    &theme,
+                    &mut state,
+                    &mut art_manager,
                     &mut on_navigate,
                 );
             });

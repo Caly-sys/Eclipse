@@ -1,6 +1,7 @@
 ﻿pub mod art;
 pub mod components;
 pub mod context_menu;
+pub mod downloads;
 pub mod fonts;
 pub mod icons;
 pub mod pip;
@@ -47,6 +48,7 @@ pub struct EclipseApp {
     pub search_query: String,
     pub focus_search: bool,
     pub show_queue: bool,
+    pub show_downloads: bool,
     pub songs_state: SongsViewState,
     pub albums_state: AlbumsViewState,
     pub artists_state: ArtistsViewState,
@@ -64,6 +66,8 @@ pub struct EclipseApp {
     pub track_context_menu: Option<TrackContextMenuState>,
     pub tray_manager: Option<tray::TrayManager>,
     pub is_window_visible: bool,
+    pub is_background_hidden: bool,
+    pub allow_exit: bool,
     pub is_exiting: bool,
     ipc_rx: Receiver<()>,
 }
@@ -119,6 +123,19 @@ impl EclipseApp {
             });
         }
 
+        let mut stream_controller = crate::streams::controller::StreamController::default();
+        if let Some(fmt) = crate::streams::DownloadFormat::from_ext(&cfg.streaming.preferred_download_format)
+            .or_else(|| match cfg.streaming.preferred_download_format.to_uppercase().as_str() {
+                "FLAC" => Some(crate::streams::DownloadFormat::Flac),
+                "MP3" => Some(crate::streams::DownloadFormat::Mp3),
+                "OPUS" => Some(crate::streams::DownloadFormat::Opus),
+                "M4A" => Some(crate::streams::DownloadFormat::M4a),
+                "WAV" => Some(crate::streams::DownloadFormat::Wav),
+                _ => None,
+            }) {
+            stream_controller.set_download_format(fmt);
+        }
+
         let mut app = Self {
             cfg,
             theme,
@@ -133,6 +150,7 @@ impl EclipseApp {
             search_query: String::new(),
             focus_search: false,
             show_queue: false,
+            show_downloads: false,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
@@ -140,7 +158,7 @@ impl EclipseApp {
             folders_state: FoldersViewState::default(),
             playlists_state: PlaylistsViewState::default(),
             streams_state: StreamsViewState::default(),
-            stream_controller: crate::streams::controller::StreamController::default(),
+            stream_controller,
             art_manager: art::AlbumArtManager::new(),
             scan_rx,
             scan_tx,
@@ -150,6 +168,8 @@ impl EclipseApp {
             track_context_menu: None,
             tray_manager,
             is_window_visible: true,
+            is_background_hidden: false,
+            allow_exit: false,
             is_exiting: false,
             ipc_rx,
         };
@@ -295,10 +315,20 @@ impl App for EclipseApp {
             }
         }
 
+        // Auto-dismiss in-app background banner whenever window is visible in foreground
+        if self.is_window_visible && !self.is_background_hidden {
+            if let Some((ref msg, _)) = self.status_msg {
+                if msg.contains("playing in background") {
+                    self.status_msg = None;
+                }
+            }
+        }
+
         // High frame rate during playback for smooth spectrum visualizer and PiP overlay
         let is_stream_playing = self.stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false);
         if self.player.engine.is_playing()
             || (self.player.playback_source.is_stream() && is_stream_playing)
+            || self.player.is_buffering_stream
             || self.is_scanning
             || self.cfg.pip.enabled
         {
@@ -306,11 +336,45 @@ impl App for EclipseApp {
         }
 
         self.player.update();
+        if let Some(stream_track) = self.player.take_pending_stream_play() {
+            self.stream_controller.play_stream_track(stream_track);
+        }
         self.art_manager.update(ctx);
 
         let stream_events = self.stream_controller.update();
         for event in stream_events {
             match event {
+                crate::streams::controller::StreamEvent::StreamPlaybackReady {
+                    spotify_id: _,
+                    cache_path,
+                    track,
+                } => {
+                    self.player.is_buffering_stream = false;
+                    if let Some(curr_idx) = self.player.current_index {
+                        if let Some(curr_track) = self.player.queue.get_mut(curr_idx) {
+                            curr_track.path = cache_path.to_string_lossy().to_string();
+                        }
+                    }
+                    self.player.switch_to_stream("spotify", Some(track.clone()));
+                    let _ = self.player.engine.play_file(&cache_path, track.duration_secs);
+                    self.set_status(&format!("Streaming '{}' via {}", track.display_title(), track.provider));
+                }
+                crate::streams::controller::StreamEvent::DownloadCompleted {
+                    job_id: _,
+                    path,
+                    local_track_id: _,
+                    sample_rate,
+                    bit_depth,
+                } => {
+                    let path_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("track");
+                    let spec_str = if sample_rate > 0 {
+                        format!(" ({} kHz / {}-bit)", sample_rate / 1000, bit_depth)
+                    } else {
+                        String::new()
+                    };
+                    self.set_status(&format!("Downloaded '{}'{}", path_name, spec_str));
+                    self.reload_data();
+                }
                 crate::streams::controller::StreamEvent::TrackStarted { provider_id, track } => {
                     self.player.switch_to_stream(&provider_id, Some(track.clone()));
                     self.set_status(&format!("Playing '{}' via {}", track.display_title(), provider_id));
@@ -365,6 +429,7 @@ impl App for EclipseApp {
                     self.set_status(&format!("Match updated for {spotify_id}: {}", matched.title));
                 }
                 crate::streams::controller::StreamEvent::Error { provider_id, action, message } => {
+                    self.player.is_buffering_stream = false;
                     self.set_status(&format!("{provider_id} error ({action}): {message}"));
                 }
                 _ => {}
@@ -386,6 +451,7 @@ impl App for EclipseApp {
         // Keyboard shortcuts listener
         let shortcut = shortcuts::handle_shortcuts(ctx, &mut self.player, Some(&self.stream_controller));
         if shortcut.exit_app {
+            self.allow_exit = true;
             self.is_exiting = true;
             self.on_exit(None);
             std::process::exit(0);
@@ -400,11 +466,15 @@ impl App for EclipseApp {
         // Secondary instance IPC signal: Re-open window if user launches Eclipse again
         if self.ipc_rx.try_recv().is_ok() {
             self.is_window_visible = true;
+            self.is_background_hidden = false;
             #[cfg(windows)]
             tray::show_window_native();
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if self.status_msg.as_ref().map(|(m, _)| m.contains("playing in background")).unwrap_or(false) {
+                self.status_msg = None;
+            }
             ctx.request_repaint();
         }
 
@@ -415,11 +485,15 @@ impl App for EclipseApp {
                 match action {
                     tray::TrayAction::Show => {
                         self.is_window_visible = true;
+                        self.is_background_hidden = false;
                         #[cfg(windows)]
                         tray::show_window_native();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                        if self.status_msg.as_ref().map(|(m, _)| m.contains("playing in background")).unwrap_or(false) {
+                            self.status_msg = None;
+                        }
                         ctx.request_repaint();
                     }
                     tray::TrayAction::TogglePlay => {
@@ -468,6 +542,7 @@ impl App for EclipseApp {
         }
 
         if exit_from_tray {
+            self.allow_exit = true;
             self.is_exiting = true;
             self.on_exit(None);
             std::process::exit(0);
@@ -539,12 +614,14 @@ impl App for EclipseApp {
                         &mut on_back,
                         &mut on_forward,
                         &mut on_close,
+                        self.stream_controller.active_downloads_count(),
+                        &mut self.show_downloads,
                     );
                 });
 
             // Toast / Status Message bar
             if let Some((ref msg, time)) = self.status_msg {
-                if time.elapsed().as_secs() < 4 {
+                if !msg.contains("playing in background") && time.elapsed().as_secs() < 4 {
                     ui.add_space(2.0);
                     egui::Frame::none()
                         .inner_margin(egui::Margin::symmetric(14.0, 0.0))
@@ -854,6 +931,7 @@ impl App for EclipseApp {
                                         &playlist_tracks,
                                         &mut self.playlists_state,
                                         &mut self.player,
+                                        &mut self.stream_controller,
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
@@ -884,6 +962,7 @@ impl App for EclipseApp {
                                         &playlist_tracks,
                                         &mut self.playlists_state,
                                         &mut self.player,
+                                        &mut self.stream_controller,
                                         &self.theme,
                                         &mut self.art_manager,
                                         &mut on_toggle_fav,
@@ -1014,10 +1093,13 @@ impl App for EclipseApp {
             );
 
             // 3. BOTTOM PLAYERBAR DOCKED (spans 100% full width across window)
+            let pb_w = ui.available_width();
             ui.allocate_ui_with_layout(
-                vec2(ui.available_width(), playerbar_h),
+                vec2(pb_w, playerbar_h),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_width(pb_w);
+                    ui.set_min_width(pb_w);
                     playerbar::render_playerbar(
                         ui,
                         &mut self.player,
@@ -1230,27 +1312,59 @@ impl App for EclipseApp {
             }
         }
 
-        // Handle window close: if close_to_tray is enabled, hide window and keep playing in background!
+        // Render Top-Right Floating Downloads Queue / History Popover
+        downloads::render_downloads_popover(
+            ctx,
+            &mut self.stream_controller,
+            &mut self.player,
+            &self.theme,
+            &mut self.show_downloads,
+        );
+
+        // Handle window close & hide-to-tray logic
         if on_close || ctx.input(|i| i.viewport().close_requested()) {
-            if !self.is_exiting && self.cfg.appearance.close_to_tray {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.is_window_visible = false;
-                #[cfg(windows)]
-                tray::hide_window_native();
-                // Note: Do NOT call egui::ViewportCommand::Visible(false) here because eframe
-                // suppresses App::update() when the viewport is marked invisible, which would
-                // prevent background audio progression, tray actions, and IPC wakeup signals.
-                // Win32 ShowWindow(SW_HIDE) already hides the window from the display and taskbar.
-                self.set_status("Eclipse is playing in background. Click tray icon to open.");
-            } else {
+            if self.allow_exit {
                 self.is_exiting = true;
                 self.on_exit(None);
+                std::process::exit(0);
+            }
+
+            let is_playing = self.player.engine.is_playing()
+                || (self.player.playback_source.is_stream()
+                    && self.stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false));
+
+            let tray_available = self.tray_manager.is_some() && self.cfg.appearance.close_to_tray;
+
+            if is_playing && tray_available {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.is_window_visible = false;
+                self.is_background_hidden = true;
+
+                #[cfg(windows)]
+                let hide_success = tray::hide_window_native();
+                #[cfg(not(windows))]
+                let hide_success = false;
+
+                if !hide_success {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                }
+
+                if self.status_msg.as_ref().map(|(m, _)| m.contains("playing in background")).unwrap_or(false) {
+                    self.status_msg = None;
+                }
+            } else {
+                // If audio is NOT playing, or hiding fails / tray is disabled:
+                // Cleanly exit application so the user is never stuck inside an uncloseable window!
+                self.allow_exit = true;
+                self.is_exiting = true;
+                self.on_exit(None);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 std::process::exit(0);
             }
         }
 
         // When window is hidden in background, keep audio loop, tray events, and queue progression ticking
-        if !self.is_window_visible {
+        if self.is_background_hidden || !self.is_window_visible {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
     }
@@ -1271,6 +1385,9 @@ impl App for EclipseApp {
         self.cfg.queue_is_shuffled = self.player.shuffle;
         self.cfg.queue_pos = self.player.queue_pos;
         self.cfg.user_queue = self.player.user_queue.iter().copied().collect();
+
+        // Persist preferred download format
+        self.cfg.streaming.preferred_download_format = self.stream_controller.selected_download_format.label().to_string();
 
         let _ = self.cfg.save();
     }
@@ -1362,6 +1479,7 @@ mod tests {
             search_query: String::new(),
             focus_search: false,
             show_queue: false,
+            show_downloads: false,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
@@ -1379,6 +1497,8 @@ mod tests {
             track_context_menu: None,
             tray_manager: None,
             is_window_visible: true,
+            is_background_hidden: false,
+            allow_exit: false,
             is_exiting: false,
             ipc_rx,
         };
@@ -1438,5 +1558,83 @@ mod tests {
         // Verify engine seek error is cleared
         app.player.engine.clear_seek_error();
         assert!(app.player.engine.last_seek_error().is_none(), "last_seek_error must be None after clearance");
+    }
+
+    #[test]
+    fn test_window_close_logic_and_tray_hiding_states() {
+        let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+        let cfg = AppConfig::default();
+
+        let mut app = EclipseApp {
+            cfg: cfg.clone(),
+            theme: Theme::from_name(&cfg.theme, None),
+            db: Database::open_in_memory().unwrap(),
+            player: PlayerController::new(&cfg),
+            tracks: Vec::new(),
+            playlists: Vec::new(),
+            recent_history: Vec::new(),
+            current_tab: NavTab::Home,
+            nav_history: vec![NavTab::Home],
+            nav_history_idx: 0,
+            search_query: String::new(),
+            focus_search: false,
+            show_queue: false,
+            show_downloads: false,
+            songs_state: SongsViewState::default(),
+            albums_state: AlbumsViewState::default(),
+            artists_state: ArtistsViewState::default(),
+            genres_state: GenresViewState::default(),
+            folders_state: FoldersViewState::default(),
+            playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
+            art_manager: art::AlbumArtManager::new(),
+            scan_rx,
+            scan_tx,
+            is_scanning: false,
+            status_msg: None,
+            last_active_track_id: None,
+            track_context_menu: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_background_hidden: false,
+            allow_exit: false,
+            is_exiting: false,
+            ipc_rx,
+        };
+
+        // 1. Initial state: window visible, not hidden in background, allow_exit false
+        assert!(app.is_window_visible);
+        assert!(!app.is_background_hidden);
+        assert!(!app.allow_exit);
+
+        // 2. Banner auto-dismissal when window is visible in foreground
+        app.set_status("Eclipse is playing in background. Click tray icon to open.");
+        assert!(app.status_msg.is_some());
+        if app.is_window_visible && !app.is_background_hidden {
+            if let Some((ref msg, _)) = app.status_msg {
+                if msg.contains("playing in background") {
+                    app.status_msg = None;
+                }
+            }
+        }
+        assert!(app.status_msg.is_none(), "Background banner must be auto-dismissed when window is in foreground");
+
+        // 3. Tray restore resets is_background_hidden and sets is_window_visible
+        app.is_background_hidden = true;
+        app.is_window_visible = false;
+        app.set_status("Eclipse is playing in background. Click tray icon to open.");
+
+        // Simulate TrayAction::Show
+        app.is_window_visible = true;
+        app.is_background_hidden = false;
+        if app.status_msg.as_ref().map(|(m, _)| m.contains("playing in background")).unwrap_or(false) {
+            app.status_msg = None;
+        }
+
+        assert!(app.is_window_visible);
+        assert!(!app.is_background_hidden);
+        assert!(app.status_msg.is_none());
     }
 }

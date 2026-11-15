@@ -274,13 +274,15 @@ pub fn resolve_or_cached_match(
         });
     }
 
-    // 2. Resolve on-demand via YouTube Data API
-    let key = api_key
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| MISSING_KEY_ERROR_MESSAGE.to_string())?;
-
-    let matched = resolve_youtube_match(key, &track.artist, &track.title)?;
+    // 2. Resolve on-demand: try YouTube Data API if key configured, else key-less fallback
+    let matched = if let Some(key) = api_key.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        match resolve_youtube_match(key, &track.artist, &track.title) {
+            Ok(m) => m,
+            Err(_) => crate::streams::downloader::resolve_youtube_match_keyless(&track.artist, &track.title)?,
+        }
+    } else {
+        crate::streams::downloader::resolve_youtube_match_keyless(&track.artist, &track.title)?
+    };
 
     // 3. Cache pairing in SQLite for instant future plays
     let _ = db.set_stream_match(
