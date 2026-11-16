@@ -129,6 +129,7 @@ pub fn scan_directories(folders: &[String], db: &Database) -> (usize, usize) {
     let mut total_scanned = 0;
     let mut added_or_updated = 0;
     let mut batch = Vec::with_capacity(150);
+    let mut missing_genres_found = false;
 
     for folder in folders {
         let p = Path::new(folder);
@@ -144,6 +145,9 @@ pub fn scan_directories(folders: &[String], db: &Database) -> (usize, usize) {
                     if AUDIO_EXTENSIONS.contains(&ext_lower.as_str()) {
                         total_scanned += 1;
                         if let Some(track) = inspect_audio_file(path) {
+                            if crate::library::genre_fetcher::is_missing_or_unknown_genre(&track.genre) {
+                                missing_genres_found = true;
+                            }
                             batch.push(track);
                             if batch.len() >= 150 {
                                 if let Ok(n) = db.upsert_tracks_batch(&batch) {
@@ -163,6 +167,11 @@ pub fn scan_directories(folders: &[String], db: &Database) -> (usize, usize) {
             added_or_updated += n;
         }
         batch.clear();
+    }
+
+    // Trigger self-healing genre resolution for any discovered tracks with missing genres
+    if missing_genres_found {
+        crate::library::genre_fetcher::start_genre_backfill(std::sync::Arc::new(db.clone()));
     }
 
     (total_scanned, added_or_updated)

@@ -294,6 +294,18 @@ pub fn tag_audio_file(
     album: &str,
     art_bytes: Option<&[u8]>,
 ) -> Result<(), String> {
+    tag_audio_file_with_genre(path, title, artist, album, art_bytes, None)
+}
+
+/// Tag an audio file with Title, Artist, Album, Genre, and optional Front Cover Art using lofty.
+pub fn tag_audio_file_with_genre(
+    path: &Path,
+    title: &str,
+    artist: &str,
+    album: &str,
+    art_bytes: Option<&[u8]>,
+    genre: Option<&str>,
+) -> Result<(), String> {
     let mut tagged_file = Probe::open(path)
         .map_err(|e| format!("Failed to open file for tagging: {e}"))?
         .read()
@@ -319,6 +331,12 @@ pub fn tag_audio_file(
     if !album.trim().is_empty() {
         tag.set_album(album.to_string());
     }
+    if let Some(g) = genre {
+        let trimmed = g.trim();
+        if !trimmed.is_empty() {
+            tag.set_genre(trimmed.to_string());
+        }
+    }
 
     if let Some(art) = art_bytes {
         if !art.is_empty() {
@@ -340,6 +358,7 @@ pub fn tag_audio_file(
 
 /// Tag a downloaded audio file from a StreamTrack and optional cover art bytes using lofty.
 /// If cover art is not provided or empty, falls back to fetching missing cover art online.
+/// Resolves missing genre online via genre_fetcher before persisting tags.
 pub fn tag_downloaded_file(
     path: &Path,
     track: &StreamTrack,
@@ -358,12 +377,15 @@ pub fn tag_downloaded_file(
         }
     };
 
-    tag_audio_file(
+    let genre = crate::library::genre_fetcher::fetch_track_genre(&track.artist, &track.title);
+
+    tag_audio_file_with_genre(
         path,
         &track.title,
         &track.artist,
         &track.album,
         art_bytes,
+        genre.as_deref(),
     )
 }
 
@@ -687,9 +709,26 @@ pub fn index_downloaded_track(
         }
     }
 
+    // Populate genre if missing or unknown prior to SQLite insertion
+    if crate::library::genre_fetcher::is_missing_or_unknown_genre(&inspected.genre) {
+        if let Some(genre) =
+            crate::library::genre_fetcher::fetch_track_genre(&inspected.artist, &inspected.title)
+        {
+            let trimmed = genre.trim();
+            if !trimmed.is_empty() {
+                inspected.genre = trimmed.to_string();
+                let _ = crate::library::genre_fetcher::embed_genre_in_file(path, trimmed);
+            }
+        }
+    }
+
     let track_id = db
         .insert_track(&inspected)
         .map_err(|e| format!("Failed to insert track into SQLite library: {e}"))?;
+
+    if !inspected.genre.is_empty() {
+        let _ = db.update_track_genre(track_id, &inspected.genre);
+    }
 
     // Auto-link any playlist references to this newly downloaded local file
     auto_link_downloaded_track_to_playlists(db, path, track, track_id, format);

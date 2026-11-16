@@ -330,6 +330,7 @@ impl App for EclipseApp {
             || (self.player.playback_source.is_stream() && is_stream_playing)
             || self.player.is_buffering_stream
             || self.is_scanning
+            || crate::library::genre_fetcher::is_genre_fetch_running()
             || self.cfg.pip.enabled
         {
             ctx.request_repaint();
@@ -580,6 +581,7 @@ impl App for EclipseApp {
         let mut on_play_track = None;
         let mut on_create_playlist = None;
         let mut on_delete_playlist = None;
+        let mut on_refresh_library = false;
         let mut toggle_now_playing = false;
         let mut on_navigate = None;
         let mut on_close = false;
@@ -782,6 +784,8 @@ impl App for EclipseApp {
                                         &mut self.genres_state,
                                         &mut self.player,
                                         &self.theme,
+                                        &self.db,
+                                        &mut on_refresh_library,
                                     );
                                 }
                                 NavTab::Folders => {
@@ -1145,6 +1149,10 @@ impl App for EclipseApp {
         if on_theme_changed {
             self.theme = Theme::from_name(&self.cfg.theme, Some(self.cfg.accent_color));
             let _ = self.cfg.save();
+        }
+
+        if on_refresh_library {
+            self.reload_data();
         }
 
         if let Some(track_id) = on_toggle_fav {

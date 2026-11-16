@@ -33,6 +33,8 @@ pub struct Database {
     conn: Arc<Mutex<Connection>>,
 }
 
+pub type LibraryDatabase = Database;
+
 impl Database {
     fn init_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
@@ -354,6 +356,86 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn update_track_genre(&self, track_id: i64, genre: &str) -> Result<()> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE tracks SET genre = ?1 WHERE id = ?2",
+            params![genre, track_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_tracks_with_missing_genre(&self) -> Result<Vec<Track>> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
+                    COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
+                    COALESCE(duration,0.0), COALESCE(bitrate,0), COALESCE(samplerate,0),
+                    COALESCE(channels,2), COALESCE(codec,''), COALESCE(filesize,0),
+                    COALESCE(play_count,0), COALESCE(favorite,0), COALESCE(has_art,0), COALESCE(folder,'')
+             FROM tracks
+             WHERE genre IS NULL 
+                OR TRIM(genre) = '' 
+                OR LOWER(TRIM(genre)) = 'unknown' 
+                OR LOWER(TRIM(genre)) = 'unknown genre'
+             ORDER BY id ASC",
+        )?;
+
+        let rows = stmt.query_map([], map_track_row)?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn get_all_genres_with_counts(&self) -> Result<Vec<(String, usize)>> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT TRIM(genre) AS g, COUNT(*) AS cnt
+             FROM tracks
+             WHERE genre IS NOT NULL 
+               AND TRIM(genre) != '' 
+               AND LOWER(TRIM(genre)) != 'unknown' 
+               AND LOWER(TRIM(genre)) != 'unknown genre'
+             GROUP BY LOWER(TRIM(genre))
+             ORDER BY cnt DESC, g COLLATE NOCASE ASC",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let genre: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((genre, count as usize))
+        })?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
+    }
+
+    pub fn get_tracks_by_genre(&self, genre: &str) -> Result<Vec<Track>> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
+                    COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
+                    COALESCE(duration,0.0), COALESCE(bitrate,0), COALESCE(samplerate,0),
+                    COALESCE(channels,2), COALESCE(codec,''), COALESCE(filesize,0),
+                    COALESCE(play_count,0), COALESCE(favorite,0), COALESCE(has_art,0), COALESCE(folder,'')
+             FROM tracks
+             WHERE LOWER(TRIM(genre)) = LOWER(TRIM(?1))
+             ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, track ASC",
+        )?;
+
+        let rows = stmt.query_map(params![genre], map_track_row)?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
     }
 
     pub fn get_playlists(&self) -> Result<Vec<Playlist>> {
@@ -1068,6 +1150,108 @@ mod tests {
         db.update_track_has_art("C:\\music\\art_test.flac", false)?;
         let reverted = db.get_track_by_path("C:\\music\\art_test.flac")?.expect("found reverted track");
         assert!(!reverted.has_art);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_genre_queries() -> Result<()> {
+        let db = Database::open_in_memory()?;
+        let track1 = Track {
+            id: 0,
+            path: "C:\\music\\t1.flac".to_string(),
+            title: "Track 1".to_string(),
+            artist: "Artist 1".to_string(),
+            album_artist: "".to_string(),
+            album: "Album 1".to_string(),
+            genre: "".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 180.0,
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 1024,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "C:\\music".to_string(),
+        };
+        let track2 = Track {
+            id: 0,
+            path: "C:\\music\\t2.flac".to_string(),
+            title: "Track 2".to_string(),
+            artist: "Artist 2".to_string(),
+            album_artist: "".to_string(),
+            album: "Album 2".to_string(),
+            genre: "Unknown".to_string(),
+            year: 2024,
+            track_number: 2,
+            duration_secs: 200.0,
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 1024,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "C:\\music".to_string(),
+        };
+        let track3 = Track {
+            id: 0,
+            path: "C:\\music\\t3.flac".to_string(),
+            title: "Track 3".to_string(),
+            artist: "Artist 3".to_string(),
+            album_artist: "".to_string(),
+            album: "Album 3".to_string(),
+            genre: "Rock".to_string(),
+            year: 2024,
+            track_number: 3,
+            duration_secs: 220.0,
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 1024,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "C:\\music".to_string(),
+        };
+
+        let id1 = db.upsert_track(&track1)?;
+        let id2 = db.upsert_track(&track2)?;
+        let id3 = db.upsert_track(&track3)?;
+        assert!(id3 > 0);
+
+        // Check missing genres
+        let missing = db.get_tracks_with_missing_genre()?;
+        assert_eq!(missing.len(), 2);
+        assert!(missing.iter().any(|t| t.id == id1));
+        assert!(missing.iter().any(|t| t.id == id2));
+
+        // Update genre
+        db.update_track_genre(id1, "Rock")?;
+        db.update_track_genre(id2, "J-Pop")?;
+
+        let missing_after = db.get_tracks_with_missing_genre()?;
+        assert_eq!(missing_after.len(), 0);
+
+        // Get genres with counts
+        let counts = db.get_all_genres_with_counts()?;
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts[0], ("Rock".to_string(), 2));
+        assert_eq!(counts[1], ("J-Pop".to_string(), 1));
+
+        // Get tracks by genre
+        let rock_tracks = db.get_tracks_by_genre("rock")?;
+        assert_eq!(rock_tracks.len(), 2);
+
+        let jpop_tracks = db.get_tracks_by_genre("J-Pop")?;
+        assert_eq!(jpop_tracks.len(), 1);
+        assert_eq!(jpop_tracks[0].id, id2);
 
         Ok(())
     }
