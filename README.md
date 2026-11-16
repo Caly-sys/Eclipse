@@ -4,6 +4,9 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 
 > **Project Status**: **Beta** — Local audio playback is fully functional; streaming features and link importing are in active development, And Theres still many Bugs Im trying to fix them as fast as i can.
 
+### Known Bugs
+- Sometime The metadata is readed wrong and the Cover is wrong
+
 ---
 
 ## ✦ Preview

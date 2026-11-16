@@ -339,17 +339,31 @@ pub fn tag_audio_file(
 }
 
 /// Tag a downloaded audio file from a StreamTrack and optional cover art bytes using lofty.
+/// If cover art is not provided or empty, falls back to fetching missing cover art online.
 pub fn tag_downloaded_file(
     path: &Path,
     track: &StreamTrack,
     cover_art: Option<&[u8]>,
 ) -> Result<(), String> {
+    let fallback_art;
+    let art_bytes = match cover_art {
+        Some(bytes) if !bytes.is_empty() => Some(bytes),
+        _ => {
+            fallback_art = crate::library::art_fetcher::fetch_missing_cover_art(
+                &track.artist,
+                &track.title,
+                &track.album,
+            );
+            fallback_art.as_deref()
+        }
+    };
+
     tag_audio_file(
         path,
         &track.title,
         &track.artist,
         &track.album,
-        cover_art,
+        art_bytes,
     )
 }
 
@@ -1010,7 +1024,7 @@ fn spawn_download_worker(
             // Stage 3: Tagging
             update_job_status(DownloadStatus::Tagging);
 
-            let art_bytes = track.art_url.as_ref().and_then(|url| {
+            let mut art_bytes = track.art_url.as_ref().and_then(|url| {
                 ureq::get(url)
                     .timeout(std::time::Duration::from_secs(8))
                     .call()
@@ -1021,6 +1035,15 @@ fn spawn_download_worker(
                         resp.into_reader().read_to_end(&mut buf).ok().map(|_| buf)
                     })
             });
+
+            // If track.art_url is None or failed to download, query online art fetcher fallback
+            if art_bytes.is_none() {
+                art_bytes = crate::library::art_fetcher::fetch_missing_cover_art(
+                    &track.artist,
+                    &track.title,
+                    &track.album,
+                );
+            }
 
             if let Err(e) = tag_downloaded_file(&final_path, &track, art_bytes.as_deref()) {
                 eprintln!("[WARN] Failed to tag audio file: {e}");

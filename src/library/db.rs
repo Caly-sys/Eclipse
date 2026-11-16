@@ -328,6 +328,34 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_track_has_art(&self, path: &str, has_art: bool) -> Result<()> {
+        let conn = self.lock_conn();
+        conn.execute(
+            "UPDATE tracks SET has_art = ?1 WHERE path = ?2",
+            params![has_art as i32, path],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_track_by_path(&self, path: &str) -> Result<Option<Track>> {
+        let conn = self.lock_conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, COALESCE(title,''), COALESCE(artist,''), COALESCE(albumartist,''),
+                    COALESCE(album,''), COALESCE(genre,''), COALESCE(year,0), COALESCE(track,0),
+                    COALESCE(duration,0.0), COALESCE(bitrate,0), COALESCE(samplerate,0),
+                    COALESCE(channels,2), COALESCE(codec,''), COALESCE(filesize,0),
+                    COALESCE(play_count,0), COALESCE(favorite,0), COALESCE(has_art,0), COALESCE(folder,'')
+             FROM tracks WHERE path = ?1",
+        )?;
+
+        let mut rows = stmt.query_map(params![path], map_track_row)?;
+        if let Some(track) = rows.next() {
+            Ok(Some(track?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn get_playlists(&self) -> Result<Vec<Playlist>> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
@@ -1001,6 +1029,45 @@ mod tests {
         db.clear_stream_match_cache()?;
         assert_eq!(db.get_stream_match("s1")?, None);
         assert_eq!(db.get_stream_match("s2")?, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_track_has_art() -> Result<()> {
+        let db = Database::open_in_memory()?;
+        let track = Track {
+            id: 0,
+            path: "C:\\music\\art_test.flac".to_string(),
+            title: "Art Test Track".to_string(),
+            artist: "Artist".to_string(),
+            album_artist: "".to_string(),
+            album: "Album".to_string(),
+            genre: "".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 180.0,
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 1024,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "C:\\music".to_string(),
+        };
+        db.upsert_track(&track)?;
+        let loaded = db.get_track_by_path("C:\\music\\art_test.flac")?.expect("found track");
+        assert!(!loaded.has_art);
+
+        db.update_track_has_art("C:\\music\\art_test.flac", true)?;
+        let updated = db.get_track_by_path("C:\\music\\art_test.flac")?.expect("found updated track");
+        assert!(updated.has_art);
+
+        db.update_track_has_art("C:\\music\\art_test.flac", false)?;
+        let reverted = db.get_track_by_path("C:\\music\\art_test.flac")?.expect("found reverted track");
+        assert!(!reverted.has_art);
 
         Ok(())
     }

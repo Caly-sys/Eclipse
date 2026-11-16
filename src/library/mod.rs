@@ -1,8 +1,9 @@
-﻿pub mod db;
+﻿pub mod art_fetcher;
+pub mod db;
 pub mod model;
 pub mod scanner;
 
+pub use art_fetcher::{fetch_missing_cover_art, queue_art_backfill};
 pub use db::Database;
 pub use model::{format_time_secs, Playlist, Track};
 pub use scanner::{load_cached_album_art, scan_directories};
-

@@ -2,11 +2,154 @@ use crate::library::scanner::get_or_extract_cover_art;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 const MAX_TEXTURE_CACHE_SIZE: usize = 200;
+
+/// Directory for persistent cache of downloaded stream & remote artwork.
+pub fn stream_art_cache_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join("eclipse_art_cache");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Helper to decode raw image bytes (PNG, JPEG, WebP) and downsample to 512x512.
+pub fn decode_image_bytes(bytes: &[u8]) -> Option<ColorImage> {
+    let dyn_img = image::load_from_memory(bytes).ok()?;
+    let resized = if dyn_img.width() > 512 || dyn_img.height() > 512 {
+        dyn_img.thumbnail(512, 512)
+    } else {
+        dyn_img
+    };
+    let rgba = resized.to_rgba8();
+    let size = [rgba.width() as usize, rgba.height() as usize];
+    Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
+}
+
+/// Extract clean Spotify resource kind and ID from a URI or URL.
+/// Handles `stream:spotify:{id}`, `stream:spotify:track:{id}`, `spotify:track:{id}`, `spotify:{id}`, etc.
+pub fn parse_spotify_track_id(input: &str) -> Option<(&'static str, &str)> {
+    let (res_type, id_part) = if let Some(rest) = input.strip_prefix("stream:spotify:") {
+        if let Some(t_id) = rest.strip_prefix("track:") {
+            ("track", t_id)
+        } else if let Some(a_id) = rest.strip_prefix("album:") {
+            ("album", a_id)
+        } else if let Some(p_id) = rest.strip_prefix("playlist:") {
+            ("playlist", p_id)
+        } else {
+            ("track", rest)
+        }
+    } else {
+        let rest = input.strip_prefix("spotify:")?;
+        if let Some(t_id) = rest.strip_prefix("track:") {
+            ("track", t_id)
+        } else if let Some(a_id) = rest.strip_prefix("album:") {
+            ("album", a_id)
+        } else if let Some(p_id) = rest.strip_prefix("playlist:") {
+            ("playlist", p_id)
+        } else {
+            ("track", rest)
+        }
+    };
+
+    let clean_id = id_part.split('?').next().unwrap_or(id_part).trim().trim_matches('/');
+    if clean_id.is_empty() {
+        None
+    } else {
+        Some((res_type, clean_id))
+    }
+}
+
+/// Resolves artwork for Spotify tracks/albums/playlists via disk cache or public oEmbed.
+pub fn resolve_spotify_artwork(path: &str) -> Option<Vec<u8>> {
+    let (res_type, id) = parse_spotify_track_id(path)?;
+    let cache_dir = stream_art_cache_dir();
+
+    // 1. Check if cached thumbnail file already exists on disk in temp/eclipse_art_cache
+    let cache_file = cache_dir.join(format!("spotify_{id}.img"));
+    if cache_file.is_file() {
+        if let Ok(bytes) = std::fs::read(&cache_file) {
+            if !bytes.is_empty() {
+                return Some(bytes);
+            }
+        }
+    }
+
+    // Also check other potential image extensions
+    for ext in &["jpg", "jpeg", "png", "webp"] {
+        let alt = cache_dir.join(format!("spotify_{id}.{ext}"));
+        if alt.is_file() {
+            if let Ok(bytes) = std::fs::read(&alt) {
+                if !bytes.is_empty() {
+                    return Some(bytes);
+                }
+            }
+        }
+    }
+
+    // 2. Fetch public metadata asynchronously via official oEmbed
+    let oembed_url = format!("https://open.spotify.com/oembed?url=https://open.spotify.com/{res_type}/{id}");
+    let resp = ureq::get(&oembed_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .ok()?;
+
+    let json_val: serde_json::Value = resp.into_json().ok()?;
+    let thumb_url = json_val.get("thumbnail_url")?.as_str()?;
+
+    // 3. Download image bytes
+    let img_resp = ureq::get(thumb_url)
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .ok()?;
+
+    let mut bytes = Vec::new();
+    img_resp.into_reader().read_to_end(&mut bytes).ok()?;
+
+    if !bytes.is_empty() {
+        let _ = std::fs::write(&cache_file, &bytes);
+        Some(bytes)
+    } else {
+        None
+    }
+}
+
+/// Resolves remote HTTP/HTTPS artwork with disk caching in eclipse_art_cache.
+pub fn resolve_remote_url_artwork(url: &str) -> Option<Vec<u8>> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let cache_dir = stream_art_cache_dir();
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    let hash = hasher.finish();
+    let cache_file = cache_dir.join(format!("remote_{:016x}.img", hash));
+
+    if cache_file.is_file() {
+        if let Ok(bytes) = std::fs::read(&cache_file) {
+            if !bytes.is_empty() {
+                return Some(bytes);
+            }
+        }
+    }
+
+    let resp = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(5))
+        .call()
+        .ok()?;
+
+    let mut bytes = Vec::new();
+    resp.into_reader().read_to_end(&mut bytes).ok()?;
+
+    if !bytes.is_empty() {
+        let _ = std::fs::write(&cache_file, &bytes);
+        Some(bytes)
+    } else {
+        None
+    }
+}
 
 pub struct AlbumArtManager {
     textures: HashMap<String, TextureHandle>,
@@ -31,40 +174,19 @@ impl AlbumArtManager {
         // Dedicated background decoding worker thread to keep UI thread at 60 FPS
         thread::spawn(move || {
             while let Ok(track_path) = req_rx.recv() {
-                let maybe_img = if track_path.starts_with("http://") || track_path.starts_with("https://") {
-                    let bytes = ureq::get(&track_path)
-                        .timeout(std::time::Duration::from_secs(4))
-                        .call()
-                        .ok()
-                        .and_then(|resp| {
-                            let mut buf = Vec::new();
-                            resp.into_reader().read_to_end(&mut buf).ok().map(|_| buf)
-                        });
-                    bytes.and_then(|b| {
-                        let dyn_img = image::load_from_memory(&b).ok()?;
-                        let resized = if dyn_img.width() > 512 || dyn_img.height() > 512 {
-                            dyn_img.thumbnail(512, 512)
-                        } else {
-                            dyn_img
-                        };
-                        let rgba = resized.to_rgba8();
-                        let size = [rgba.width() as usize, rgba.height() as usize];
-                        Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
-                    })
+                let maybe_img = if track_path.starts_with("stream:spotify:") || track_path.starts_with("spotify:") {
+                    // Spotify streaming URI: resolve via oEmbed/disk cache, do NOT open as local file
+                    resolve_spotify_artwork(&track_path).and_then(|b| decode_image_bytes(&b))
+                } else if track_path.starts_with("stream:") {
+                    // Other non-Spotify stream URI: do NOT call std::fs::File::open
+                    None
+                } else if track_path.starts_with("http://") || track_path.starts_with("https://") {
+                    // Remote HTTP/HTTPS image URL: cache to disk and load
+                    resolve_remote_url_artwork(&track_path).and_then(|b| decode_image_bytes(&b))
                 } else {
+                    // Local audio file path
                     let path = Path::new(&track_path);
-                    get_or_extract_cover_art(path).and_then(|bytes| {
-                        let dyn_img = image::load_from_memory(&bytes).ok()?;
-                        // Downsample to max 512x512 to preserve GPU memory
-                        let resized = if dyn_img.width() > 512 || dyn_img.height() > 512 {
-                            dyn_img.thumbnail(512, 512)
-                        } else {
-                            dyn_img
-                        };
-                        let rgba = resized.to_rgba8();
-                        let size = [rgba.width() as usize, rgba.height() as usize];
-                        Some(ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()))
-                    })
+                    get_or_extract_cover_art(path).and_then(|b| decode_image_bytes(&b))
                 };
 
                 let _ = res_tx.send((track_path, maybe_img));
@@ -189,5 +311,51 @@ mod tests {
         let decoded = image::load_from_memory(&png_bytes).expect("Failed to decode png");
         assert_eq!(decoded.width(), 4);
         assert_eq!(decoded.height(), 4);
+
+        let color_img = decode_image_bytes(&png_bytes).expect("Failed to decode_image_bytes");
+        assert_eq!(color_img.width(), 4);
+        assert_eq!(color_img.height(), 4);
+    }
+
+    #[test]
+    fn test_parse_spotify_track_id() {
+        assert_eq!(
+            parse_spotify_track_id("stream:spotify:4cOdK2wGLETKBW3PvgPWqT"),
+            Some(("track", "4cOdK2wGLETKBW3PvgPWqT"))
+        );
+        assert_eq!(
+            parse_spotify_track_id("stream:spotify:track:4cOdK2wGLETKBW3PvgPWqT"),
+            Some(("track", "4cOdK2wGLETKBW3PvgPWqT"))
+        );
+        assert_eq!(
+            parse_spotify_track_id("spotify:track:4cOdK2wGLETKBW3PvgPWqT"),
+            Some(("track", "4cOdK2wGLETKBW3PvgPWqT"))
+        );
+        assert_eq!(
+            parse_spotify_track_id("spotify:album:1A2B3C4D5E"),
+            Some(("album", "1A2B3C4D5E"))
+        );
+        assert_eq!(
+            parse_spotify_track_id("stream:spotify:playlist:1A2B3C4D5E"),
+            Some(("playlist", "1A2B3C4D5E"))
+        );
+        assert_eq!(
+            parse_spotify_track_id("stream:spotify:4cOdK2wGLETKBW3PvgPWqT?si=abc123xyz"),
+            Some(("track", "4cOdK2wGLETKBW3PvgPWqT"))
+        );
+        assert_eq!(parse_spotify_track_id("stream:youtube:dQw4w9WgXcQ"), None);
+        assert_eq!(parse_spotify_track_id("C:\\music\\song.flac"), None);
+    }
+
+    #[test]
+    fn test_stream_art_cache_spotify() {
+        let cache_dir = stream_art_cache_dir();
+        assert!(cache_dir.exists());
+        let test_id = "test_track_dummy_id_123";
+        let cache_file = cache_dir.join(format!("spotify_{test_id}.img"));
+        let _ = std::fs::write(&cache_file, b"test_image_bytes");
+        let result = resolve_spotify_artwork(&format!("stream:spotify:{test_id}"));
+        assert_eq!(result, Some(b"test_image_bytes".to_vec()));
+        let _ = std::fs::remove_file(&cache_file);
     }
 }
