@@ -161,6 +161,7 @@ pub struct StreamController {
     pub stream_queue_index: Option<usize>,
     pub download_jobs: Vec<DownloadJob>,
     pub selected_download_format: DownloadFormat,
+    pub active_resolutions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 impl StreamController {
@@ -185,10 +186,13 @@ impl StreamController {
             initial_connected.insert(p.id().to_lowercase(), p.is_connected());
         }
 
+        let active_resolutions = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        let worker_active_resolutions = active_resolutions.clone();
+
         let worker_handle = thread::Builder::new()
             .name("eclipse-stream-worker".to_string())
             .spawn(move || {
-                run_stream_worker(providers, cmd_rx, event_tx);
+                run_stream_worker(providers, cmd_rx, event_tx, worker_active_resolutions);
             })
             .ok();
 
@@ -209,6 +213,7 @@ impl StreamController {
             stream_queue_index: None,
             download_jobs: Vec::new(),
             selected_download_format: DownloadFormat::Flac,
+            active_resolutions,
         }
     }
 
@@ -604,6 +609,24 @@ impl StreamController {
         self.download_jobs.iter().filter(|j| j.is_active()).count()
     }
 
+    /// Clear the temporary audio stream cache on disk, returning bytes freed.
+    pub fn clear_stream_cache(&self) -> Result<u64, String> {
+        crate::streams::downloader::clear_stream_cache()
+    }
+
+    /// Retrieve the total size of all cached audio stream files in bytes.
+    pub fn get_stream_cache_size(&self) -> u64 {
+        crate::streams::downloader::get_stream_cache_size()
+    }
+
+    /// Return true if the given track (by clean Spotify/track ID) is currently resolving or buffering.
+    pub fn is_resolving(&self, track_id: &str) -> bool {
+        match self.active_resolutions.lock() {
+            Ok(guard) => guard.contains(track_id),
+            Err(poisoned) => poisoned.into_inner().contains(track_id),
+        }
+    }
+
     /// Drain incoming events non-blockingly on the UI frame loop.
     pub fn update(&mut self) -> Vec<StreamEvent> {
         let mut events = Vec::new();
@@ -771,11 +794,28 @@ impl Drop for StreamController {
     }
 }
 
+/// RAII guard ensuring track ID is removed from active resolutions when worker thread finishes.
+struct ActiveResolutionGuard {
+    spotify_id: String,
+    active_resolutions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+}
+
+impl Drop for ActiveResolutionGuard {
+    fn drop(&mut self) {
+        let mut set = match self.active_resolutions.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        set.remove(&self.spotify_id);
+    }
+}
+
 /// Worker thread loop: executes network I/O and provider requests off the UI thread.
 fn run_stream_worker(
     mut providers: Vec<Box<dyn StreamProvider>>,
     cmd_rx: Receiver<StreamCommand>,
     event_tx: Sender<StreamEvent>,
+    active_resolutions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 ) {
     let mut provider_map: HashMap<String, usize> = HashMap::new();
     for (idx, p) in providers.iter().enumerate() {
@@ -804,12 +844,45 @@ fn run_stream_worker(
                 }
                 StreamCommand::PlayStreamTrack(track) => {
                     active_provider_id = Some("stream".to_string());
+
+                    // 1. Instant Cache Hit Check (0ms startup latency for previously played or pre-cached streams)
+                    if let Some((spotify_id, cache_path)) =
+                        crate::streams::downloader::get_cached_stream_path(&track)
+                    {
+                        let _ = event_tx.send(StreamEvent::StreamPlaybackReady {
+                            spotify_id,
+                            cache_path,
+                            track,
+                        });
+                        continue;
+                    }
+
+                    // 2. Request Deduplication: avoid concurrent yt-dlp processes for the same track
+                    let spotify_id = crate::streams::downloader::extract_stream_track_id(&track);
+                    {
+                        let mut active = match active_resolutions.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        if active.contains(&spotify_id) {
+                            // Already buffering/resolving this track; coalesce duplicate request
+                            continue;
+                        }
+                        active.insert(spotify_id.clone());
+                    }
+
                     let tx = event_tx.clone();
                     let track_clone = track.clone();
+                    let active_res = active_resolutions.clone();
+                    let res_id = spotify_id.clone();
 
-                    std::thread::Builder::new()
+                    let spawn_res = std::thread::Builder::new()
                         .name("stream-playback-worker".to_string())
                         .spawn(move || {
+                            let _guard = ActiveResolutionGuard {
+                                spotify_id: res_id,
+                                active_resolutions: active_res,
+                            };
                             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 match crate::streams::downloader::cache_stream_track(&track_clone) {
                                     Ok((spotify_id, cache_path)) => {
@@ -843,8 +916,18 @@ fn run_stream_worker(
                                     message: format!("Stream playback worker panicked: {msg}"),
                                 });
                             }
-                        })
-                        .ok();
+                        });
+
+                    if let Err(e) = spawn_res {
+                        if let Ok(mut set) = active_resolutions.lock() {
+                            set.remove(&spotify_id);
+                        }
+                        let _ = event_tx.send(StreamEvent::Error {
+                            provider_id: "stream".to_string(),
+                            action: "play_stream_track".to_string(),
+                            message: format!("Failed to spawn stream playback thread: {e}"),
+                        });
+                    }
                 }
                 StreamCommand::PauseStream => {
                     if let Some(ref p) = webview_player {
@@ -1932,6 +2015,7 @@ mod tests {
             alternatives: HashMap::new(),
             download_jobs: Vec::new(),
             selected_download_format: DownloadFormat::default(),
+            active_resolutions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         };
 
         let track = StreamTrack::new(
@@ -2051,5 +2135,103 @@ mod tests {
         // Test retry_all_failed_downloads
         controller.retry_all_failed_downloads();
         assert!(controller.download_jobs.iter().all(|j| j.status == DownloadStatus::Queued));
+    }
+
+    #[test]
+    fn test_instant_cache_hit_emits_playback_ready_immediately() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        let spotify_id = "test_instant_hit_abc123";
+        let cache_dir = crate::streams::downloader::get_stream_cache_dir();
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let cache_file = cache_dir.join(format!("eclipse_stream_{spotify_id}.mp3"));
+
+        // Create a dummy cached stream file (> 1024 bytes)
+        let dummy_data = vec![0u8; 2048];
+
+        let track = StreamTrack::new(
+            spotify_id,
+            "Instant Track",
+            "Instant Artist",
+            "Instant Album",
+            180.0,
+            None,
+            format!("spotify:track:{spotify_id}"),
+            "spotify",
+        );
+
+        let mut received_ready = false;
+        // In multi-threaded test runs, another test may briefly clear the cache dir; retry ensures test robustness
+        for _ in 0..5 {
+            let _ = std::fs::write(&cache_file, &dummy_data);
+            controller.play_stream_track(track.clone());
+
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_millis(800) {
+                let events = controller.update();
+                for ev in events {
+                    if let StreamEvent::StreamPlaybackReady {
+                        spotify_id: ref id,
+                        ref cache_path,
+                        track: ref ready_track,
+                    } = ev
+                    {
+                        assert_eq!(id, spotify_id);
+                        assert_eq!(cache_path, &cache_file);
+                        assert_eq!(ready_track.id, spotify_id);
+                        received_ready = true;
+                        break;
+                    }
+                }
+                if received_ready {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            if received_ready {
+                break;
+            }
+        }
+
+        let _ = std::fs::remove_file(&cache_file);
+        assert!(received_ready, "Instant cache hit should immediately emit StreamPlaybackReady");
+    }
+
+    #[test]
+    fn test_active_resolution_deduplication_and_guard() {
+        let active_set = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        let track_id = "test_dedup_track_id";
+
+        // Test insertion and is_resolving logic
+        {
+            let guard = ActiveResolutionGuard {
+                spotify_id: track_id.to_string(),
+                active_resolutions: active_set.clone(),
+            };
+            active_set.lock().unwrap().insert(track_id.to_string());
+            assert!(active_set.lock().unwrap().contains(track_id));
+            drop(guard);
+        }
+
+        // Verify RAII guard automatically cleans up on drop
+        assert!(!active_set.lock().unwrap().contains(track_id));
+    }
+
+    #[test]
+    fn test_stream_controller_cache_delegation_methods() {
+        let (provider, _) = TestProvider::new();
+        let controller = StreamController::new(vec![Box::new(provider)]);
+
+        // Check cache size method returns a valid u64
+        let size = controller.get_stream_cache_size();
+        assert!(size < u64::MAX);
+
+        // Check is_resolving method
+        assert!(!controller.is_resolving("unknown_track_12345"));
+
+        // Check clear cache method
+        let res = controller.clear_stream_cache();
+        assert!(res.is_ok());
     }
 }

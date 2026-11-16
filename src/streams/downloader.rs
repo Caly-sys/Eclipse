@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::SystemTime;
 
 /// Helper to construct a process Command with CREATE_NO_WINDOW on Windows and null stdin.
 pub fn silent_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
@@ -389,6 +390,32 @@ pub fn tag_downloaded_file(
     )
 }
 
+/// Maximum allowed size for streaming cache in bytes (500 MB).
+pub const MAX_STREAM_CACHE_BYTES: u64 = 500 * 1024 * 1024;
+
+/// Helper to extract clean track ID for caching and lookup.
+pub fn extract_stream_track_id(track: &StreamTrack) -> String {
+    if !track.id.is_empty() {
+        track
+            .id
+            .strip_prefix("spotify:track:")
+            .or_else(|| track.id.strip_prefix("stream:spotify:"))
+            .or_else(|| track.id.strip_prefix(&format!("stream:{}:", track.provider)))
+            .unwrap_or(&track.id)
+            .to_string()
+    } else if !track.uri.is_empty() {
+        track
+            .uri
+            .strip_prefix("spotify:track:")
+            .or_else(|| track.uri.strip_prefix("stream:spotify:"))
+            .or_else(|| track.uri.strip_prefix(&format!("stream:{}:", track.provider)))
+            .unwrap_or(&track.uri)
+            .to_string()
+    } else {
+        sanitize_filename(&format!("{}_{}", track.artist, track.title))
+    }
+}
+
 /// Retrieve the dedicated stream cache directory in the temporary directory.
 pub fn get_stream_cache_dir() -> PathBuf {
     let dir = std::env::temp_dir().join("eclipse_stream_cache");
@@ -396,17 +423,149 @@ pub fn get_stream_cache_dir() -> PathBuf {
     dir
 }
 
+/// Check if an audio stream file is already cached and valid (> 1024 bytes).
+/// If valid, touches the file to update its accessed/modified timestamp for LRU,
+/// and returns Some((spotify_id, cache_path)). Otherwise returns None.
+pub fn get_cached_stream_path(track: &StreamTrack) -> Option<(String, PathBuf)> {
+    let spotify_id = extract_stream_track_id(track);
+    let safe_id = sanitize_filename(&spotify_id);
+    let cache_dir = get_stream_cache_dir();
+    let cache_path = cache_dir.join(format!("eclipse_stream_{safe_id}.mp3"));
+
+    if cache_path.is_file() {
+        if let Ok(meta) = fs::metadata(&cache_path) {
+            if meta.len() > 1024 {
+                // Update accessed and modified timestamp so LRU knows it was recently used
+                if let Ok(file) = fs::OpenOptions::new().write(true).open(&cache_path) {
+                    let _ = file.set_modified(SystemTime::now());
+                }
+                return Some((spotify_id, cache_path));
+            }
+        }
+    }
+    None
+}
+
+/// Prune a specific cache directory using LRU (least recently used) eviction.
+/// Deletes oldest files until total size is <= 90% of max_bytes (or 0 if max_bytes is 0).
+pub fn prune_stream_cache_dir(dir: &Path, max_bytes: u64) -> Result<usize, String> {
+    if !dir.is_dir() {
+        return Ok(0);
+    }
+
+    let entries = fs::read_dir(dir)
+        .map_err(|e| format!("Failed to read stream cache directory: {e}"))?;
+
+    let mut files: Vec<(PathBuf, SystemTime, u64)> = Vec::new();
+    let mut total_size: u64 = 0;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Ok(meta) = entry.metadata() {
+                let size = meta.len();
+                total_size += size;
+                let ts = meta
+                    .modified()
+                    .or_else(|_| meta.accessed())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                files.push((path, ts, size));
+            }
+        }
+    }
+
+    if total_size <= max_bytes {
+        return Ok(0);
+    }
+
+    // Target 90% of max_bytes to avoid pruning thrash
+    let target_size = (max_bytes * 9) / 10;
+    // Sort oldest timestamp first (LRU)
+    files.sort_by_key(|(_, ts, _)| *ts);
+
+    let mut deleted_count = 0;
+    for (path, _, size) in files {
+        if total_size <= target_size {
+            break;
+        }
+        if fs::remove_file(&path).is_ok() {
+            total_size = total_size.saturating_sub(size);
+            deleted_count += 1;
+        }
+    }
+
+    Ok(deleted_count)
+}
+
+/// Prune the stream cache if total size exceeds max_bytes.
+/// Deletes oldest files one by one until total cache size is under 90% of max_bytes.
+/// Returns the number of files deleted.
+pub fn prune_stream_cache(max_bytes: u64) -> Result<usize, String> {
+    prune_stream_cache_dir(&get_stream_cache_dir(), max_bytes)
+}
+
+/// Calculate total bytes currently consumed by files in a directory.
+pub fn get_stream_cache_size_in_dir(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total: u64 = 0;
+    for entry in entries.flatten() {
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// Calculate total bytes currently consumed by files in the stream cache directory.
+pub fn get_stream_cache_size() -> u64 {
+    get_stream_cache_size_in_dir(&get_stream_cache_dir())
+}
+
+/// Clear all cached stream audio files in a specific directory.
+/// Returns total bytes freed.
+pub fn clear_stream_cache_dir(dir: &Path) -> Result<u64, String> {
+    if !dir.is_dir() {
+        return Ok(0);
+    }
+
+    let entries = fs::read_dir(dir)
+        .map_err(|e| format!("Failed to read stream cache directory: {e}"))?;
+
+    let mut freed_bytes: u64 = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Ok(meta) = entry.metadata() {
+                let size = meta.len();
+                if fs::remove_file(&path).is_ok() {
+                    freed_bytes += size;
+                }
+            }
+        }
+    }
+
+    Ok(freed_bytes)
+}
+
+/// Clear all cached stream audio files in the stream cache directory.
+/// Returns total bytes freed.
+pub fn clear_stream_cache() -> Result<u64, String> {
+    clear_stream_cache_dir(&get_stream_cache_dir())
+}
+
 /// Resolve and cache audio stream for a streaming track into a symphonia-compatible .mp3 file.
 /// Returns (spotify_id, cache_path) on success.
 pub fn cache_stream_track(track: &StreamTrack) -> Result<(String, PathBuf), String> {
-    let spotify_id = if !track.id.is_empty() {
-        track.id.strip_prefix("spotify:track:").unwrap_or(&track.id).to_string()
-    } else if !track.uri.is_empty() {
-        track.uri.strip_prefix("spotify:track:").unwrap_or(&track.uri).to_string()
-    } else {
-        sanitize_filename(&format!("{}_{}", track.artist, track.title))
-    };
+    // 1. Instant cache lookup
+    if let Some((spotify_id, cache_path)) = get_cached_stream_path(track) {
+        return Ok((spotify_id, cache_path));
+    }
 
+    let spotify_id = extract_stream_track_id(track);
     let cache_dir = get_stream_cache_dir();
     fs::create_dir_all(&cache_dir)
         .map_err(|e| format!("Failed to create stream cache directory: {e}"))?;
@@ -414,16 +573,7 @@ pub fn cache_stream_track(track: &StreamTrack) -> Result<(String, PathBuf), Stri
     let safe_id = sanitize_filename(&spotify_id);
     let cache_path = cache_dir.join(format!("eclipse_stream_{safe_id}.mp3"));
 
-    // If cache file already exists and is non-empty, reuse it immediately
-    if cache_path.is_file() {
-        if let Ok(meta) = fs::metadata(&cache_path) {
-            if meta.len() > 1024 {
-                return Ok((spotify_id, cache_path));
-            }
-        }
-    }
-
-    // Resolve audio stream match (video_id)
+    // 2. Resolve audio stream match (video_id)
     let video_id = if track.provider.eq_ignore_ascii_case("youtube") && !track.id.is_empty() && track.id.len() == 11 {
         track.id.clone()
     } else {
@@ -435,9 +585,12 @@ pub fn cache_stream_track(track: &StreamTrack) -> Result<(String, PathBuf), Stri
         matched.video_id
     };
 
-    // Download audio stream using yt-dlp to cache_path
+    // 3. Download audio stream using yt-dlp to cache_path
     let cancel_flag = AtomicBool::new(false);
     let saved_path = download_audio_with_ytdlp(&video_id, &cache_path, DownloadFormat::Mp3, &cancel_flag)?;
+
+    // 4. Prune cache to maintain size limit (MAX_STREAM_CACHE_BYTES)
+    let _ = prune_stream_cache(MAX_STREAM_CACHE_BYTES);
 
     Ok((spotify_id, saved_path))
 }
@@ -1343,6 +1496,7 @@ impl DownloadManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_sanitize_filename() {
@@ -1669,5 +1823,150 @@ mod tests {
             }
         }
         assert!(cancel_event_count > 0);
+    }
+
+    #[test]
+    fn test_get_cached_stream_path_and_timestamp_update() {
+        let cache_dir = get_stream_cache_dir();
+        let spotify_id = "test_lookup_spec_123";
+        let cache_file = cache_dir.join(format!("eclipse_stream_{spotify_id}.mp3"));
+        let _ = fs::remove_file(&cache_file);
+
+        let track = StreamTrack::new(
+            spotify_id,
+            "Lookup Title",
+            "Lookup Artist",
+            "Lookup Album",
+            120.0,
+            None,
+            format!("spotify:track:{spotify_id}"),
+            "spotify",
+        );
+
+        // 1. Missing cache file -> returns None
+        assert!(get_cached_stream_path(&track).is_none());
+
+        // 2. Cache file too small (<= 1024 bytes) -> returns None
+        let small_data = vec![0u8; 512];
+        fs::write(&cache_file, &small_data).expect("write small dummy file");
+        assert!(get_cached_stream_path(&track).is_none());
+
+        // 3. Cache file valid (> 1024 bytes) -> returns Some and updates timestamp
+        let valid_data = vec![0u8; 2048];
+        fs::write(&cache_file, &valid_data).expect("write valid dummy file");
+
+        // Backdate modified time by 60 seconds
+        let past_time = SystemTime::now() - Duration::from_secs(60);
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(&cache_file) {
+            let _ = f.set_modified(past_time);
+        }
+
+        let res = get_cached_stream_path(&track);
+        assert!(res.is_some());
+        let (ret_id, ret_path) = res.unwrap();
+        assert_eq!(ret_id, spotify_id);
+        assert_eq!(ret_path, cache_file);
+
+        // Verify that timestamp was touched/updated recently
+        if let Ok(meta) = fs::metadata(&cache_file) {
+            if let Ok(mtime) = meta.modified() {
+                assert!(mtime > past_time);
+            }
+        }
+
+        let _ = fs::remove_file(&cache_file);
+    }
+
+    #[test]
+    fn test_prune_stream_cache_lru_eviction() {
+        let temp_test_dir = std::env::temp_dir().join("eclipse_test_prune_lru");
+        let _ = fs::create_dir_all(&temp_test_dir);
+
+        let f1 = temp_test_dir.join("eclipse_stream_file1.mp3");
+        let f2 = temp_test_dir.join("eclipse_stream_file2.mp3");
+        let f3 = temp_test_dir.join("eclipse_stream_file3.mp3");
+
+        // 1000 bytes each
+        fs::write(&f1, vec![1u8; 1000]).unwrap();
+        fs::write(&f2, vec![2u8; 1000]).unwrap();
+        fs::write(&f3, vec![3u8; 1000]).unwrap();
+
+        let now = SystemTime::now();
+        // f1 oldest, f2 middle, f3 newest
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(&f1) {
+            let _ = f.set_modified(now - Duration::from_secs(300));
+        }
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(&f2) {
+            let _ = f.set_modified(now - Duration::from_secs(200));
+        }
+        if let Ok(f) = fs::OpenOptions::new().write(true).open(&f3) {
+            let _ = f.set_modified(now - Duration::from_secs(100));
+        }
+
+        assert_eq!(get_stream_cache_size_in_dir(&temp_test_dir), 3000);
+
+        // When max_bytes is 3500 (total 3000 <= 3500), prune does nothing
+        let deleted = prune_stream_cache_dir(&temp_test_dir, 3500).unwrap();
+        assert_eq!(deleted, 0);
+        assert!(f1.exists() && f2.exists() && f3.exists());
+
+        // When max_bytes is 2500 (total 3000 > 2500), target is 2500 * 9 / 10 = 2250 bytes.
+        // It must delete f1 (oldest, 1000 bytes), remaining is 2000 bytes <= 2250.
+        let deleted = prune_stream_cache_dir(&temp_test_dir, 2500).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(!f1.exists(), "Oldest file f1 must be pruned");
+        assert!(f2.exists());
+        assert!(f3.exists());
+        assert_eq!(get_stream_cache_size_in_dir(&temp_test_dir), 2000);
+
+        let _ = fs::remove_dir_all(&temp_test_dir);
+    }
+
+    #[test]
+    fn test_clear_stream_cache_and_size_calculation() {
+        let temp_test_dir = std::env::temp_dir().join("eclipse_test_clear_cache");
+        let _ = fs::create_dir_all(&temp_test_dir);
+
+        let f1 = temp_test_dir.join("eclipse_stream_alpha.mp3");
+        let f2 = temp_test_dir.join("eclipse_stream_beta.mp3");
+
+        fs::write(&f1, vec![0u8; 1500]).unwrap();
+        fs::write(&f2, vec![0u8; 2500]).unwrap();
+
+        assert_eq!(get_stream_cache_size_in_dir(&temp_test_dir), 4000);
+
+        let freed = clear_stream_cache_dir(&temp_test_dir).unwrap();
+        assert_eq!(freed, 4000);
+        assert_eq!(get_stream_cache_size_in_dir(&temp_test_dir), 0);
+        assert!(!f1.exists());
+        assert!(!f2.exists());
+
+        let _ = fs::remove_dir_all(&temp_test_dir);
+    }
+
+    #[test]
+    fn test_public_stream_cache_functions() {
+        let _ = prune_stream_cache(MAX_STREAM_CACHE_BYTES);
+        let cache_dir = get_stream_cache_dir();
+        let test_file = cache_dir.join("eclipse_stream_pub_test.mp3");
+        fs::write(&test_file, vec![0u8; 1200]).unwrap();
+        assert!(get_stream_cache_size() >= 1200);
+
+        let track = StreamTrack::new(
+            "pub_test",
+            "Pub Track",
+            "Pub Artist",
+            "Pub Album",
+            100.0,
+            None,
+            "spotify:track:pub_test",
+            "spotify",
+        );
+        let cached = get_cached_stream_path(&track);
+        assert!(cached.is_some());
+
+        let freed = clear_stream_cache();
+        assert!(freed.is_ok());
+        assert!(!test_file.exists());
     }
 }

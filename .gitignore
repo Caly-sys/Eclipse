@@ -32,8 +32,12 @@ tasks.md
 DESIGN.md
 design.md
 agents/
+Agents/
 .agent/
 .agents/
 handoffs/
+Handoffs/
+docs/
+Docs/
 .gemini/
 

@@ -1153,6 +1153,9 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
     let youtube_msg_id = egui::Id::new("settings_streaming_youtube_status_msg");
     let mut youtube_msg: Option<String> = ui.data(|d| d.get_temp(youtube_msg_id));
 
+    let cache_msg_id = egui::Id::new("settings_streaming_cache_status_msg");
+    let mut cache_msg: Option<String> = ui.data(|d| d.get_temp(cache_msg_id));
+
     let has_youtube = CredentialStore::get_youtube_api_key()
         .ok()
         .flatten()
@@ -1239,6 +1242,53 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
         ui.label(RichText::new(msg).size(11.0).color(theme.accent));
     }
 
+    section_header(ui, "STORAGE & STREAM CACHE", theme);
+
+    let cache_size = crate::streams::downloader::get_stream_cache_size();
+    let mut cleared_freed = None;
+
+    setting_row_card(
+        ui,
+        theme,
+        "Audio stream cache",
+        "Temporary audio stream cache for instant zero-latency playback. Automatically pruned to 500 MB.",
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{:.1} MB / 500 MB limit",
+                        cache_size as f64 / (1024.0 * 1024.0)
+                    ))
+                    .size(12.5)
+                    .color(theme.text_secondary),
+                );
+                ui.add_space(8.0);
+
+                if dark_pill_button(ui, "Clear Stream Cache", None).clicked() {
+                    cleared_freed = Some(crate::streams::downloader::clear_stream_cache());
+                }
+            });
+        },
+    );
+
+    if let Some(res) = cleared_freed {
+        match res {
+            Ok(freed) => {
+                let freed_mb = freed as f64 / (1024.0 * 1024.0);
+                cache_msg = Some(format!("Stream cache cleared ({freed_mb:.1} MB freed)"));
+                ui.ctx().request_repaint();
+            }
+            Err(e) => {
+                cache_msg = Some(format!("Failed to clear stream cache: {e}"));
+            }
+        }
+    }
+
+    if let Some(ref msg) = cache_msg {
+        ui.add_space(2.0);
+        ui.label(RichText::new(msg).size(11.0).color(theme.accent));
+    }
+
     section_header(ui, "EXPERIMENTAL", theme);
 
     // 4. Enable experimental streaming
@@ -1255,6 +1305,7 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
     ui.data_mut(|d| {
         d.insert_temp(youtube_input_id, youtube_input);
         d.insert_temp(youtube_msg_id, youtube_msg);
+        d.insert_temp(cache_msg_id, cache_msg);
     });
 }
 
@@ -1402,6 +1453,18 @@ mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let theme = Theme::from_name("Eclipse", None);
                 render_shortcuts_tab(ui, &theme);
+            });
+        });
+    }
+
+    #[test]
+    fn test_render_streaming_tab_with_stream_cache_section() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut cfg = AppConfig::default();
+                let theme = Theme::from_name("Eclipse", None);
+                render_streaming_tab(ui, &mut cfg, &theme);
             });
         });
     }
