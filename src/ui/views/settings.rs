@@ -286,6 +286,7 @@ pub fn kbd_badge(ui: &mut Ui, key: &str, theme: &Theme) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_settings(
     ui: &mut Ui,
     cfg: &mut AppConfig,
@@ -293,6 +294,8 @@ pub fn render_settings(
     on_rescan: &mut bool,
     on_add_folder: &mut bool,
     on_theme_changed: &mut bool,
+    db: Option<&crate::library::db::Database>,
+    on_refresh_library: Option<&mut bool>,
 ) {
     let old_cfg = cfg.clone();
 
@@ -389,7 +392,7 @@ pub fn render_settings(
                     render_lyrics_tab(ui, cfg, theme);
                 }
                 SettingsTab::Streaming => {
-                    render_streaming_tab(ui, cfg, theme);
+                    render_streaming_tab(ui, cfg, theme, db, on_refresh_library);
                 }
                 SettingsTab::Shortcuts => {
                     render_shortcuts_tab(ui, theme);
@@ -1144,7 +1147,13 @@ fn render_lyrics_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
     );
 }
 
-fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
+fn render_streaming_tab(
+    ui: &mut Ui,
+    cfg: &mut AppConfig,
+    theme: &Theme,
+    db: Option<&crate::library::db::Database>,
+    mut on_refresh_library: Option<&mut bool>,
+) {
     let youtube_input_id = egui::Id::new("settings_streaming_youtube_api_key");
     let mut youtube_input: String = ui.data(|d| d.get_temp(youtube_input_id)).unwrap_or_else(|| {
         CredentialStore::get_youtube_api_key().ok().flatten().unwrap_or_default()
@@ -1155,6 +1164,19 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
 
     let cache_msg_id = egui::Id::new("settings_streaming_cache_status_msg");
     let mut cache_msg: Option<String> = ui.data(|d| d.get_temp(cache_msg_id));
+
+    let delete_msg_id = egui::Id::new("settings_streaming_delete_status_msg");
+    let mut delete_msg: Option<String> = ui.data(|d| d.get_temp(delete_msg_id));
+
+    let fallback_db = if db.is_none() {
+        crate::library::db::Database::open().ok()
+    } else {
+        None
+    };
+    let active_db = db.or(fallback_db.as_ref());
+    let stream_tracks_count = active_db
+        .and_then(|d| d.get_stream_tracks_count().ok())
+        .unwrap_or(0);
 
     let has_youtube = CredentialStore::get_youtube_api_key()
         .ok()
@@ -1289,6 +1311,45 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
         ui.label(RichText::new(msg).size(11.0).color(theme.accent));
     }
 
+    setting_row_card(
+        ui,
+        theme,
+        "Remove stream songs",
+        "Delete all streaming/imported tracks from the library so only local audio files remain.",
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{stream_tracks_count} stream tracks in library"))
+                        .size(12.5)
+                        .color(theme.text_secondary),
+                );
+                ui.add_space(8.0);
+
+                if dark_pill_button(ui, "Delete All Stream Songs", Some(Icon::Trash)).clicked() {
+                    if let Some(d) = active_db {
+                        match d.delete_all_stream_tracks() {
+                            Ok(deleted) => {
+                                delete_msg = Some(format!("Removed {deleted} stream tracks from library."));
+                                if let Some(ref mut refresh) = on_refresh_library {
+                                    **refresh = true;
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                            Err(e) => {
+                                delete_msg = Some(format!("Failed to delete stream tracks: {e}"));
+                            }
+                        }
+                    }
+                }
+            });
+        },
+    );
+
+    if let Some(ref msg) = delete_msg {
+        ui.add_space(2.0);
+        ui.label(RichText::new(msg).size(11.0).color(theme.accent));
+    }
+
     section_header(ui, "EXPERIMENTAL", theme);
 
     // 4. Enable experimental streaming
@@ -1306,6 +1367,7 @@ fn render_streaming_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
         d.insert_temp(youtube_input_id, youtube_input);
         d.insert_temp(youtube_msg_id, youtube_msg);
         d.insert_temp(cache_msg_id, cache_msg);
+        d.insert_temp(delete_msg_id, delete_msg);
     });
 }
 
@@ -1399,6 +1461,8 @@ mod tests {
                     &mut on_rescan,
                     &mut on_add_folder,
                     &mut on_theme_changed,
+                    None,
+                    None,
                 );
             });
         });
@@ -1426,6 +1490,8 @@ mod tests {
                         &mut on_rescan,
                         &mut on_add_folder,
                         &mut on_theme_changed,
+                        None,
+                        None,
                     );
                 }
             });
@@ -1464,7 +1530,45 @@ mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 let mut cfg = AppConfig::default();
                 let theme = Theme::from_name("Eclipse", None);
-                render_streaming_tab(ui, &mut cfg, &theme);
+                render_streaming_tab(ui, &mut cfg, &theme, None, None);
+            });
+        });
+    }
+
+    #[test]
+    fn test_render_streaming_tab_delete_stream_songs_flow() {
+        let db = crate::library::db::Database::open_in_memory().expect("open memory db");
+        let stream_track = crate::library::model::Track {
+            id: 0,
+            path: "stream:spotify:flow_test_1".to_string(),
+            title: "Test Stream".to_string(),
+            artist: "Streamer".to_string(),
+            album_artist: "Streamer".to_string(),
+            album: "Single".to_string(),
+            genre: "Electronic".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 180.0,
+            bitrate_kbps: 320,
+            sample_rate: 44100,
+            channels: 2,
+            format: "STREAM".to_string(),
+            file_size: 0,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: String::new(),
+        };
+        db.upsert_track(&stream_track).expect("insert stream track");
+        assert_eq!(db.get_stream_tracks_count().unwrap(), 1);
+
+        let ctx = egui::Context::default();
+        let mut refreshed = false;
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut cfg = AppConfig::default();
+                let theme = Theme::from_name("Eclipse", None);
+                render_streaming_tab(ui, &mut cfg, &theme, Some(&db), Some(&mut refreshed));
             });
         });
     }

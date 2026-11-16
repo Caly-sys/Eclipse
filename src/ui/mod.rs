@@ -982,6 +982,8 @@ impl App for EclipseApp {
                                         &mut on_rescan,
                                         &mut on_add_folder,
                                         &mut on_theme_changed,
+                                        Some(&self.db),
+                                        Some(&mut on_refresh_library),
                                     );
                                     self.player.apply_audio_settings(&self.cfg.audio);
                                 }
@@ -1153,6 +1155,11 @@ impl App for EclipseApp {
 
         if on_refresh_library {
             self.reload_data();
+            self.player.queue.retain(|t| !t.is_stream());
+            if self.player.playback_source.is_stream() {
+                self.player.engine.stop();
+                self.player.switch_to_local();
+            }
         }
 
         if let Some(track_id) = on_toggle_fav {

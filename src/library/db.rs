@@ -890,6 +890,72 @@ impl Database {
         conn.execute("DELETE FROM stream_match_cache", [])?;
         Ok(())
     }
+
+    /// Delete all stream tracks from the database so only local tracks remain.
+    /// Cleans up corresponding references in `playlist_items` and `history`.
+    /// Returns the number of stream tracks deleted.
+    pub fn delete_all_stream_tracks(&self) -> Result<usize> {
+        let conn = self.lock_conn();
+        // 1. Remove references from playlist_items
+        conn.execute(
+            "DELETE FROM playlist_items WHERE track_id IN (
+                SELECT id FROM tracks 
+                WHERE source = 'stream' 
+                   OR codec = 'STREAM' 
+                   OR path LIKE 'stream:%' 
+                   OR path LIKE 'spotify:%' 
+                   OR path LIKE 'youtube:%' 
+                   OR path LIKE 'http://%' 
+                   OR path LIKE 'https://%'
+            )",
+            [],
+        )?;
+        // 2. Remove references from history
+        conn.execute(
+            "DELETE FROM history WHERE track_id IN (
+                SELECT id FROM tracks 
+                WHERE source = 'stream' 
+                   OR codec = 'STREAM' 
+                   OR path LIKE 'stream:%' 
+                   OR path LIKE 'spotify:%' 
+                   OR path LIKE 'youtube:%' 
+                   OR path LIKE 'http://%' 
+                   OR path LIKE 'https://%'
+            )",
+            [],
+        )?;
+        // 3. Delete from tracks table
+        let deleted = conn.execute(
+            "DELETE FROM tracks 
+            WHERE source = 'stream' 
+               OR codec = 'STREAM' 
+               OR path LIKE 'stream:%' 
+               OR path LIKE 'spotify:%' 
+               OR path LIKE 'youtube:%' 
+               OR path LIKE 'http://%' 
+               OR path LIKE 'https://%'",
+            [],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Count all stream tracks currently stored in the database.
+    pub fn get_stream_tracks_count(&self) -> Result<usize> {
+        let conn = self.lock_conn();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tracks 
+            WHERE source = 'stream' 
+               OR codec = 'STREAM' 
+               OR path LIKE 'stream:%' 
+               OR path LIKE 'spotify:%' 
+               OR path LIKE 'youtube:%' 
+               OR path LIKE 'http://%' 
+               OR path LIKE 'https://%'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
 }
 
 /// Cached stream match pairing record stored in SQLite.
@@ -1252,6 +1318,111 @@ mod tests {
         let jpop_tracks = db.get_tracks_by_genre("J-Pop")?;
         assert_eq!(jpop_tracks.len(), 1);
         assert_eq!(jpop_tracks[0].id, id2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_all_stream_tracks_and_count() -> Result<()> {
+        let db = Database::open_in_memory()?;
+
+        let local_track = Track {
+            id: 0,
+            path: "C:\\music\\local_flac.flac".to_string(),
+            title: "Local Track".to_string(),
+            artist: "Local Artist".to_string(),
+            album_artist: "Local Artist".to_string(),
+            album: "Local Album".to_string(),
+            genre: "Rock".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 200.0,
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 1024,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "C:\\music".to_string(),
+        };
+
+        let stream_track1 = Track {
+            id: 0,
+            path: "stream:spotify:track_1".to_string(),
+            title: "Stream Track 1".to_string(),
+            artist: "Stream Artist".to_string(),
+            album_artist: "Stream Artist".to_string(),
+            album: "Stream Album".to_string(),
+            genre: "Pop".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 180.0,
+            bitrate_kbps: 320,
+            sample_rate: 44100,
+            channels: 2,
+            format: "STREAM".to_string(),
+            file_size: 0,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: String::new(),
+        };
+
+        let stream_track2 = Track {
+            id: 0,
+            path: "spotify:track:track_2".to_string(),
+            title: "Stream Track 2".to_string(),
+            artist: "Stream Artist 2".to_string(),
+            album_artist: "Stream Artist 2".to_string(),
+            album: "Stream Album 2".to_string(),
+            genre: "Electronic".to_string(),
+            year: 2024,
+            track_number: 2,
+            duration_secs: 210.0,
+            bitrate_kbps: 320,
+            sample_rate: 44100,
+            channels: 2,
+            format: "STREAM".to_string(),
+            file_size: 0,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: String::new(),
+        };
+
+        let local_id = db.upsert_track(&local_track)?;
+        let s_id1 = db.upsert_track(&stream_track1)?;
+        let s_id2 = db.upsert_track(&stream_track2)?;
+
+        // Also add to a playlist
+        let pl_id = db.create_playlist("Mix Playlist")?;
+        db.add_track_to_playlist(pl_id, local_id)?;
+        db.add_track_to_playlist(pl_id, s_id1)?;
+        db.add_track_to_playlist(pl_id, s_id2)?;
+
+        // Verify initial counts
+        assert_eq!(db.get_stream_tracks_count()?, 2);
+        let pl_tracks = db.get_playlist_tracks(pl_id)?;
+        assert_eq!(pl_tracks.len(), 3);
+
+        // Delete all stream tracks
+        let deleted = db.delete_all_stream_tracks()?;
+        assert_eq!(deleted, 2);
+
+        // Verify stream tracks count is now 0
+        assert_eq!(db.get_stream_tracks_count()?, 0);
+
+        // Verify local track remains in database and playlist
+        let all_tracks = db.get_all_tracks()?;
+        assert_eq!(all_tracks.len(), 1);
+        assert_eq!(all_tracks[0].id, local_id);
+        assert_eq!(all_tracks[0].path, "C:\\music\\local_flac.flac");
+
+        let pl_tracks_after = db.get_playlist_tracks(pl_id)?;
+        assert_eq!(pl_tracks_after.len(), 1);
+        assert_eq!(pl_tracks_after[0].id, local_id);
 
         Ok(())
     }
