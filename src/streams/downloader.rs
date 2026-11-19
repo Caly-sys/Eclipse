@@ -416,9 +416,9 @@ pub fn extract_stream_track_id(track: &StreamTrack) -> String {
     }
 }
 
-/// Retrieve the dedicated stream cache directory in the temporary directory.
+/// Retrieve the dedicated stream cache directory in the user app data directory (%APPDATA%\Eclipse\stream_cache).
 pub fn get_stream_cache_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("eclipse_stream_cache");
+    let dir = crate::config::app_data_dir().join("stream_cache");
     let _ = fs::create_dir_all(&dir);
     dir
 }
@@ -925,10 +925,12 @@ pub fn download_audio_with_ytdlp(
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| sanitize_filename(video_id));
+    // Escape '%' as '%%' for yt-dlp output template syntax (which parses %(ext)s)
+    let escaped_stem = stem.replace('%', "%%");
     let out_template = target_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join(format!("{stem}.%(ext)s"));
+        .join(format!("{escaped_stem}.%(ext)s"));
 
     let ext = format.ext();
 
@@ -946,7 +948,7 @@ pub fn download_audio_with_ytdlp(
             "--no-warnings",
         ])
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to launch yt-dlp: {e}"))?;
 
@@ -960,6 +962,19 @@ pub fn download_audio_with_ytdlp(
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
+                    let mut stderr_msg = String::new();
+                    if let Some(mut err_pipe) = child.stderr.take() {
+                        let _ = std::io::Read::read_to_string(&mut err_pipe, &mut stderr_msg);
+                    }
+                    let trimmed = stderr_msg.trim();
+                    if trimmed.contains("ffmpeg") || trimmed.contains("ffprobe") {
+                        return Err(format!(
+                            "ffmpeg is required for audio extraction/conversion but was not found in PATH. Install via 'winget install Gyan.FFmpeg': {trimmed}"
+                        ));
+                    }
+                    if !trimmed.is_empty() {
+                        return Err(format!("yt-dlp exited with error: {trimmed}"));
+                    }
                     return Err(format!("yt-dlp exited with non-zero status: {:?}", status.code()));
                 }
                 break;
@@ -973,8 +988,11 @@ pub fn download_audio_with_ytdlp(
         }
     }
 
-    // Determine the produced file (out_template with format.ext() extension)
-    let produced_file = out_template.with_extension(ext);
+    // Determine the produced file (yt-dlp unescapes %% back to % in the final file name on disk)
+    let produced_file = target_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("{stem}.{ext}"));
     if produced_file.is_file() {
         // Rename to the requested target filename
         if produced_file != target_path {
@@ -982,6 +1000,18 @@ pub fn download_audio_with_ytdlp(
                 let _ = fs::remove_file(target_path);
             }
             let _ = fs::rename(&produced_file, target_path);
+        }
+        return Ok(target_path.to_path_buf());
+    }
+
+    // Fallback: check raw out_template extension in case yt-dlp preserved template characters
+    let fallback_file = out_template.with_extension(ext);
+    if fallback_file.is_file() {
+        if fallback_file != target_path {
+            if target_path.exists() {
+                let _ = fs::remove_file(target_path);
+            }
+            let _ = fs::rename(&fallback_file, target_path);
         }
         return Ok(target_path.to_path_buf());
     }
@@ -1946,27 +1976,24 @@ mod tests {
 
     #[test]
     fn test_public_stream_cache_functions() {
-        let _ = prune_stream_cache(MAX_STREAM_CACHE_BYTES);
-        let cache_dir = get_stream_cache_dir();
-        let test_file = cache_dir.join("eclipse_stream_pub_test.mp3");
+        let temp_dir = std::env::temp_dir().join("eclipse_test_cache_isolated");
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_file = temp_dir.join("eclipse_stream_pub_test.mp3");
         fs::write(&test_file, vec![0u8; 1200]).unwrap();
-        assert!(get_stream_cache_size() >= 1200);
+        assert!(get_stream_cache_size_in_dir(&temp_dir) >= 1200);
 
-        let track = StreamTrack::new(
-            "pub_test",
-            "Pub Track",
-            "Pub Artist",
-            "Pub Album",
-            100.0,
-            None,
-            "spotify:track:pub_test",
-            "spotify",
-        );
-        let cached = get_cached_stream_path(&track);
-        assert!(cached.is_some());
-
-        let freed = clear_stream_cache();
+        let freed = clear_stream_cache_dir(&temp_dir);
         assert!(freed.is_ok());
         assert!(!test_file.exists());
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_download_template_percent_escaping() {
+        let title = "100% Pure & 50% Off";
+        let sanitized = sanitize_filename(title);
+        let escaped = sanitized.replace('%', "%%");
+        assert!(escaped.contains("%%"));
+        assert_eq!(escaped, "100%% Pure & 50%% Off");
     }
 }

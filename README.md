@@ -118,32 +118,43 @@ Eclipse is portable and self-contained. It requires no administrative installers
 #### Release SHA-256 Checksums (v1.2.5)
 | File | SHA-256 Checksum |
 |---|---|
-| `eclipse.exe` (x64 MSVC) | `84A35ED3BA02950D3E2593AF34B90B52DA04B74DCDBF6AA686A0153AB703D2EE` |
+| `eclipse.exe` (x64 MSVC) | `42986037A378769478CD39A4921761DBF738BD3DFE54EAE77C1804B7DBD5B197` |
 | `eclipse-v1.2.5-windows-x64.zip` | *Published with GitHub release assets* |
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**
 > Because Eclipse is an open-source binary without a commercial code-signing certificate, Windows SmartScreen may display a *"Windows protected your PC"* prompt on first launch. Click **More info** → **Run anyway** to start the application.
 
+> [!TIP]
+> **Streaming & Audio Download Dependencies:**
+> Online search, streaming, and audio downloading (`FLAC`, `MP3`, `OPUS`, `M4A`, `WAV`) require `yt-dlp` and `ffmpeg`. If you don't already have them installed, run:
+> ```powershell
+> winget install yt-dlp Gyan.FFmpeg
+> ```
+> *(Or place `yt-dlp.exe` and `ffmpeg.exe` directly in the same directory as `eclipse.exe` or anywhere in your system `PATH`.)*
+
 ---
 
 ### Option 2: Building from Source
 
-**Prerequisites:** Rust 1.80+ (`stable-x86_64-pc-windows-msvc`), Visual Studio C++ Build Tools (MSVC with Windows SDK), and Git.
+#### Prerequisites
+- **Rust Toolchain**: Rust 1.80+ (`stable-x86_64-pc-windows-msvc`), Visual Studio C++ Build Tools (MSVC with Windows SDK), and Git.
+- **yt-dlp & FFmpeg**: Required for online streaming search, caching, and audio extraction (`winget install yt-dlp Gyan.FFmpeg` or `scoop install yt-dlp ffmpeg`).
 
 ```powershell
 # 1. Clone the repository
 git clone https://github.com/Caly-sys/Eclipse.git
 cd Eclipse
 
-# 2. Build optimized release binary (statically links CRT via .cargo/config.toml)
+# 2. Run unit tests
+cargo test --bin eclipse
+
+# 3. Build optimized release binary (statically links CRT via .cargo/config.toml)
 cargo build --release
 
-# 3. Launch Eclipse
+# 4. Launch Eclipse
 .\target\release\eclipse.exe
 ```
-
-For full setup commands, `winget` scripts, test execution, and troubleshooting, see [docs/BUILDING.md](docs/BUILDING.md). For release packaging details, see [docs/RELEASING.md](docs/RELEASING.md).
 
 ---
 
