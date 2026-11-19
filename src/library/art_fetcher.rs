@@ -372,7 +372,10 @@ fn query_itunes(query: &str) -> Option<Vec<u8>> {
     );
 
     let resp = ureq::get(&url)
-        .set("User-Agent", "Eclipse/1.2.4 (lossless music player)")
+        .set(
+            "User-Agent",
+            concat!("Eclipse/", env!("CARGO_PKG_VERSION"), " (lossless music player)"),
+        )
         .timeout(Duration::from_secs(5))
         .call()
         .ok()?;
@@ -415,7 +418,10 @@ fn query_deezer(query: &str) -> Option<Vec<u8>> {
     let url = format!("https://api.deezer.com/search?q={}&limit=1", encoded);
 
     let resp = ureq::get(&url)
-        .set("User-Agent", "Eclipse/1.2.4 (lossless music player)")
+        .set(
+            "User-Agent",
+            concat!("Eclipse/", env!("CARGO_PKG_VERSION"), " (lossless music player)"),
+        )
         .timeout(Duration::from_secs(5))
         .call()
         .ok()?;
@@ -457,7 +463,10 @@ fn query_deezer(query: &str) -> Option<Vec<u8>> {
 
 fn download_image_bytes(url: &str) -> Option<Vec<u8>> {
     let resp = ureq::get(url)
-        .set("User-Agent", "Eclipse/1.2.4 (lossless music player)")
+        .set(
+            "User-Agent",
+            concat!("Eclipse/", env!("CARGO_PKG_VERSION"), " (lossless music player)"),
+        )
         .timeout(Duration::from_secs(5))
         .call()
         .ok()?;

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const LRCLIB_BASE_URL: &str = "https://lrclib.net";
-pub const USER_AGENT: &str = "Eclipse/0.1.0 (https://github.com/sadult/umbra)";
+pub const USER_AGENT: &str =
+    concat!("Eclipse/", env!("CARGO_PKG_VERSION"), " (https://github.com/sadult/umbra)");
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -1,15 +1,15 @@
 //! Picture-in-Picture (PiP) Floating Mini-Player & Desktop Overlay for Eclipse.
 //!
-//! Provides a glassmorphic floating mini-player card with high-contrast synced desktop lyrics.
+//! Provides a unified dark-glass floating mini-player card with integrated synced desktop lyrics.
 //! 100% pure vector graphics - ZERO Unicode emojis.
 
 use crate::audio::PlayerController;
 use crate::streams::controller::StreamController;
 use crate::ui::art::AlbumArtManager;
-use crate::ui::icons::{icon_button, paint_icon, Icon};
+use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::playerbar::{current_playback_time, seek_to, SeekbarDragState};
 use crate::ui::theme::Theme;
-use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, Stroke, Ui};
+use egui::{pos2, vec2, Color32, Rect, Rounding, Stroke, Ui};
 use std::time::{Duration, Instant};
 
 /// Truncate string to `max_chars` with an ellipsis if longer.
@@ -22,171 +22,407 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// Render the high-contrast desktop synced lyrics overlay positioned above the mini-player card.
-/// Uses background halo text shadows and a translucent frosted pill for maximum legibility
-/// over any wallpaper or desktop environment.
+/// Resolve the currently active single-line lyric text for the mini-player header strip.
+pub fn active_lyric_text(player: &PlayerController) -> Option<String> {
+    player.current_track()?;
+    let lyrics = player.lyrics.as_ref()?;
+    if lyrics.is_empty() {
+        return None;
+    }
+    if lyrics.source.contains("Instrumental")
+        || (lyrics.lines.len() == 1 && lyrics.lines[0].text.eq_ignore_ascii_case("instrumental"))
+    {
+        return Some("Instrumental".to_string());
+    }
+    let pos_ms = player.engine.position().as_millis() as u64;
+    if lyrics.is_synced {
+        if let Some(idx) = lyrics.current_index(pos_ms) {
+            let line = lyrics.lines[idx].text.trim();
+            if line.is_empty() {
+                Some("...".to_string())
+            } else {
+                Some(line.to_string())
+            }
+        } else {
+            Some("...".to_string())
+        }
+    } else {
+        // Plain unsynced lyrics: show first non-empty line
+        lyrics
+            .lines
+            .iter()
+            .find(|l| !l.text.trim().is_empty())
+            .map(|l| l.text.trim().to_string())
+    }
+}
+
+/// Standalone helper for rendering high-contrast synced desktop lyrics overlay.
 pub fn render_desktop_lyrics(
     ui: &mut Ui,
     player: &PlayerController,
-    theme: &Theme,
+    _theme: &Theme,
 ) -> egui::Response {
     let width = ui.available_width().max(320.0);
     let height = 44.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), egui::Sense::click_and_drag());
 
-    // Native window drag interaction on the lyrics overlay surface
     if resp.drag_started_by(egui::PointerButton::Primary) || resp.dragged() {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-
-        // Translucent frosted glass backdrop pill for wallpaper independence
         let pill_rect = Rect::from_center_size(rect.center(), vec2(rect.width(), height));
         painter.rect_filled(
             pill_rect,
             Rounding::same(12.0),
-            Color32::from_rgba_premultiplied(12, 10, 20, 160),
+            Color32::from_rgba_unmultiplied(16, 16, 22, 245),
         );
         painter.rect_stroke(
             pill_rect,
             Rounding::same(12.0),
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 22)),
+            Stroke::new(1.0_f32, Color32::from_white_alpha(28)),
         );
 
-        // Resolve active lyric line and next lyric line
-        let pos_ms = player.engine.position().as_millis() as u64;
-        let (active_text, next_text) = if let Some(ref lyrics) = player.lyrics {
-            if lyrics.is_empty() {
-                ("Eclipse · Lossless Audio".to_string(), None)
-            } else if lyrics.source.contains("Instrumental")
-                || (lyrics.lines.len() == 1 && lyrics.lines[0].text.eq_ignore_ascii_case("instrumental"))
-            {
-                ("Instrumental".to_string(), None)
-            } else if lyrics.is_synced {
-                if let Some(idx) = lyrics.current_index(pos_ms) {
-                    let active = lyrics.lines[idx].text.trim().to_string();
-                    let next = if idx + 1 < lyrics.lines.len() {
-                        Some(lyrics.lines[idx + 1].text.trim().to_string())
-                    } else {
-                        None
-                    };
-                    (active, next)
-                } else {
-                    let next = lyrics.lines.first().map(|l| l.text.trim().to_string());
-                    ("...".to_string(), next)
-                }
-            } else {
-                // Plain lyrics fallback: show current or first line
-                (
-                    lyrics.lines[0].text.trim().to_string(),
-                    lyrics.lines.get(1).map(|l| l.text.trim().to_string()),
-                )
+        let active_text = active_lyric_text(player).unwrap_or_else(|| "Eclipse · Lossless Audio".to_string());
+        let truncated = truncate_str(&active_text, 40);
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &truncated,
+            egui::FontId::proportional(14.0),
+            Color32::from_white_alpha(235),
+        );
+    }
+
+    resp
+}
+
+/// Render the unified dark-glass floating mini-player card.
+///
+/// Styling:
+/// - Inset: `2.0px` transparent border margin to eliminate black square corners
+/// - Background: `Color32::from_rgba_unmultiplied(16, 16, 22, 245)`
+/// - Border: `Stroke::new(1.0, Color32::from_white_alpha(28))`
+/// - Rounding: `Rounding::same(14.0)`
+/// - Top lyrics strip: centered `13.5px` white text separated by `Color32::from_white_alpha(18)` hairline divider
+/// - Left: 54px x 54px album cover art clipped with `Rounding::same(8.0)`, fallback to vector `Icon::Disc`
+/// - Top-Right Pinned: Close button `[×]` (`Icon::Close`, size 10.0) with subtle circular hover effect
+/// - Track Metadata: Row 1 = Title (bold white, 14.0px), Row 2 = Artist (muted, 12.0px)
+/// - Bottom Controls Row (all items locked to the exact same `center().y`):
+///   SkipBack (14.0px), Play/Pause (25px purple solid circle), SkipForward (14.0px),
+///   interactive seekbar (dark rail, purple active fill, white thumb), Favorite Heart button (14.0px)
+#[allow(clippy::too_many_arguments)]
+pub fn render_unified_pip_card(
+    ui: &mut Ui,
+    player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
+    theme: &Theme,
+    art_manager: &mut AlbumArtManager,
+    show_pip: &mut bool,
+    on_toggle_fav: &mut Option<i64>,
+    show_lyrics_setting: bool,
+) -> egui::Response {
+    let active_lyric = if show_lyrics_setting {
+        active_lyric_text(player)
+    } else {
+        None
+    };
+    let has_lyrics = active_lyric.is_some();
+    let card_height = if has_lyrics { 122.0 } else { 86.0 };
+    let card_width = 386.0;
+
+    let full_width = card_width + 4.0; // 390.0
+    let full_height = card_height + 4.0; // 126.0 with lyrics, 90.0 without
+
+    let (viewport_rect, resp) = ui.allocate_exact_size(vec2(full_width, full_height), egui::Sense::click_and_drag());
+
+    let card_rect = Rect::from_min_size(
+        pos2(viewport_rect.min.x + 2.0, viewport_rect.min.y + 2.0),
+        vec2(card_width, card_height),
+    );
+
+    let painter = ui.painter();
+
+    // 1. Draw unified card background
+    painter.rect_filled(
+        card_rect,
+        Rounding::same(14.0),
+        Color32::from_rgba_unmultiplied(16, 16, 22, 245),
+    );
+    // 2. Subtle glass border
+    painter.rect_stroke(
+        card_rect,
+        Rounding::same(14.0),
+        Stroke::new(1.0_f32, Color32::from_white_alpha(28)),
+    );
+
+    // 3. Lyrics strip if present
+    let body_top = if let Some(ref lyric_str) = active_lyric {
+        let lyrics_h = 32.0;
+        let lyrics_rect = Rect::from_min_max(
+            pos2(card_rect.min.x, card_rect.min.y),
+            pos2(card_rect.max.x, card_rect.min.y + lyrics_h),
+        );
+        let divider_y = lyrics_rect.max.y;
+
+        // Truncate lyric text cleanly
+        let trunc_lyric = truncate_str(lyric_str, 42);
+        let font = egui::FontId::proportional(13.5);
+        let color = Color32::from_white_alpha(235);
+        painter.text(
+            lyrics_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            &trunc_lyric,
+            font,
+            color,
+        );
+
+        // Hairline divider
+        painter.line_segment(
+            [pos2(card_rect.min.x, divider_y), pos2(card_rect.max.x, divider_y)],
+            Stroke::new(1.0_f32, Color32::from_white_alpha(18)),
+        );
+
+        divider_y
+    } else {
+        card_rect.min.y
+    };
+
+    let body_rect = Rect::from_min_max(pos2(card_rect.min.x, body_top), card_rect.max);
+    let current_track = player.current_track().cloned();
+
+    // 4. Album cover art (Left: 54x54)
+    let art_x = card_rect.min.x + 12.0;
+    let art_y = body_rect.min.y + ((body_rect.height() - 54.0) / 2.0).round();
+    let art_rect = Rect::from_min_size(pos2(art_x, art_y), vec2(54.0, 54.0));
+
+    let mut painted_cover = false;
+    if let Some(ref track) = current_track {
+        if let Some(texture) = art_manager.get_or_load(ui.ctx(), &track.path) {
+            let img = egui::Image::new(egui::load::SizedTexture::new(texture.id(), art_rect.size()))
+                .rounding(Rounding::same(8.0));
+            img.paint_at(ui, art_rect);
+            painted_cover = true;
+        }
+    }
+    if !painted_cover {
+        painter.rect_filled(
+            art_rect,
+            Rounding::same(8.0),
+            Color32::from_rgba_unmultiplied(28, 24, 38, 220),
+        );
+        let disc_box = Rect::from_center_size(art_rect.center(), vec2(26.0, 26.0));
+        paint_icon(painter, Icon::Disc, disc_box, theme.accent);
+    }
+    painter.rect_stroke(
+        art_rect,
+        Rounding::same(8.0),
+        Stroke::new(1.0_f32, Color32::from_white_alpha(30)),
+    );
+
+    // 5. Close Button (Pinned Top-Right)
+    let close_rect = Rect::from_center_size(
+        pos2(card_rect.max.x - 18.0, body_rect.min.y + 16.0),
+        vec2(20.0, 20.0),
+    );
+    let close_resp = ui.interact(close_rect, ui.id().with("pip_close_btn"), egui::Sense::click());
+    if close_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        painter.circle_filled(close_rect.center(), 10.0, Color32::from_white_alpha(24));
+    }
+    let close_icon_color = if close_resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_white_alpha(155)
+    };
+    paint_icon(
+        painter,
+        Icon::Close,
+        Rect::from_center_size(close_rect.center(), vec2(10.0, 10.0)),
+        close_icon_color,
+    );
+    if close_resp.clicked() {
+        *show_pip = false;
+    }
+    let _ = close_resp.on_hover_text("Close Mini Player");
+
+    // 6. Track Metadata (Title & Artist)
+    let meta_x = art_rect.max.x + 12.0;
+    let meta_max_w = (close_rect.min.x - meta_x - 6.0).max(80.0);
+    let title_str = current_track
+        .as_ref()
+        .map(|t| t.display_title())
+        .unwrap_or("No playback");
+    let artist_str = current_track
+        .as_ref()
+        .map(|t| t.display_artist())
+        .unwrap_or("Eclipse");
+
+    // Estimate max chars from meta_max_w: ~7.5px per char at 14px font
+    let title_max_chars = ((meta_max_w / 7.8) as usize).clamp(10, 40);
+    let artist_max_chars = ((meta_max_w / 6.8) as usize).clamp(12, 45);
+
+    let trunc_title = truncate_str(title_str, title_max_chars);
+    let trunc_artist = truncate_str(artist_str, artist_max_chars);
+
+    let title_y = body_rect.min.y + 13.0;
+    let artist_y = body_rect.min.y + 32.0;
+
+    painter.text(
+        pos2(meta_x, title_y),
+        egui::Align2::LEFT_TOP,
+        &trunc_title,
+        egui::FontId::proportional(14.0),
+        Color32::WHITE,
+    );
+    painter.text(
+        pos2(meta_x, artist_y),
+        egui::Align2::LEFT_TOP,
+        &trunc_artist,
+        egui::FontId::proportional(12.0),
+        Color32::from_white_alpha(155),
+    );
+
+    // 7. Bottom Controls Row (ALL items locked to exact same center().y)
+    let controls_y = body_rect.max.y - 18.0;
+
+    // A. Previous Button (SkipBack, 14px)
+    let prev_rect = Rect::from_center_size(pos2(meta_x + 9.0, controls_y), vec2(20.0, 20.0));
+    let prev_resp = ui.interact(prev_rect, ui.id().with("pip_prev_btn"), egui::Sense::click());
+    if prev_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let prev_color = if prev_resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_white_alpha(175)
+    };
+    paint_icon(
+        painter,
+        Icon::SkipBack,
+        Rect::from_center_size(prev_rect.center(), vec2(14.0, 14.0)),
+        prev_color,
+    );
+    if prev_resp.clicked() {
+        player.prev();
+    }
+    let _ = prev_resp.on_hover_text("Previous Track");
+
+    // B. Play/Pause Button (Purple circular, 25px diameter, dark icon)
+    let play_center_x = prev_rect.max.x + 6.0 + 12.5;
+    let play_rect = Rect::from_center_size(pos2(play_center_x, controls_y), vec2(25.0, 25.0));
+    let play_resp = ui.interact(play_rect, ui.id().with("pip_play_btn"), egui::Sense::click());
+    if play_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let play_fill = if play_resp.hovered() {
+        Color32::from_rgb(175, 132, 255)
+    } else {
+        Color32::from_rgb(156, 108, 255)
+    };
+    painter.circle_filled(play_rect.center(), 12.5, play_fill);
+
+    let is_playing = player.engine.is_playing();
+    let play_icon = if is_playing { Icon::Pause } else { Icon::Play };
+    let icon_offset = if is_playing { vec2(0.0, 0.0) } else { vec2(0.8, 0.0) };
+    paint_icon(
+        painter,
+        play_icon,
+        Rect::from_center_size(play_rect.center() + icon_offset, vec2(12.0, 12.0)),
+        Color32::from_rgb(18, 16, 24),
+    );
+    if play_resp.clicked() {
+        if player.current_track().is_some() {
+            player.engine.toggle_play_pause();
+        } else if !player.queue.is_empty() {
+            player.play_index(0);
+        }
+    }
+    let _ = play_resp.on_hover_text(if is_playing { "Pause" } else { "Play" });
+
+    // C. Next Button (SkipForward, 14px)
+    let next_center_x = play_rect.max.x + 6.0 + 10.0;
+    let next_rect = Rect::from_center_size(pos2(next_center_x, controls_y), vec2(20.0, 20.0));
+    let next_resp = ui.interact(next_rect, ui.id().with("pip_next_btn"), egui::Sense::click());
+    if next_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let next_color = if next_resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_white_alpha(175)
+    };
+    paint_icon(
+        painter,
+        Icon::SkipForward,
+        Rect::from_center_size(next_rect.center(), vec2(14.0, 14.0)),
+        next_color,
+    );
+    if next_resp.clicked() {
+        player.next();
+    }
+    let _ = next_resp.on_hover_text("Next Track");
+
+    // D. Favorite Button (Far Right, 14px)
+    let fav_center_x = card_rect.max.x - 12.0 - 10.0;
+    let fav_rect = Rect::from_center_size(pos2(fav_center_x, controls_y), vec2(20.0, 20.0));
+    let fav_resp = ui.interact(fav_rect, ui.id().with("pip_fav_btn"), egui::Sense::click());
+    if fav_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let is_fav = current_track.as_ref().map(|t| t.favorite).unwrap_or(false);
+    let fav_icon = if is_fav { Icon::Heart } else { Icon::HeartOutline };
+    let fav_color = if is_fav {
+        Color32::from_rgb(156, 108, 255)
+    } else if fav_resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_white_alpha(150)
+    };
+    paint_icon(
+        painter,
+        fav_icon,
+        Rect::from_center_size(fav_rect.center(), vec2(14.0, 14.0)),
+        fav_color,
+    );
+    if fav_resp.clicked() {
+        if let Some(ref track) = current_track {
+            *on_toggle_fav = Some(track.id);
+        }
+    }
+    let _ = fav_resp.on_hover_text(if is_fav { "Favorited" } else { "Favorite" });
+
+    // E. Seekbar (Slim interactive seekbar between Next and Favorite)
+    let seek_min_x = next_rect.max.x + 8.0;
+    let seek_max_x = fav_rect.min.x - 8.0;
+    let seek_w = (seek_max_x - seek_min_x).max(60.0);
+    let seek_rect = Rect::from_center_size(
+        pos2(seek_min_x + seek_w / 2.0, controls_y),
+        vec2(seek_w, 16.0),
+    );
+    let seek_resp = ui.interact(seek_rect, ui.id().with("pip_mini_seekbar"), egui::Sense::click_and_drag());
+    render_mini_seekbar_rect(ui, player, stream_controller, theme, seek_rect, &seek_resp);
+
+    // 8. Native window dragging on non-interactive card surface
+    if resp.drag_started_by(egui::PointerButton::Primary) || resp.dragged() {
+        if let Some(ptr_pos) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())) {
+            let on_interactive = close_rect.contains(ptr_pos)
+                || prev_rect.contains(ptr_pos)
+                || play_rect.contains(ptr_pos)
+                || next_rect.contains(ptr_pos)
+                || seek_rect.expand(2.0).contains(ptr_pos)
+                || fav_rect.contains(ptr_pos);
+            if !on_interactive {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
-        } else {
-            ("Eclipse · Lossless Audio".to_string(), None)
-        };
-
-        let center_x = rect.center().x;
-        let shadow_color = Color32::from_rgba_premultiplied(0, 0, 0, 230);
-
-        if let Some(ref next_str) = next_text {
-            // Two-line layout: active lyric line (16.0px bold) and next line (11.5px muted)
-            let active_y = rect.min.y + 15.0;
-            let next_y = rect.min.y + 31.0;
-
-            let active_font = egui::FontId::proportional(16.0);
-            let active_color = Color32::WHITE;
-
-            let truncated_active = truncate_str(&active_text, 36);
-
-            // Multi-direction text shadow halo for wallpaper contrast
-            for (dx, dy) in &[(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (1.0, 1.0)] {
-                painter.text(
-                    pos2(center_x + dx, active_y + dy),
-                    egui::Align2::CENTER_CENTER,
-                    &truncated_active,
-                    active_font.clone(),
-                    shadow_color,
-                );
-            }
-            painter.text(
-                pos2(center_x, active_y),
-                egui::Align2::CENTER_CENTER,
-                &truncated_active,
-                active_font,
-                active_color,
-            );
-
-            // Next lyric line
-            let next_font = egui::FontId::proportional(11.5);
-            let next_color = Color32::from_gray(180);
-            let truncated_next = truncate_str(next_str, 40);
-
-            painter.text(
-                pos2(center_x + 1.0, next_y + 1.0),
-                egui::Align2::CENTER_CENTER,
-                &truncated_next,
-                next_font.clone(),
-                Color32::from_rgba_premultiplied(0, 0, 0, 180),
-            );
-            painter.text(
-                pos2(center_x, next_y),
-                egui::Align2::CENTER_CENTER,
-                &truncated_next,
-                next_font,
-                next_color,
-            );
-        } else {
-            // Single-line centered lyric or calm placeholder
-            let active_y = rect.center().y;
-            let active_font = egui::FontId::proportional(16.5);
-            let active_color = if active_text == "Eclipse · Lossless Audio" {
-                theme.text_secondary
-            } else {
-                Color32::WHITE
-            };
-            let truncated_active = truncate_str(&active_text, 36);
-
-            for (dx, dy) in &[(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (1.0, 1.0)] {
-                painter.text(
-                    pos2(center_x + dx, active_y + dy),
-                    egui::Align2::CENTER_CENTER,
-                    &truncated_active,
-                    active_font.clone(),
-                    shadow_color,
-                );
-            }
-            painter.text(
-                pos2(center_x, active_y),
-                egui::Align2::CENTER_CENTER,
-                &truncated_active,
-                active_font,
-                active_color,
-            );
         }
     }
 
     resp
 }
 
-/// Render the glassmorphic mini-player card matching the reference design.
-///
-/// Styling:
-/// - Background: `Color32::from_rgba_premultiplied(18, 16, 26, 230)`
-/// - Border: `Stroke::new(1.0, Color32::from_rgba_premultiplied(255, 255, 255, 28))`
-/// - Rounding: `Rounding::same(16.0)`
-/// - Inner padding: `12.0`
-///
-/// Features:
-/// - Smooth native drag interaction
-/// - Close button `[×]` (`Icon::Close`, size 11.0)
-/// - Left: 52px x 52px album cover art with `Rounding::same(8.0)`, fallback to vector `Icon::Disc`
-/// - Right: Title (13.5px bold white) and Artist (11.0px muted)
-/// - Transport controls: SkipBack (14.0px), solid circular Play/Pause (24px diameter), SkipForward (14.0px)
-/// - Mini seekbar (compact seek line with knob and drag-to-seek)
-/// - Heart button (`Icon::Heart` / `Icon::HeartOutline`, size 14.0px)
+/// Helper for backwards-compatible card rendering without lyrics header.
 pub fn render_pip_card(
     ui: &mut Ui,
     player: &mut PlayerController,
@@ -196,210 +432,27 @@ pub fn render_pip_card(
     show_pip: &mut bool,
     on_toggle_fav: &mut Option<i64>,
 ) -> egui::Response {
-    let card_width = 360.0_f32;
-
-    let frame = egui::Frame {
-        inner_margin: egui::Margin::same(12.0),
-        rounding: Rounding::same(16.0),
-        fill: Color32::from_rgba_premultiplied(18, 16, 26, 230),
-        stroke: Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 28)),
-        ..Default::default()
-    };
-
-    let current_track = player.current_track().cloned();
-
-    let inner = frame.show(ui, |ui| {
-        ui.set_width(card_width - 24.0);
-        ui.horizontal(|ui| {
-            // 1. LEFT: 52px x 52px album cover art with Rounding::same(8.0)
-            let (art_rect, art_resp) = ui.allocate_exact_size(vec2(52.0, 52.0), egui::Sense::click_and_drag());
-            if art_resp.drag_started_by(egui::PointerButton::Primary) || art_resp.dragged() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-
-            let mut painted_cover = false;
-            if let Some(ref track) = current_track {
-                if let Some(texture) = art_manager.get_or_load(ui.ctx(), &track.path) {
-                    ui.painter().image(
-                        texture.id(),
-                        art_rect,
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
-                    ui.painter().rect_stroke(
-                        art_rect,
-                        Rounding::same(8.0),
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 30)),
-                    );
-                    painted_cover = true;
-                }
-            }
-
-            if !painted_cover {
-                ui.painter().rect_filled(
-                    art_rect,
-                    Rounding::same(8.0),
-                    Color32::from_rgba_premultiplied(32, 28, 46, 220),
-                );
-                ui.painter().rect_stroke(
-                    art_rect,
-                    Rounding::same(8.0),
-                    Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
-                );
-                let disc_box = Rect::from_center_size(art_rect.center(), vec2(26.0, 26.0));
-                paint_icon(ui.painter(), Icon::Disc, disc_box, theme.accent);
-            }
-
-            ui.add_space(8.0);
-
-            // 2. RIGHT: Title/Artist row & Controls row
-            let right_width = (card_width - 24.0 - 52.0 - 8.0).max(180.0);
-            ui.allocate_ui_with_layout(
-                vec2(right_width, 52.0),
-                Layout::top_down(egui::Align::Min),
-                |ui| {
-                    ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
-
-                    // Row A: Title & Artist + Close Button
-                    ui.horizontal(|ui| {
-                        let text_w = (right_width - 24.0).max(120.0);
-                        let title_str = current_track
-                            .as_ref()
-                            .map(|t| t.display_title())
-                            .unwrap_or("No playback");
-                        let artist_str = current_track
-                            .as_ref()
-                            .map(|t| t.display_artist())
-                            .unwrap_or("Eclipse");
-
-                        ui.allocate_ui_with_layout(
-                            vec2(text_w, 22.0),
-                            Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-                                let trunc_title = truncate_str(title_str, 16);
-                                ui.label(
-                                    RichText::new(trunc_title)
-                                        .color(Color32::WHITE)
-                                        .size(13.5)
-                                        .strong(),
-                                );
-                                let trunc_artist = truncate_str(artist_str, 14);
-                                ui.label(
-                                    RichText::new(format!("• {trunc_artist}"))
-                                        .color(theme.text_secondary)
-                                        .size(11.0),
-                                );
-                            },
-                        );
-
-                        // Close button [×] (Icon::Close, size 11.0) in top-right corner
-                        if icon_button(ui, Icon::Close, 11.0, theme.text_muted)
-                            .on_hover_text("Close Mini Player")
-                            .clicked()
-                        {
-                            *show_pip = false;
-                        }
-                    });
-
-                    // Row B: Controls row
-                    let orig_interact_y = ui.spacing().interact_size.y;
-                    ui.spacing_mut().interact_size.y = 24.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(7.0, 0.0);
-
-                        // SkipBack (14.0px)
-                        if icon_button(ui, Icon::SkipBack, 14.0, theme.text_primary)
-                            .on_hover_text("Previous Track")
-                            .clicked()
-                        {
-                            player.prev();
-                        }
-
-                        // Play/Pause circular solid button: 24px diameter circle filled with theme.accent
-                        let (play_rect, play_resp) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::click());
-                        if play_resp.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                        let play_center = play_rect.center();
-                        let play_fill = if play_resp.hovered() {
-                            Color32::from_rgba_premultiplied(
-                                (theme.accent.r() as u16 + 25).min(255) as u8,
-                                (theme.accent.g() as u16 + 25).min(255) as u8,
-                                (theme.accent.b() as u16 + 25).min(255) as u8,
-                                255,
-                            )
-                        } else {
-                            theme.accent
-                        };
-                        ui.painter().circle_filled(play_center, 12.0, play_fill);
-
-                        let is_playing = player.engine.is_playing();
-                        let play_icon = if is_playing { Icon::Pause } else { Icon::Play };
-                        let icon_box = Rect::from_center_size(play_center, vec2(12.0, 12.0));
-                        paint_icon(ui.painter(), play_icon, icon_box, Color32::from_rgb(18, 16, 26));
-
-                        if play_resp.clicked() {
-                            if player.current_track().is_some() {
-                                player.engine.toggle_play_pause();
-                            } else if !player.queue.is_empty() {
-                                player.play_index(0);
-                            }
-                        }
-
-                        // SkipForward (14.0px)
-                        if icon_button(ui, Icon::SkipForward, 14.0, theme.text_primary)
-                            .on_hover_text("Next Track")
-                            .clicked()
-                        {
-                            player.next();
-                        }
-
-                        // Mini Seekbar: compact seek line (80-120px wide, height 3.5px, filled rail with knob)
-                        let seekbar_w = 90.0_f32;
-                        render_mini_seekbar(ui, player, stream_controller, theme, seekbar_w);
-
-                        // Heart button (Icon::Heart / Icon::HeartOutline, size 14.0px, toggles favorite)
-                        let is_fav = current_track.as_ref().map(|t| t.favorite).unwrap_or(false);
-                        let heart_icon = if is_fav { Icon::Heart } else { Icon::HeartOutline };
-                        let heart_color = if is_fav { theme.accent } else { theme.text_muted };
-                        if icon_button(ui, heart_icon, 14.0, heart_color)
-                            .on_hover_text(if is_fav { "Favorited" } else { "Favorite" })
-                            .clicked()
-                        {
-                            if let Some(ref track) = current_track {
-                                *on_toggle_fav = Some(track.id);
-                            }
-                        }
-                    });
-                    ui.spacing_mut().interact_size.y = orig_interact_y;
-                },
-            );
-        });
-    });
-
-    // Native window drag interaction on empty surface of the card
-    let card_resp = ui.interact(
-        inner.response.rect,
-        ui.id().with("pip_card_surface_drag"),
-        egui::Sense::click_and_drag(),
-    );
-    if card_resp.drag_started_by(egui::PointerButton::Primary) || card_resp.dragged() {
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-    }
-
-    inner.response
+    render_unified_pip_card(
+        ui,
+        player,
+        stream_controller,
+        theme,
+        art_manager,
+        show_pip,
+        on_toggle_fav,
+        false,
+    )
 }
 
-/// Helper to render the compact seek line with knob and click/drag-to-seek functionality.
-fn render_mini_seekbar(
+/// Helper to render the compact seek line with knob and click/drag-to-seek functionality at a given rect.
+fn render_mini_seekbar_rect(
     ui: &mut Ui,
     player: &mut PlayerController,
     stream_controller: Option<&StreamController>,
-    theme: &Theme,
-    desired_width: f32,
+    _theme: &Theme,
+    rect: Rect,
+    resp: &egui::Response,
 ) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 16.0), egui::Sense::click_and_drag());
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -419,15 +472,15 @@ fn render_mini_seekbar(
         }
     }
 
-    let rail_h = 3.5;
+    let rail_h = 3.5_f32;
     let rail_rect = Rect::from_center_size(rect.center(), vec2(rect.width(), rail_h));
     let rail_rounding = Rounding::same(rail_h / 2.0);
 
-    // Track background rail
+    // Track background rail: dark track Color32::from_white_alpha(25)
     ui.painter().rect_filled(
         rail_rect,
         rail_rounding,
-        Color32::from_rgba_premultiplied(255, 255, 255, 38),
+        Color32::from_white_alpha(25),
     );
 
     // Continuous visual scrubbing during drag
@@ -474,21 +527,38 @@ fn render_mini_seekbar(
         pos_secs
     };
 
-    // Filled progress rail
+    // Filled progress rail: purple Color32::from_rgb(156, 108, 255)
     let progress = (display_pos / max_dur).clamp(0.0, 1.0) as f32;
     let fill_w = rail_rect.width() * progress;
     if fill_w > 0.0 {
         let filled_rect = Rect::from_min_size(rail_rect.min, vec2(fill_w, rail_h));
-        ui.painter().rect_filled(filled_rect, rail_rounding, theme.accent);
+        ui.painter().rect_filled(
+            filled_rect,
+            rail_rounding,
+            Color32::from_rgb(156, 108, 255),
+        );
     }
 
-    // Interactive scrubber knob
+    // Interactive scrubber knob: small white thumb
     let knob_pos = pos2(rail_rect.min.x + fill_w, rail_rect.center().y);
     let knob_r = if resp.hovered() || resp.dragged() { 4.5 } else { 3.2 };
     ui.painter().circle_filled(knob_pos, knob_r, Color32::WHITE);
 }
 
-/// Render the combined overlay content: desktop synced lyrics placed above the mini-player card.
+/// Helper to render the compact seek line with knob and click/drag-to-seek functionality.
+pub fn render_mini_seekbar(
+    ui: &mut Ui,
+    player: &mut PlayerController,
+    stream_controller: Option<&StreamController>,
+    theme: &Theme,
+    desired_width: f32,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, 16.0), egui::Sense::click_and_drag());
+    render_mini_seekbar_rect(ui, player, stream_controller, theme, rect, &resp);
+    resp
+}
+
+/// Render the combined overlay content: unified dark-glass floating card.
 #[allow(clippy::too_many_arguments)]
 pub fn render_pip_overlay_content(
     ui: &mut Ui,
@@ -499,14 +569,17 @@ pub fn render_pip_overlay_content(
     show_pip: &mut bool,
     on_toggle_fav: &mut Option<i64>,
     show_lyrics: bool,
-) {
-    ui.vertical_centered(|ui| {
-        if show_lyrics {
-            render_desktop_lyrics(ui, player, theme);
-            ui.add_space(8.0);
-        }
-        render_pip_card(ui, player, stream_controller, theme, art_manager, show_pip, on_toggle_fav);
-    });
+) -> egui::Response {
+    render_unified_pip_card(
+        ui,
+        player,
+        stream_controller,
+        theme,
+        art_manager,
+        show_pip,
+        on_toggle_fav,
+        show_lyrics,
+    )
 }
 
 /// Display the floating native Picture-in-Picture viewport window.
@@ -531,10 +604,13 @@ pub fn show_pip_viewport(
         _ => None,
     };
 
-    let target_height = if pip_settings.show_desktop_lyrics { 136.0 } else { 82.0 };
+    let has_lyrics = pip_settings.show_desktop_lyrics && active_lyric_text(player).is_some();
+    let target_height = if has_lyrics { 126.0 } else { 90.0 };
+    let target_width = 390.0;
+
     let mut builder = egui::ViewportBuilder::default()
         .with_title("Eclipse Mini Player")
-        .with_inner_size(vec2(364.0, target_height))
+        .with_inner_size(vec2(target_width, target_height))
         .with_transparent(true)
         .with_decorations(false)
         .with_always_on_top()
@@ -551,11 +627,14 @@ pub fn show_pip_viewport(
         let screen = ctx.input(|i| i.screen_rect());
         if screen.width() > 500.0 && screen.height() > 400.0 {
             builder = builder.with_position(pos2(
-                (screen.max.x - 384.0).max(20.0),
+                (screen.max.x - target_width - 20.0).max(20.0),
                 (screen.max.y - target_height - 70.0).max(20.0),
             ));
         }
     }
+
+    // Dynamically adjust inner size when tracks gain or lose lyrics
+    ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::InnerSize(vec2(target_width, target_height)));
 
     ctx.show_viewport_immediate(
         viewport_id,
@@ -603,7 +682,30 @@ mod tests {
                 let resp1 = render_desktop_lyrics(ui, &player, &theme);
                 assert!(resp1.rect.width() >= 320.0);
 
-                // 2. With synced lyrics
+                // 2. With playing track & synced lyrics
+                let track = Track {
+                    id: 1,
+                    path: "song.flac".into(),
+                    title: "Song".into(),
+                    artist: "Artist".into(),
+                    album: "Album".into(),
+                    genre: "Genre".into(),
+                    year: 2020,
+                    track_number: 1,
+                    duration_secs: 180.0,
+                    format: "FLAC".into(),
+                    bitrate_kbps: 800,
+                    sample_rate: 44100,
+                    channels: 2,
+                    favorite: false,
+                    has_art: false,
+                    folder: "".into(),
+                    album_artist: "".into(),
+                    play_count: 0,
+                    file_size: 1024,
+                };
+                player.load_queue(vec![track], 0);
+
                 player.lyrics = Some(Lyrics {
                     lines: vec![
                         LyricLine {
@@ -700,7 +802,7 @@ mod tests {
                 let mut on_toggle_fav = None;
 
                 // Render full content with lyrics
-                render_pip_overlay_content(
+                let resp_lyrics = render_pip_overlay_content(
                     ui,
                     &mut player,
                     None,
@@ -710,9 +812,10 @@ mod tests {
                     &mut on_toggle_fav,
                     true,
                 );
+                assert_eq!(resp_lyrics.rect.width(), 390.0);
 
                 // Render full content without lyrics
-                render_pip_overlay_content(
+                let resp_no_lyrics = render_pip_overlay_content(
                     ui,
                     &mut player,
                     None,
@@ -722,6 +825,84 @@ mod tests {
                     &mut on_toggle_fav,
                     false,
                 );
+                assert_eq!(resp_no_lyrics.rect.width(), 390.0);
+                assert_eq!(resp_no_lyrics.rect.height(), 90.0);
+            });
+        });
+    }
+
+    #[test]
+    fn test_unified_pip_card_sizing_and_lyrics() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let mut art_manager = AlbumArtManager::new();
+                let mut show_pip = true;
+                let mut on_toggle_fav = None;
+
+                let track = Track {
+                    id: 99,
+                    path: "sample.flac".into(),
+                    title: "Test Track".into(),
+                    artist: "Test Artist".into(),
+                    album: "Test Album".into(),
+                    genre: "Ambient".into(),
+                    year: 2024,
+                    track_number: 1,
+                    duration_secs: 300.0,
+                    format: "FLAC".into(),
+                    bitrate_kbps: 1000,
+                    sample_rate: 44100,
+                    channels: 2,
+                    favorite: false,
+                    has_art: false,
+                    folder: "".into(),
+                    album_artist: "".into(),
+                    play_count: 0,
+                    file_size: 2048,
+                };
+                player.load_queue(vec![track], 0);
+
+                // Add lyrics
+                player.lyrics = Some(Lyrics {
+                    lines: vec![LyricLine {
+                        timestamp_ms: 0,
+                        text: "Floating in dark glass".into(),
+                    }],
+                    is_synced: true,
+                    source: "LRCLIB".into(),
+                });
+
+                assert_eq!(active_lyric_text(&player), Some("Floating in dark glass".into()));
+
+                let resp_with = render_unified_pip_card(
+                    ui,
+                    &mut player,
+                    None,
+                    &theme,
+                    &mut art_manager,
+                    &mut show_pip,
+                    &mut on_toggle_fav,
+                    true,
+                );
+                assert_eq!(resp_with.rect.width(), 390.0);
+                assert_eq!(resp_with.rect.height(), 126.0);
+
+                let resp_without = render_unified_pip_card(
+                    ui,
+                    &mut player,
+                    None,
+                    &theme,
+                    &mut art_manager,
+                    &mut show_pip,
+                    &mut on_toggle_fav,
+                    false,
+                );
+                assert_eq!(resp_without.rect.width(), 390.0);
+                assert_eq!(resp_without.rect.height(), 90.0);
             });
         });
     }
@@ -748,7 +929,8 @@ mod tests {
                 );
                 player.switch_to_stream("spotify", Some(stream_track));
 
-                render_mini_seekbar(ui, &mut player, Some(&stream_ctrl), &theme, 90.0);
+                let resp = render_mini_seekbar(ui, &mut player, Some(&stream_ctrl), &theme, 90.0);
+                assert_eq!(resp.rect.width(), 90.0);
             });
         });
     }

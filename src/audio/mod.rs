@@ -689,6 +689,73 @@ impl PlayerController {
         None
     }
 
+    /// Look ahead up to `count` upcoming tracks in exact playback sequence.
+    /// Strictly read-only; does not mutate queue, shuffle order, or playback positions.
+    pub fn peek_upcoming_tracks(&self, count: usize) -> Vec<Track> {
+        if count == 0 {
+            return Vec::new();
+        }
+
+        let mut upcoming = Vec::with_capacity(count);
+
+        // a) Collect up to `count` tracks from `user_queue` (FIFO order).
+        for &queued_idx in &self.user_queue {
+            if upcoming.len() >= count {
+                break;
+            }
+            if queued_idx < self.queue.len() {
+                if let Some(track) = self.queue.get(queued_idx) {
+                    upcoming.push(track.clone());
+                }
+            }
+        }
+
+        // b) If fewer than `count` tracks were collected and `self.queue` is non-empty:
+        if upcoming.len() < count && !self.queue.is_empty() {
+            let linear_fallback: Vec<usize>;
+            let order: &[usize] = if !self.shuffle_order.is_empty() {
+                &self.shuffle_order
+            } else {
+                linear_fallback = (0..self.queue.len()).collect();
+                &linear_fallback
+            };
+
+            if !order.is_empty() {
+                let mut visited = vec![false; order.len()];
+
+                // Advance through order starting from self.queue_pos + 1
+                let start_pos = self.queue_pos.saturating_add(1);
+                for pos in start_pos..order.len() {
+                    if upcoming.len() >= count {
+                        break;
+                    }
+                    visited[pos] = true;
+                    let track_idx = order[pos];
+                    if let Some(track) = self.queue.get(track_idx) {
+                        upcoming.push(track.clone());
+                    }
+                }
+
+                // Wrap around to index 0 if RepeatMode::All
+                // Safety check for wrap-around: do not enter an infinite loop if self.queue.len() <= 1 or if already visited.
+                if self.repeat == RepeatMode::All && self.queue.len() > 1 && upcoming.len() < count {
+                    for pos in 0..order.len() {
+                        if upcoming.len() >= count || visited[pos] {
+                            break;
+                        }
+                        visited[pos] = true;
+                        let track_idx = order[pos];
+                        if let Some(track) = self.queue.get(track_idx) {
+                            upcoming.push(track.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        upcoming
+    }
+
     pub fn update(&mut self) {
         // Poll background lyrics
         if let Ok(res) = self.lyrics_rx.try_recv() {
@@ -1604,5 +1671,166 @@ mod tests {
         assert_eq!(player.active_playlist_id, Some("pl_deleted".to_string()));
         assert!(player.queue.is_empty());
         assert_eq!(player.current_index, None);
+    }
+
+    #[test]
+    fn test_peek_upcoming_tracks_user_queue_priority_fifo() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+        player.repeat = RepeatMode::Off;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+            dummy_track(4, "Track 4"),
+            dummy_track(5, "Track 5"),
+        ];
+        player.load_queue(tracks, 0); // Currently at Track 1 (queue_pos = 0)
+
+        // Add Track 5, then Track 3 to user_queue
+        player.add_to_queue(4); // index 4 = Track 5
+        player.add_to_queue(2); // index 2 = Track 3
+
+        // Request 4 upcoming tracks:
+        // FIFO order: Track 5, Track 3, then regular order from queue_pos + 1: Track 2, Track 3
+        let peeked = player.peek_upcoming_tracks(4);
+        assert_eq!(peeked.len(), 4);
+        assert_eq!(peeked[0].title, "Track 5");
+        assert_eq!(peeked[1].title, "Track 3");
+        assert_eq!(peeked[2].title, "Track 2");
+        assert_eq!(peeked[3].title, "Track 3");
+
+        // Verify read-only: player state is not mutated
+        assert_eq!(player.user_queue.len(), 2);
+        assert_eq!(player.current_index, Some(0));
+        assert_eq!(player.queue_pos, 0);
+
+        // Count smaller than user_queue: only returns first count user_queue items
+        let peeked_subset = player.peek_upcoming_tracks(1);
+        assert_eq!(peeked_subset.len(), 1);
+        assert_eq!(peeked_subset[0].title, "Track 5");
+
+        // Safely skips invalid/out-of-bounds index in user_queue
+        player.clear_user_queue();
+        player.user_queue.push_back(999);
+        player.user_queue.push_back(1);
+        let peeked_invalid = player.peek_upcoming_tracks(2);
+        assert_eq!(peeked_invalid.len(), 2);
+        assert_eq!(peeked_invalid[0].title, "Track 2"); // index 1 from user_queue
+        assert_eq!(peeked_invalid[1].title, "Track 2"); // queue_pos + 1 from regular order
+    }
+
+    #[test]
+    fn test_peek_upcoming_tracks_shuffle_order() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = true;
+        player.repeat = RepeatMode::Off;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+            dummy_track(4, "Track 4"),
+        ];
+        player.load_queue(tracks, 0);
+
+        // Explicitly set a known shuffle order: [0, 3, 1, 2] (Track 1, Track 4, Track 2, Track 3)
+        player.shuffle_order = vec![0, 3, 1, 2];
+        player.queue_pos = 0; // At Track 1 (pos 0 in shuffle_order)
+
+        let peeked = player.peek_upcoming_tracks(3);
+        assert_eq!(peeked.len(), 3);
+        assert_eq!(peeked[0].title, "Track 4"); // pos 1
+        assert_eq!(peeked[1].title, "Track 2"); // pos 2
+        assert_eq!(peeked[2].title, "Track 3"); // pos 3
+
+        // Advance queue_pos to 1 (Track 4)
+        player.queue_pos = 1;
+        let peeked_mid = player.peek_upcoming_tracks(2);
+        assert_eq!(peeked_mid.len(), 2);
+        assert_eq!(peeked_mid[0].title, "Track 2");
+        assert_eq!(peeked_mid[1].title, "Track 3");
+
+        // At last pos (pos 3), with Repeat Off, upcoming should be empty
+        player.queue_pos = 3;
+        let peeked_end = player.peek_upcoming_tracks(2);
+        assert!(peeked_end.is_empty());
+    }
+
+    #[test]
+    fn test_peek_upcoming_tracks_repeat_all_wrap_around() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.shuffle = false;
+        player.repeat = RepeatMode::All;
+
+        let tracks = vec![
+            dummy_track(1, "Track 1"),
+            dummy_track(2, "Track 2"),
+            dummy_track(3, "Track 3"),
+        ];
+        player.load_queue(tracks, 1); // queue_pos = 1 (Track 2)
+
+        // Request 4 tracks:
+        // Starting from queue_pos + 1 = 2: Track 3
+        // End reached, wraps around to pos 0: Track 1, then pos 1: Track 2
+        // Total collected: 3 tracks (pos 2 already visited, prevents infinite loop)
+        let peeked = player.peek_upcoming_tracks(4);
+        assert_eq!(peeked.len(), 3);
+        assert_eq!(peeked[0].title, "Track 3");
+        assert_eq!(peeked[1].title, "Track 1");
+        assert_eq!(peeked[2].title, "Track 2");
+
+        // When queue_pos is at end (pos 2 = Track 3)
+        player.queue_pos = 2;
+        let peeked_end = player.peek_upcoming_tracks(3);
+        assert_eq!(peeked_end.len(), 3);
+        assert_eq!(peeked_end[0].title, "Track 1");
+        assert_eq!(peeked_end[1].title, "Track 2");
+        assert_eq!(peeked_end[2].title, "Track 3");
+
+        // With RepeatMode::Off, at end returns empty
+        player.repeat = RepeatMode::Off;
+        let peeked_off = player.peek_upcoming_tracks(3);
+        assert!(peeked_off.is_empty());
+    }
+
+    #[test]
+    fn test_peek_upcoming_tracks_empty_and_single_track() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        // Case 1: Empty queue with Repeat All (must not crash or loop)
+        player.repeat = RepeatMode::All;
+        player.queue.clear();
+        player.shuffle_order.clear();
+        let peeked_empty = player.peek_upcoming_tracks(10);
+        assert!(peeked_empty.is_empty());
+
+        // Case 2: Count 0 on non-empty queue
+        let tracks = vec![dummy_track(1, "Track 1")];
+        player.load_queue(tracks, 0);
+        let peeked_zero = player.peek_upcoming_tracks(0);
+        assert!(peeked_zero.is_empty());
+
+        // Case 3: Single track with Repeat All (must not infinite loop or panic)
+        player.repeat = RepeatMode::All;
+        let peeked_single = player.peek_upcoming_tracks(10);
+        assert!(peeked_single.is_empty());
+
+        // Case 4: Single track with user_queue entry (valid user_queue still honored)
+        player.add_to_queue(0);
+        let peeked_with_user_q = player.peek_upcoming_tracks(5);
+        assert_eq!(peeked_with_user_q.len(), 1);
+        assert_eq!(peeked_with_user_q[0].title, "Track 1");
+
+        // Case 5: Single track with invalid user_queue index
+        player.clear_user_queue();
+        player.user_queue.push_back(50);
+        let peeked_invalid_idx = player.peek_upcoming_tracks(5);
+        assert!(peeked_invalid_idx.is_empty());
     }
 }

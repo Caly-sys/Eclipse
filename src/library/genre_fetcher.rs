@@ -98,7 +98,10 @@ fn query_itunes_genre(query: &str) -> Option<String> {
     );
 
     let resp = ureq::get(&url)
-        .set("User-Agent", "Eclipse/1.2.4 (lossless music player)")
+        .set(
+            "User-Agent",
+            concat!("Eclipse/", env!("CARGO_PKG_VERSION"), " (lossless music player)"),
+        )
         .timeout(Duration::from_secs(5))
         .call()
         .ok()?;
@@ -136,7 +139,10 @@ fn query_deezer_genre(query: &str) -> Option<String> {
     let search_url = format!("https://api.deezer.com/search?q={}&limit=1", encoded);
 
     let resp = ureq::get(&search_url)
-        .set("User-Agent", "Eclipse/1.2.4 (lossless music player)")
+        .set(
+            "User-Agent",
+            concat!("Eclipse/", env!("CARGO_PKG_VERSION"), " (lossless music player)"),
+        )
         .timeout(Duration::from_secs(5))
         .call()
         .ok()?;
@@ -165,7 +171,10 @@ fn query_deezer_genre(query: &str) -> Option<String> {
 
     let album_url = format!("https://api.deezer.com/album/{}", album_id);
     let album_resp = ureq::get(&album_url)
-        .set("User-Agent", "Eclipse/1.2.4 (lossless music player)")
+        .set(
+            "User-Agent",
+            concat!("Eclipse/", env!("CARGO_PKG_VERSION"), " (lossless music player)"),
+        )
         .timeout(Duration::from_secs(5))
         .call()
         .ok()?;

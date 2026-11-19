@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use egui::{
-    pos2, vec2, Color32, FontId, Id, Layout, Rect, RichText, Rounding, ScrollArea,
+    pos2, vec2, Align2, Color32, FontId, Id, Layout, Rect, RichText, Rounding, ScrollArea,
     Sense, Stroke, Ui, UiBuilder,
 };
 
@@ -17,6 +17,67 @@ use crate::ui::theme::Theme;
 /// Re-export ArtManager as alias to AlbumArtManager for contract compatibility
 pub type ArtManager = AlbumArtManager;
 
+/// Formats the user's current local system time into a clean 12-hour clock string (e.g. "9:03 PM", "12:45 AM").
+#[cfg(windows)]
+pub fn format_local_clock_12h() -> String {
+    #[allow(clippy::upper_case_acronyms)]
+    #[repr(C)]
+    struct SYSTEMTIME {
+        w_year: u16,
+        w_month: u16,
+        w_day_of_week: u16,
+        w_day: u16,
+        w_hour: u16,
+        w_minute: u16,
+        w_second: u16,
+        w_milliseconds: u16,
+    }
+    extern "system" {
+        fn GetLocalTime(lp_system_time: *mut SYSTEMTIME);
+    }
+    let mut st = SYSTEMTIME {
+        w_year: 0,
+        w_month: 0,
+        w_day_of_week: 0,
+        w_day: 0,
+        w_hour: 0,
+        w_minute: 0,
+        w_second: 0,
+        w_milliseconds: 0,
+    };
+    unsafe {
+        GetLocalTime(&mut st);
+    }
+    let h24 = st.w_hour as u32;
+    let min = st.w_minute as u32;
+    let is_pm = h24 >= 12;
+    let h12 = match h24 % 12 {
+        0 => 12,
+        h => h,
+    };
+    let am_pm = if is_pm { "PM" } else { "AM" };
+    format!("{}:{:02} {}", h12, min, am_pm)
+}
+
+#[cfg(not(windows))]
+pub fn format_local_clock_12h() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let total_mins = secs / 60;
+    let min = (total_mins % 60) as u32;
+    let h24 = ((total_mins / 60) % 24) as u32;
+    let is_pm = h24 >= 12;
+    let h12 = match h24 % 12 {
+        0 => 12,
+        h => h,
+    };
+    let am_pm = if is_pm { "PM" } else { "AM" };
+    format!("{}:{:02} {}", h12, min, am_pm)
+}
+
 /// Renders the cinematic full-viewport music experience with blurred ambient background,
 /// two-column split layout (album art, metadata, seekbar, controls on left; synced lyrics on right),
 /// and floating overlay controls.
@@ -28,6 +89,9 @@ pub fn render_cinematic_fullscreen(
     ambient_cache: &mut AmbientBlurCache,
     on_exit_fullscreen: &mut bool,
 ) {
+    // 0. Low-overhead repaint timer keeping the local clock live even when playback is paused
+    ui.ctx().request_repaint_after(Duration::from_secs(5));
+
     // 1. Fullscreen Hotkey Check: Escape exits cinematic mode
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         *on_exit_fullscreen = true;
@@ -148,37 +212,66 @@ fn render_left_column(
     let available_h = rect.height();
     let left_w = rect.width();
 
-    // Determine square artwork card size proportional to column width & screen height
-    let art_size = (left_w * 0.80).clamp(240.0, 340.0).min(available_h * 0.44);
+    // 0. Local clock dimensions
+    let clock_h = 22.0_f32;
+    let clock_gap = 14.0_f32;
+
+    // Determine square artwork card size proportional to column width & screen height,
+    // leaving comfortable headroom for the clock, metadata, seekbar, and controls.
+    let art_size = (left_w * 0.80).clamp(230.0, 330.0).min(available_h * 0.40);
 
     // Calculate approximate height of content to center vertically
-    let estimated_content_h = art_size + 20.0 + 96.0 + 16.0 + 38.0 + 16.0 + 52.0 + 14.0 + 26.0;
+    let estimated_content_h = clock_h + clock_gap + art_size + 20.0 + 96.0 + 16.0 + 38.0 + 16.0 + 52.0 + 14.0 + 26.0;
     let top_pad = ((available_h - estimated_content_h) * 0.5).max(0.0);
 
     if top_pad > 0.0 {
         ui.add_space(top_pad);
     }
 
+    // 0. Live Local Clock (12-hour AM/PM) Centered Directly Above Album Cover
+    let clock_str = format_local_clock_12h();
+    let clock_font = FontId::proportional(17.0);
+    let (clock_rect, _) = ui.allocate_exact_size(vec2(left_w.min(220.0), clock_h), Sense::hover());
+    let clock_center = clock_rect.center();
+
+    // Subtle dark text drop-shadow (1px offset)
+    ui.painter().text(
+        pos2(clock_center.x + 1.0, clock_center.y + 1.0),
+        Align2::CENTER_CENTER,
+        &clock_str,
+        clock_font.clone(),
+        Color32::from_black_alpha(90),
+    );
+
+    // Crisp soft white clock text
+    ui.painter().text(
+        clock_center,
+        Align2::CENTER_CENTER,
+        &clock_str,
+        clock_font,
+        Color32::from_white_alpha(230),
+    );
+
+    ui.add_space(clock_gap);
+
     // 1. Large Album Art Card with Drop Shadow and Glow
     let (art_rect, _) = ui.allocate_exact_size(vec2(art_size, art_size), Sense::hover());
+    let rounding = Rounding::same(16.0);
 
     // Soft drop shadow
     let shadow_rect = art_rect.translate(vec2(0.0, 8.0));
     ui.painter().rect_filled(
         shadow_rect,
-        Rounding::same(16.0),
+        rounding,
         Color32::from_rgba_premultiplied(0, 0, 0, 110),
     );
 
     let mut painted_texture = false;
     if let Some(track) = current_track {
         if let Some(texture) = art_manager.get_or_load(ui.ctx(), &track.path) {
-            ui.painter().image(
-                texture.id(),
-                art_rect,
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
-            );
+            let img = egui::Image::new(egui::load::SizedTexture::new(texture.id(), art_rect.size()))
+                .rounding(rounding);
+            img.paint_at(ui, art_rect);
             painted_texture = true;
         }
     }
@@ -187,18 +280,18 @@ fn render_left_column(
         // Fallback card with disc vector icon
         ui.painter().rect_filled(
             art_rect,
-            Rounding::same(16.0),
+            rounding,
             Color32::from_rgba_premultiplied(28, 22, 44, 210),
         );
         let disc_rect = Rect::from_center_size(art_rect.center(), vec2(56.0, 56.0));
         icons::paint_icon(ui.painter(), Icon::Disc, disc_rect, theme.accent);
     }
 
-    // Elegant subtle hairline border
+    // Elegant subtle glass edge border with zero overhang
     ui.painter().rect_stroke(
         art_rect,
-        Rounding::same(16.0),
-        Stroke::new(1.0_f32, theme.border_accent),
+        rounding,
+        Stroke::new(1.0_f32, Color32::from_white_alpha(45)),
     );
 
     ui.add_space(20.0);
@@ -280,7 +373,7 @@ fn render_left_column(
     ui.add_space(16.0);
 
     // 4. Playback Controls (Shuffle, Prev, Play/Pause, Next, Repeat)
-    render_playback_controls(ui, player, theme);
+    render_playback_controls(ui, player, theme, bar_width);
 
     ui.add_space(14.0);
 
@@ -288,7 +381,7 @@ fn render_left_column(
     render_volume_control(ui, player, theme, bar_width);
 }
 
-/// Renders the format / Hi-Res quality badge pill.
+/// Renders the format / Hi-Res quality badge pill with dark translucent amber-gold styling for crisp contrast.
 fn render_quality_badge(ui: &mut Ui, track: &Track, theme: &Theme) {
     let is_hires = track.is_hires();
     let is_lossless = track.is_lossless();
@@ -302,21 +395,21 @@ fn render_quality_badge(ui: &mut Ui, track: &Track, theme: &Theme) {
 
     let (badge_bg, badge_border, text_col) = if is_hires {
         (
-            Color32::from_rgba_premultiplied(255, 178, 92, 35),
-            Color32::from_rgba_premultiplied(255, 178, 92, 110),
-            theme.accent_warm,
+            Color32::from_rgba_unmultiplied(245, 194, 66, 36),
+            Color32::from_rgba_unmultiplied(245, 194, 66, 170),
+            Color32::from_rgb(255, 224, 130),
         )
     } else if is_lossless {
         (
-            Color32::from_rgba_premultiplied(theme.accent.r(), theme.accent.g(), theme.accent.b(), 35),
-            theme.border_accent,
-            theme.accent,
+            Color32::from_rgba_unmultiplied(theme.accent.r(), theme.accent.g(), theme.accent.b(), 36),
+            Color32::from_rgba_unmultiplied(theme.accent.r(), theme.accent.g(), theme.accent.b(), 170),
+            Color32::from_rgb(220, 210, 255),
         )
     } else {
         (
-            Color32::from_rgba_premultiplied(255, 255, 255, 20),
-            theme.border,
-            theme.text_secondary,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+            Color32::from_rgba_unmultiplied(255, 255, 255, 100),
+            Color32::from_rgb(220, 220, 230),
         )
     };
 
@@ -326,15 +419,19 @@ fn render_quality_badge(ui: &mut Ui, track: &Track, theme: &Theme) {
         format!("{} kbps", track.bitrate_kbps)
     };
 
-    let (rect, _) = ui.allocate_exact_size(vec2(165.0, 22.0), Sense::hover());
+    let font_id = FontId::proportional(11.0);
+    let text_w = ui.painter().layout_no_wrap(display_str.clone(), font_id.clone(), text_col).size().x;
+    let badge_w = (text_w + 24.0).max(90.0);
+
+    let (rect, _) = ui.allocate_exact_size(vec2(badge_w, 22.0), Sense::hover());
     ui.painter().rect_filled(rect, Rounding::same(11.0), badge_bg);
     ui.painter().rect_stroke(rect, Rounding::same(11.0), Stroke::new(1.0_f32, badge_border));
 
     ui.painter().text(
         rect.center(),
-        egui::Align2::CENTER_CENTER,
+        Align2::CENTER_CENTER,
         display_str,
-        FontId::proportional(11.0),
+        font_id,
         text_col,
     );
 }
@@ -393,163 +490,219 @@ fn render_seek_bar(
 }
 
 /// Renders playback control buttons (Shuffle, Previous, Play/Pause, Next, Repeat).
+///
+/// All 5 buttons share the exact same `center().y` on a fixed-height row, with Play/Pause
+/// centered on the horizontal centerline, Prev/Next equidistant on either side, and Shuffle/Repeat
+/// symmetrically balanced on the outer edges.
 fn render_playback_controls(
     ui: &mut Ui,
     player: &mut PlayerController,
     theme: &Theme,
+    bar_width: f32,
 ) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(18.0, 0.0);
+    let play_btn_size = 52.0_f32;
+    let row_height = play_btn_size.max(52.0);
+    let (row_rect, _) = ui.allocate_exact_size(vec2(bar_width, row_height), Sense::hover());
 
-        // 1. Shuffle
-        let shuffle_color = if player.shuffle { theme.accent } else { theme.text_muted };
-        let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
-        }
-        icons::paint_icon(ui.painter(), Icon::Shuffle, rect.shrink(4.0), shuffle_color);
-        if resp.clicked() {
-            player.toggle_shuffle();
-        }
+    let center_x = row_rect.center().x;
+    let center_y = row_rect.center().y;
 
-        // 2. Previous Track
-        let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
-        }
-        icons::paint_icon(ui.painter(), Icon::SkipBack, rect.shrink(4.0), Color32::WHITE);
-        if resp.clicked() {
-            player.prev();
-        }
+    // Symmetrical offsets around horizontal center
+    let spacing_factor = (bar_width / 360.0).clamp(0.85, 1.15);
+    let dx_inner = 58.0 * spacing_factor;
+    let dx_outer = 114.0 * spacing_factor;
 
-        // 3. Play / Pause (Large Primary Button)
-        let is_playing = player.engine.is_playing();
-        let (btn_rect, btn_resp) = ui.allocate_exact_size(vec2(52.0, 52.0), Sense::click());
-        let bg_color = if btn_resp.hovered() {
-            Color32::from_rgb(255, 255, 255)
-        } else {
-            Color32::from_rgb(240, 240, 245)
-        };
+    // 1. Shuffle
+    let shuffle_rect = Rect::from_center_size(pos2(center_x - dx_outer, center_y), vec2(28.0, 28.0));
+    let shuffle_resp = ui.interact(shuffle_rect, ui.id().with("fs_shuffle"), Sense::click());
+    if shuffle_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(shuffle_rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    }
+    let shuffle_color = if player.shuffle { theme.accent } else { theme.text_muted };
+    icons::paint_icon(ui.painter(), Icon::Shuffle, shuffle_rect.shrink(4.0), shuffle_color);
+    if shuffle_resp.clicked() {
+        player.toggle_shuffle();
+    }
 
-        // Subtle accent aura glow behind play button
-        ui.painter().circle_filled(
-            btn_rect.center(),
-            28.0,
-            Color32::from_rgba_premultiplied(theme.accent.r(), theme.accent.g(), theme.accent.b(), 35),
-        );
-        ui.painter().circle_filled(btn_rect.center(), 24.0, bg_color);
+    // 2. Previous Track
+    let prev_rect = Rect::from_center_size(pos2(center_x - dx_inner, center_y), vec2(32.0, 32.0));
+    let prev_resp = ui.interact(prev_rect, ui.id().with("fs_prev"), Sense::click());
+    if prev_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(prev_rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    }
+    icons::paint_icon(ui.painter(), Icon::SkipBack, prev_rect.shrink(4.0), Color32::WHITE);
+    if prev_resp.clicked() {
+        player.prev();
+    }
 
-        let play_icon = if is_playing { Icon::Pause } else { Icon::Play };
-        icons::paint_icon(
-            ui.painter(),
-            play_icon,
-            Rect::from_center_size(btn_rect.center(), vec2(20.0, 20.0)),
-            Color32::from_rgb(15, 12, 22),
-        );
+    // 3. Play / Pause (Large Primary Button centered on centerline)
+    let is_playing = player.engine.is_playing();
+    let play_rect = Rect::from_center_size(pos2(center_x, center_y), vec2(play_btn_size, play_btn_size));
+    let play_resp = ui.interact(play_rect, ui.id().with("fs_play"), Sense::click());
+    if play_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let bg_color = if play_resp.is_pointer_button_down_on() {
+        Color32::from_rgb(220, 220, 225)
+    } else if play_resp.hovered() {
+        Color32::from_rgb(255, 255, 255)
+    } else {
+        Color32::from_rgb(240, 240, 245)
+    };
 
-        if btn_resp.clicked() {
-            if player.engine.current_path().is_some() || player.current_track().is_some() {
-                player.engine.toggle_play_pause();
-            } else if !player.queue.is_empty() {
-                player.play_index(0);
-            }
-        }
+    // Subtle accent aura glow behind play button
+    ui.painter().circle_filled(
+        play_rect.center(),
+        28.0,
+        Color32::from_rgba_premultiplied(theme.accent.r(), theme.accent.g(), theme.accent.b(), 35),
+    );
+    ui.painter().circle_filled(play_rect.center(), 24.0, bg_color);
 
-        // 4. Next Track
-        let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
-        }
-        icons::paint_icon(ui.painter(), Icon::SkipForward, rect.shrink(4.0), Color32::WHITE);
-        if resp.clicked() {
-            player.next();
-        }
+    let play_icon = if is_playing { Icon::Pause } else { Icon::Play };
+    icons::paint_icon(
+        ui.painter(),
+        play_icon,
+        Rect::from_center_size(play_rect.center(), vec2(20.0, 20.0)),
+        Color32::from_rgb(15, 12, 22),
+    );
 
-        // 5. Repeat
-        let (repeat_icon, repeat_color) = match player.repeat {
-            RepeatMode::Off => (Icon::Repeat, theme.text_muted),
-            RepeatMode::All => (Icon::Repeat, theme.accent),
-            RepeatMode::One => (Icon::RepeatOne, theme.accent),
-        };
-        let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-        if resp.hovered() {
-            ui.painter().rect_filled(rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    if play_resp.clicked() {
+        if player.engine.current_path().is_some() || player.current_track().is_some() {
+            player.engine.toggle_play_pause();
+        } else if !player.queue.is_empty() {
+            player.play_index(0);
         }
-        icons::paint_icon(ui.painter(), repeat_icon, rect.shrink(4.0), repeat_color);
-        if resp.clicked() {
-            player.cycle_repeat();
-        }
-    });
+    }
+
+    // 4. Next Track
+    let next_rect = Rect::from_center_size(pos2(center_x + dx_inner, center_y), vec2(32.0, 32.0));
+    let next_resp = ui.interact(next_rect, ui.id().with("fs_next"), Sense::click());
+    if next_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(next_rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    }
+    icons::paint_icon(ui.painter(), Icon::SkipForward, next_rect.shrink(4.0), Color32::WHITE);
+    if next_resp.clicked() {
+        player.next();
+    }
+
+    // 5. Repeat
+    let repeat_rect = Rect::from_center_size(pos2(center_x + dx_outer, center_y), vec2(28.0, 28.0));
+    let repeat_resp = ui.interact(repeat_rect, ui.id().with("fs_repeat"), Sense::click());
+    if repeat_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(repeat_rect, Rounding::same(6.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    }
+    let (repeat_icon, repeat_color) = match player.repeat {
+        RepeatMode::Off => (Icon::Repeat, theme.text_muted),
+        RepeatMode::All => (Icon::Repeat, theme.accent),
+        RepeatMode::One => (Icon::RepeatOne, theme.accent),
+    };
+    icons::paint_icon(ui.painter(), repeat_icon, repeat_rect.shrink(4.0), repeat_color);
+    if repeat_resp.clicked() {
+        player.cycle_repeat();
+    }
 }
 
-/// Renders the volume control slider with mute toggle.
+/// Renders the volume control slider with mute toggle, horizontally centered beneath the transport bar.
 fn render_volume_control(
     ui: &mut Ui,
     player: &mut PlayerController,
     theme: &Theme,
-    max_w: f32,
+    bar_width: f32,
 ) {
     let vol = player.engine.volume();
     let is_muted = player.engine.is_muted();
     let eff_vol = if is_muted { 0.0 } else { vol };
 
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+    let row_height = 24.0_f32;
+    let (row_rect, _) = ui.allocate_exact_size(vec2(bar_width, row_height), Sense::hover());
+    let center_x = row_rect.center().x;
+    let center_y = row_rect.center().y;
 
-        // Mute toggle icon
-        let vol_icon = if is_muted || eff_vol <= 0.001 {
-            Icon::VolumeMute
-        } else if eff_vol < 0.33 {
-            Icon::VolumeLow
-        } else if eff_vol < 0.66 {
-            Icon::VolumeMed
-        } else {
-            Icon::VolumeHigh
-        };
+    let icon_w = 24.0_f32;
+    let slider_w = (bar_width * 0.42).clamp(100.0, 160.0);
+    let label_w = 38.0_f32;
+    let gap = 10.0_f32;
+    let total_w = icon_w + gap + slider_w + gap + label_w;
+    let start_x = center_x - total_w * 0.5;
 
-        let (icon_rect, icon_resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
-        if icon_resp.hovered() {
-            ui.painter().rect_filled(icon_rect, Rounding::same(4.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
-        }
-        let icon_col = if is_muted { theme.text_muted } else { theme.text_secondary };
-        icons::paint_icon(ui.painter(), vol_icon, icon_rect.shrink(3.0), icon_col);
-        if icon_resp.clicked() {
-            player.engine.toggle_mute();
-        }
+    // 1. Mute toggle icon
+    let vol_icon = if is_muted || eff_vol <= 0.001 {
+        Icon::VolumeMute
+    } else if eff_vol < 0.33 {
+        Icon::VolumeLow
+    } else if eff_vol < 0.66 {
+        Icon::VolumeMed
+    } else {
+        Icon::VolumeHigh
+    };
 
-        // Volume slider bar
-        let slider_w = (max_w - 74.0).clamp(90.0, 160.0);
-        let (vbar_rect, vbar_resp) = ui.allocate_exact_size(vec2(slider_w, 20.0), Sense::click_and_drag());
-        let track_h = if vbar_resp.hovered() || vbar_resp.dragged() { 5.0 } else { 3.5 };
-        let track_rect = Rect::from_center_size(vbar_rect.center(), vec2(slider_w, track_h));
+    let icon_rect = Rect::from_min_size(pos2(start_x, center_y - icon_w * 0.5), vec2(icon_w, icon_w));
+    let icon_resp = ui.interact(icon_rect, ui.id().with("fs_vol_icon"), Sense::click());
+    if icon_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_filled(icon_rect, Rounding::same(4.0), Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    }
+    let icon_col = if is_muted { theme.text_muted } else { theme.text_secondary };
+    icons::paint_icon(ui.painter(), vol_icon, icon_rect.shrink(3.0), icon_col);
+    if icon_resp.clicked() {
+        player.engine.toggle_mute();
+    }
 
-        if vbar_resp.clicked() || vbar_resp.dragged() {
-            if let Some(mouse_pos) = vbar_resp.interact_pointer_pos() {
-                let ratio = ((mouse_pos.x - track_rect.min.x) / track_rect.width()).clamp(0.0, 1.0);
-                if is_muted && ratio > 0.0 {
-                    player.engine.set_muted(false);
-                }
-                player.engine.set_volume(ratio);
+    // 2. Volume slider bar
+    let bar_min_x = start_x + icon_w + gap;
+    let vbar_rect = Rect::from_min_size(pos2(bar_min_x, center_y - 10.0), vec2(slider_w, 20.0));
+    let vbar_resp = ui.interact(vbar_rect, ui.id().with("fs_vol_bar"), Sense::click_and_drag());
+    if vbar_resp.hovered() || vbar_resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let track_h = if vbar_resp.hovered() || vbar_resp.dragged() { 5.0 } else { 3.5 };
+    let track_rect = Rect::from_center_size(vbar_rect.center(), vec2(slider_w, track_h));
+
+    if vbar_resp.clicked() || vbar_resp.dragged() {
+        if let Some(mouse_pos) = vbar_resp.interact_pointer_pos() {
+            let ratio = ((mouse_pos.x - track_rect.min.x) / track_rect.width()).clamp(0.0, 1.0);
+            if is_muted && ratio > 0.0 {
+                player.engine.set_muted(false);
             }
+            player.engine.set_volume(ratio);
         }
+    }
 
-        ui.painter().rect_filled(
-            track_rect,
-            Rounding::same(track_h / 2.0),
-            Color32::from_rgba_premultiplied(255, 255, 255, 25),
-        );
+    ui.painter().rect_filled(
+        track_rect,
+        Rounding::same(track_h / 2.0),
+        Color32::from_rgba_premultiplied(255, 255, 255, 25),
+    );
 
-        let fill_w = track_rect.width() * eff_vol.clamp(0.0, 1.0);
-        if fill_w > 0.0 {
-            let fill_rect = Rect::from_min_size(track_rect.min, vec2(fill_w, track_h));
-            let fill_col = if is_muted { theme.text_muted } else { theme.accent };
-            ui.painter().rect_filled(fill_rect, Rounding::same(track_h / 2.0), fill_col);
-        }
+    let fill_w = track_rect.width() * eff_vol.clamp(0.0, 1.0);
+    if fill_w > 0.0 {
+        let fill_rect = Rect::from_min_size(track_rect.min, vec2(fill_w, track_h));
+        let fill_col = if is_muted { theme.text_muted } else { theme.accent };
+        ui.painter().rect_filled(fill_rect, Rounding::same(track_h / 2.0), fill_col);
+    }
 
-        // Percentage text
-        let pct_text = format!("{}%", (eff_vol * 100.0).round() as u32);
-        ui.label(RichText::new(pct_text).size(12.0).color(theme.text_muted));
-    });
+    if vbar_resp.hovered() || vbar_resp.dragged() {
+        let thumb_x = track_rect.min.x + fill_w;
+        let thumb_center = pos2(thumb_x, track_rect.center().y);
+        ui.painter().circle_filled(thumb_center, 5.0, Color32::WHITE);
+    }
+
+    // 3. Percentage text
+    let label_min_x = bar_min_x + slider_w + gap;
+    let label_rect = Rect::from_min_size(pos2(label_min_x, center_y - 10.0), vec2(label_w, 20.0));
+    let pct_text = format!("{}%", (eff_vol * 100.0).round() as u32);
+    ui.painter().text(
+        label_rect.left_center(),
+        Align2::LEFT_CENTER,
+        pct_text,
+        FontId::proportional(12.0),
+        theme.text_muted,
+    );
 }
 
 /// Persistent smooth scroll and autoscroll tracking state for cinematic fullscreen lyrics.
@@ -1364,5 +1517,23 @@ mod tests {
         assert_eq!(state.last_active_idx, Some(4));
         assert_eq!(state.manual_scroll_until, 12.5);
         assert_eq!(state.last_track_key, 42);
+    }
+
+    #[test]
+    fn test_format_local_clock_12h() {
+        let clock = format_local_clock_12h();
+        assert!(!clock.is_empty());
+        assert!(clock.ends_with("AM") || clock.ends_with("PM"));
+        assert!(clock.contains(':'));
+        // Verify format H:MM AM/PM or HH:MM AM/PM
+        let parts: Vec<&str> = clock.split_whitespace().collect();
+        assert_eq!(parts.len(), 2);
+        let time_parts: Vec<&str> = parts[0].split(':').collect();
+        assert_eq!(time_parts.len(), 2);
+        let hour: u32 = time_parts[0].parse().unwrap_or(0);
+        let min: u32 = time_parts[1].parse().unwrap_or(99);
+        assert!((1..=12).contains(&hour));
+        assert!(min < 60);
+        assert!(parts[1] == "AM" || parts[1] == "PM");
     }
 }

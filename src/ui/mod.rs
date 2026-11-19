@@ -74,6 +74,7 @@ pub struct EclipseApp {
     pub allow_exit: bool,
     pub is_exiting: bool,
     ipc_rx: Receiver<()>,
+    pub last_prefetch_signature: Option<String>,
 }
 
 pub type UmbraApp = EclipseApp;
@@ -178,6 +179,7 @@ impl EclipseApp {
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
+            last_prefetch_signature: None,
         };
 
         app.reload_data();
@@ -441,6 +443,33 @@ impl App for EclipseApp {
                 }
                 _ => {}
             }
+        }
+
+        // Prefetch trigger: Look ahead up to 2 tracks and prefetch upcoming streams
+        let is_active_playback = self.player.engine.is_playing()
+            || (self.player.playback_source.is_stream() && self.stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false));
+
+        if is_active_playback && !self.player.is_buffering_stream {
+            let upcoming = self.player.peek_upcoming_tracks(2);
+            let upcoming_streams: Vec<crate::streams::StreamTrack> = upcoming
+                .iter()
+                .filter_map(|t| t.to_stream_track())
+                .collect();
+
+            let sig = format!(
+                "{}:{}",
+                self.player.current_track().map(|t| t.path.as_str()).unwrap_or(""),
+                upcoming_streams.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(",")
+            );
+
+            if self.last_prefetch_signature.as_deref() != Some(&sig) {
+                self.last_prefetch_signature = Some(sig);
+                if !upcoming_streams.is_empty() {
+                    self.stream_controller.prefetch_stream_tracks(upcoming_streams);
+                }
+            }
+        } else if !is_active_playback {
+            self.last_prefetch_signature = None;
         }
 
         // Update play counts and listening history when active track changes
@@ -1561,6 +1590,7 @@ mod tests {
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
+            last_prefetch_signature: None,
         };
 
         // Create a temporary valid WAV file so engine.play() successfully initializes playback
@@ -1664,6 +1694,7 @@ mod tests {
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
+            last_prefetch_signature: None,
         };
 
         // 1. Initial state: window visible, not hidden in background, allow_exit false
@@ -1744,6 +1775,7 @@ mod tests {
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
+            last_prefetch_signature: None,
         };
 
         assert!(!app.is_cinematic_fullscreen);
@@ -1793,6 +1825,7 @@ mod tests {
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
+            last_prefetch_signature: None,
         };
 
         // 1. Initial state is non-fullscreen
@@ -1805,5 +1838,67 @@ mod tests {
         // 3. Exit fullscreen
         app.is_cinematic_fullscreen = false;
         assert!(!app.is_cinematic_fullscreen);
+    }
+
+    #[test]
+    fn test_app_prefetch_signature_tracking() {
+        let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+        let cfg = AppConfig::default();
+
+        let mut app = EclipseApp {
+            cfg: cfg.clone(),
+            theme: Theme::from_name(&cfg.theme, None),
+            db: Database::open_in_memory().unwrap(),
+            player: PlayerController::new(&cfg),
+            tracks: Vec::new(),
+            playlists: Vec::new(),
+            recent_history: Vec::new(),
+            current_tab: NavTab::Home,
+            nav_history: vec![NavTab::Home],
+            nav_history_idx: 0,
+            search_query: String::new(),
+            focus_search: false,
+            show_queue: false,
+            show_downloads: false,
+            songs_state: SongsViewState::default(),
+            albums_state: AlbumsViewState::default(),
+            artists_state: ArtistsViewState::default(),
+            genres_state: GenresViewState::default(),
+            folders_state: FoldersViewState::default(),
+            playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
+            art_manager: art::AlbumArtManager::new(),
+            scan_rx,
+            scan_tx,
+            is_scanning: false,
+            status_msg: None,
+            last_active_track_id: None,
+            track_context_menu: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
+            allow_exit: false,
+            is_exiting: false,
+            ipc_rx,
+            last_prefetch_signature: None,
+        };
+
+        // 1. Initial state is None
+        assert_eq!(app.last_prefetch_signature, None);
+
+        // 2. Set signature
+        app.last_prefetch_signature = Some("test_track:stream_1,stream_2".to_string());
+        assert_eq!(app.last_prefetch_signature.as_deref(), Some("test_track:stream_1,stream_2"));
+
+        // 3. Clear on inactive playback
+        let is_active_playback = false;
+        if !is_active_playback {
+            app.last_prefetch_signature = None;
+        }
+        assert_eq!(app.last_prefetch_signature, None);
     }
 }

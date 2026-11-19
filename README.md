@@ -1,11 +1,13 @@
 # Eclipse — music, in the dark.
 
+[![Release](https://img.shields.io/badge/release-v1.2.5-7c3aed?style=flat-square)](https://github.com/Caly-sys/Eclipse/releases/tag/v1.2.5)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-3b82f6?style=flat-square)](https://github.com/Caly-sys/Eclipse/releases)
+[![Rust](https://img.shields.io/badge/rust-1.80%2B-ea580c?style=flat-square)](https://www.rust-lang.org)
+[![License](https://img.shields.io/badge/license-MIT-10b981?style=flat-square)](LICENSE)
+
 A high-performance music player for Windows written in Rust with a calm, dark purple glass aesthetic.
 
-> **Project Status**: **Beta** — Local audio playback is fully functional; streaming features and link importing are in active development, And Theres still many Bugs Im trying to fix them as fast as i can.
-
-### Known Bugs
-- Sometime The metadata is readed wrong and the Cover is wrong
+> **Project Status**: **v1.2.5 Active Release** — High-performance local-first audio player, YouTube Music streaming, Spotify public link importing, multi-format audio downloading, and cinematic fullscreen mode.
 
 ---
 
@@ -15,6 +17,13 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 *Bento grid layout featuring "Pick up where you left off", listening statistics, on-repeat tracks, and horizontal album shelf.*
 
 ![Eclipse Home Dashboard](IMG/ss1.png)
+
+<br/>
+
+### Cinematic Fullscreen Mode
+*Immersive ambient blurred background, live 12-hour local clock, crisp rounded artwork clipping, high-contrast HI-RES audio badges, and smoothly auto-centered synchronized lyrics (`F11` / `Esc`).*
+
+![Eclipse Fullscreen Mode](IMG/ss6.png)
 
 <br/>
 
@@ -52,7 +61,47 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 - **In-Memory Audio Analyzer**: Real-time logarithmic FFT visualizer, stereo peak meters, and oscilloscope driven by in-memory PCM audio buffers.
 - **Synced Lyrics & Dynamic Artwork**: Real-time autoscrolling `.lrc` lyrics from LRCLIB and asynchronous embedded cover art decoding.
 - **Dark Glass Interface**: Frameless, responsive desktop UI built with egui, custom vector iconography, and native Windows CJK font fallbacks.
-- **Spotify Link Importer**: Paste public Spotify links to save playlists, match against local files, or stream via YouTube.
+- **Spotify Link Importer & Batch Downloader**: Paste public Spotify links to save playlists, match against local files, stream via YouTube, or batch download in Hi-Res FLAC/MP3/OPUS/M4A/WAV.
+- **Cinematic Fullscreen & Floating Mini-Player**: Immersive full-viewport ambient experience with live clock (`F11` / `Esc`) and a unified floating desktop lyrics card.
+
+---
+
+## ✦ What's New in v1.2.5
+
+### 🎧 Multi-Format Audio Downloader
+- **Format Flexibility**: Switch freely between **FLAC** (default, 24-bit / 48 kHz Hi-Res probing), **MP3** (320 kbps), **OPUS** (transparent speech/music codec), **M4A** (AAC), and uncompressed **WAV**.
+- **Persistent Preferences**: Configure your default download format once in **Settings > Streaming**; Eclipse retains your choice across launches.
+- **Right-Click Quick Selection**: Context-menu format overrides directly on any track, album, or playlist download trigger for instant on-the-fly format selection.
+
+### ⚡ Whole Playlist & Album Batch Downloading
+- **One-Click Batch Downloads**: One-click **"Download All"** on imported Spotify playlists/albums and **"Download Missing"** in saved playlists to fetch only tracks not yet in your local library.
+- **Bounded Concurrency Engine**: Managed queue with `MAX_CONCURRENT_DOWNLOADS = 2` to prevent network socket exhaustion, rate limiting, and thread starvation.
+- **Full Queue Governance**: Real-time per-track progress bars with global **Cancel All** and **Retry Failed** controls.
+
+### 🎨 Self-Healing Artwork & Genre Metadata
+- **Expanded Codec Support**: Full FLAC Picture block extraction and modern WebP image decoding for comprehensive album art coverage.
+- **Spotify oEmbed Cover Resolution**: Automatic cover art resolution for `STREAM` tracks without requiring user accounts or API tokens.
+- **Automated Metadata Backfill**: Intelligent online cover art and genre enrichment powered by iTunes Search and Deezer APIs for untagged tracks.
+- **Permanent Tag Embedding**: Enriched tags and high-resolution cover art are permanently embedded directly back into local audio files via `lofty`.
+- **Frosted-Glass Genre Grid**: Dedicated Genre view with a responsive card grid and master-detail drilldown into matching tracks and albums.
+
+### 🚀 Optimized Stream Caching & Queue Pre-Buffering
+- **Zero Console Flashing**: Headless Windows process execution (`CREATE_NO_WINDOW`) for completely silent background extraction.
+- **500 MB LRU Stream Cache**: High-speed local cache providing **0ms instant cache hits** on repeated stream playbacks.
+- **Active Request Deduplication**: Prevents redundant simultaneous network fetches for the same audio track.
+- **Lookahead Pre-Buffering**: Silently pre-buffers the next track in the queue in the background, featuring seamless in-flight promotion when skipping forward.
+- **Storage Management**: Dedicated **Clear Stream Cache** action with live disk usage indicators in **Settings > Streaming**.
+
+### 🌌 Cinematic Fullscreen Mode (`F11` / `Esc`)
+- **Immersive Ambient Backdrop**: GPU-cached ambient blurred album art backdrop dynamically matching current track colors.
+- **Live Local Clock**: Subtle 12-hour local clock centered gracefully above the album cover, updating live.
+- **Crisp Rounded Artwork**: Precision-clipped album artwork card with high-contrast `HI-RES` audio badges.
+- **Centered Transport & Synced Lyrics**: Centered playback controls with seamlessly auto-centered synchronized lyrics supporting local ID3/Vorbis tags, `.lrc` sidecars, and LRCLIB cloud streams. Toggle with `F11` or exit with `Esc`.
+
+### 🪟 Redesigned Floating Mini-Player (PiP)
+- **Unified Dark-Glass Card**: Frameless translucent pop-out card engineered to float above any desktop workspace.
+- **Centered Live Lyrics Strip**: Integrated single-line live lyrics strip synchronized with real-time playback.
+- **Compact Controls**: Rounded cover art thumbnail, smooth mini seekbar, volume controls, and pinned top-right close / dock buttons.
 
 ---
 
@@ -62,15 +111,15 @@ Eclipse is portable and self-contained. It requires no administrative installers
 
 ### Option 1: Standalone Portable Executable (Recommended)
 
-1. Download the latest release package (`eclipse.exe` or `eclipse-v1.2.4-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
+1. Download the latest release package (`eclipse.exe` or `eclipse-v1.2.5-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
 2. Move `eclipse.exe` into any preferred directory (such as `%LOCALAPPDATA%\Programs\Eclipse`).
 3. Double-click `eclipse.exe` to launch.
 
-#### Release SHA-256 Checksums (v1.2.4)
+#### Release SHA-256 Checksums (v1.2.5)
 | File | SHA-256 Checksum |
 |---|---|
-| `eclipse.exe` (x64 MSVC) | `6C0DCFD803AA911B4FB8978BD6F6800F2310B67E1BE72426717B5E7B4EA59B31` |
-| `eclipse-v1.2.4-windows-x64.zip` | `6BA47902BA7F9970BE28C0FC983EA076319F88255D57DDC47ADEBF72599A7D93` |
+| `eclipse.exe` (x64 MSVC) | `84A35ED3BA02950D3E2593AF34B90B52DA04B74DCDBF6AA686A0153AB703D2EE` |
+| `eclipse-v1.2.5-windows-x64.zip` | *Published with GitHub release assets* |
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**
@@ -104,9 +153,10 @@ Eclipse keeps all user configuration, local SQLite indexing, and cached lyrics i
 
 | Path | Description |
 |---|---|
-| `%APPDATA%\Eclipse\settings.json` | Persistent user settings: audio outputs, crossfade, volume leveling, monitored folders, and themes. |
+| `%APPDATA%\Eclipse\settings.json` | Persistent user settings: audio outputs, crossfade, volume leveling, monitored folders, themes, and download preferences. |
 | `%APPDATA%\Eclipse\library.db` | High-performance SQLite database storing indexed tracks, album metadata, listening stats, and playlists. |
 | `%APPDATA%\Eclipse\lyrics_cache\` | Offline disk cache for plain and synchronized `.lrc` lyrics fetched from LRCLIB. |
+| `%APPDATA%\Eclipse\stream_cache\` | 500 MB LRU disk cache for pre-buffered and streamed audio tracks. |
 
 To reset the player to a fresh state, exit the application and delete the `%APPDATA%\Eclipse` directory.
 
@@ -128,6 +178,7 @@ To reset the player to a fresh state, exit the application and delete the `%APPD
 - **Songs**: High-density sortable list with track titles, artists, albums, duration, and format badges (`FLAC`, `WAV`, `ALAC`, `MP3`, `OGG`, `AAC`).
 - **Albums**: Auto-wrapping grid of square album covers. Click an album to open its detail view and tracklist.
 - **Artists & Folders**: Browse by artist discography or navigate disk folder hierarchies directly.
+- **Genres**: Responsive card grid with master-detail drilldown into tracks and albums by genre.
 - **Smart Playlists**: Quick access to `Recently Played`, `Most Played`, `Recently Added`, `Favorites`, `Never Played`, and `Random Discovery`.
 - **Search (`Ctrl + K`)**: Instant global search across tracks, artists, and albums.
 
@@ -146,11 +197,15 @@ To reset the player to a fresh state, exit the application and delete the `%APPD
   - **Center**: Synced `.lrc` lyrics with real-time autoscrolling. Click any lyric line to jump directly to that timestamp.
   - **Right**: Real-time in-memory PCM Audio Analyzer showing format specifications, live Left/Right channel stereo peak meters, and a live logarithmic spectrum visualizer.
 
+### 6. Fullscreen & Mini-Player Modes
+- **Cinematic Fullscreen**: Press `F11` to enter an immersive, ambient full-viewport view with centered album art, live clock, and synced lyrics. Press `Esc` or `F11` to exit.
+- **Floating Mini-Player**: Click the pop-out Picture-in-Picture icon in the player bar to detach Eclipse into a sleek dark-glass desktop widget with live lyrics.
+
 ---
 
-## ✦ Streaming & Spotify Importer
+## ✦ Streaming, Importer & Downloader
 
-Eclipse includes a public **Spotify Link Importer** and integrated **YouTube Music** streaming playback alongside your local library.
+Eclipse includes a public **Spotify Link Importer**, integrated **YouTube Music** streaming, and a high-fidelity **Multi-Format Audio Downloader** alongside your local library.
 
 ### How It Works
 
@@ -168,18 +223,21 @@ Eclipse includes a public **Spotify Link Importer** and integrated **YouTube Mus
    - Click **Save all as playlist**: Eclipse stores the tracklist directly into your local SQLite database as an Eclipse playlist.
 5. **Matched YouTube Playback**:
    - For tracks not found in your local collection, Eclipse queries the YouTube Data API v3 and plays matching tracks via YouTube's official embedded web player.
+6. **Multi-Format Batch Downloading**:
+   - Click **Download All** or **Download Missing** to queue downloads in your chosen format (FLAC, MP3, OPUS, M4A, WAV).
+   - Songs are tagged, given high-resolution cover art, and saved directly to your local music directory.
 
 ---
 
 ### Capabilities Matrix
 
-| Feature / Capability | Local Playback | Spotify Public Link Import | YouTube Music Stream |
-|---|---|---|---|
-| **Audio Pipeline** | In-process Rodio/Symphonia engine | Metadata import + local playback / YouTube stream | Official embedded webview player |
-| **Supported Codecs** | FLAC, WAV, ALAC, MP3, Vorbis (OGG), AAC (M4A) | Plays local file if matched | AAC / Opus (via embedded player) |
-| **FFT Spectrum Analyzer** | **Available** (Real-time in-memory PCM tap) | **Available** when playing local matched file | *Not available for remote streams* (badge displayed) |
-| **Account / Key Requirement** | **None** (Offline playback; optional lyrics lookup) | **None** (Public embed metadata) | Free Google account (for YouTube API key) |
-| **Credentials Storage** | *None required* | *None required* | Stored in Windows Credential Manager |
+| Feature / Capability | Local Playback | Spotify Public Link Import | YouTube Music Stream | Multi-Format Downloader |
+|---|---|---|---|---|
+| **Audio Pipeline** | In-process Rodio/Symphonia engine | Metadata import + local playback / YouTube stream | Official embedded webview player | Background headless downloader (`CREATE_NO_WINDOW`) |
+| **Supported Codecs** | FLAC, WAV, ALAC, MP3, Vorbis (OGG), AAC (M4A) | Plays local file if matched | AAC / Opus (via embedded player) | FLAC (24-bit Hi-Res), MP3 (320k), OPUS, M4A, WAV |
+| **FFT Spectrum Analyzer** | **Available** (Real-time in-memory PCM tap) | **Available** when playing local matched file | *Not available for remote streams* (badge displayed) | **Available** once downloaded to local |
+| **Account / Key Requirement** | **None** (Offline playback; optional lyrics lookup) | **None** (Public embed metadata) | Free Google account (for YouTube API key) | **None** |
+| **Credentials Storage** | *None required* | *None required* | Stored in Windows Credential Manager | *None required* |
 
 > [!NOTE]
 > **Why is the Audio Analyzer exclusive to local files?**  
@@ -206,6 +264,7 @@ Eclipse uses the Google YouTube Data API v3 to search tracks and resolve stream 
 - **Spotify Importer**: Makes outbound HTTPS GET requests to `open.spotify.com` to fetch public embed metadata. No user credentials, cookies, or accounts are transmitted.
 - **YouTube Streaming**: Queries Google APIs for search and resolves video embeds. Your YouTube API key is stored in the Windows Credential Manager.
 - **LRCLIB Lyrics**: Queries `lrclib.net` over HTTPS using track titles and artists to fetch plain and synchronized lyrics. Results are stored in `%APPDATA%\Eclipse\lyrics_cache\` to minimize repeated queries.
+- **Metadata Backfill**: Queries iTunes Search and Deezer public APIs for missing cover art and genre tags when requested.
 
 ---
 
@@ -241,7 +300,8 @@ Contributions, bug reports, and suggestions are welcome!
 | `S` | Toggle Shuffle |
 | `R` | Cycle Repeat Mode (`Off` → `All` → `One`) |
 | `Ctrl + K` | Focus Global Search |
-| `F11` | Toggle Fullscreen |
+| `F11` / `Esc` | Toggle / Exit Cinematic Fullscreen |
+| `Ctrl + Q` | Exit Application |
 
 ---
 
@@ -263,7 +323,8 @@ src/
 │   ├── lrc.rs              # Synced LRC parser with timestamp offsets
 │   └── lrclib.rs           # Asynchronous LRCLIB client
 ├── streams/
-│   ├── controller.rs       # Background worker actor for streaming tasks
+│   ├── controller.rs       # Background worker actor for streaming & download queue
+│   ├── downloader.rs       # Multi-format audio downloader & concurrency controller
 │   ├── spotify_public.rs   # Public Spotify embed/oEmbed parser (zero login)
 │   ├── matcher.rs          # CJK/Unicode fuzzy matcher against local library
 │   └── playback.rs         # YouTube Data API matcher & embedded webview player
@@ -278,7 +339,8 @@ src/
     ├── art.rs              # Asynchronous cover art loader & texture cache
     ├── fonts.rs            # CJK font fallback configuration
     ├── shortcuts.rs        # Global hotkey event listener
-    └── views/              # Home, Now Playing, Songs, Albums, Artists, Playlists, Streams, Settings, About
+    ├── pip.rs              # Unified floating mini-player & desktop lyrics overlay
+    └── views/              # Home, Now Playing, Fullscreen, Songs, Albums, Artists, Genres, Playlists, Streams, Settings, About
 ```
 
 ---

@@ -12,9 +12,10 @@ use crate::streams::spotify_public::{
     PublicSpotifyFetcher, SpotifyImportResult, SpotifyPublicMetadataFetcher,
 };
 use crate::streams::youtube::YouTubeProvider;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 /// Commands dispatched from UI / Controller to the Stream background worker.
@@ -51,6 +52,7 @@ pub enum StreamCommand {
         query: String,
     },
     PrefetchNextTrack(StreamTrack),
+    PrefetchStreamTracks(Vec<StreamTrack>),
     DownloadTrack {
         track: StreamTrack,
         format: DownloadFormat,
@@ -161,7 +163,11 @@ pub struct StreamController {
     pub stream_queue_index: Option<usize>,
     pub download_jobs: Vec<DownloadJob>,
     pub selected_download_format: DownloadFormat,
-    pub active_resolutions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    pub active_resolutions: Arc<Mutex<HashSet<String>>>,
+    pub pending_prefetch: Arc<Mutex<VecDeque<StreamTrack>>>,
+    pub current_prefetch: Arc<Mutex<Option<String>>>,
+    pub promoted_to_playback: Arc<Mutex<HashMap<String, StreamTrack>>>,
+    pub shutdown_flag: Arc<AtomicBool>,
 }
 
 impl StreamController {
@@ -186,13 +192,34 @@ impl StreamController {
             initial_connected.insert(p.id().to_lowercase(), p.is_connected());
         }
 
-        let active_resolutions = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        let active_resolutions = Arc::new(Mutex::new(HashSet::new()));
+        let pending_prefetch = Arc::new(Mutex::new(VecDeque::new()));
+        let current_prefetch = Arc::new(Mutex::new(None));
+        let promoted_to_playback = Arc::new(Mutex::new(HashMap::new()));
+        let prefetch_running = Arc::new(AtomicBool::new(false));
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+
         let worker_active_resolutions = active_resolutions.clone();
+        let worker_pending_prefetch = pending_prefetch.clone();
+        let worker_current_prefetch = current_prefetch.clone();
+        let worker_promoted_to_playback = promoted_to_playback.clone();
+        let worker_prefetch_running = prefetch_running.clone();
+        let worker_shutdown_flag = shutdown_flag.clone();
 
         let worker_handle = thread::Builder::new()
             .name("eclipse-stream-worker".to_string())
             .spawn(move || {
-                run_stream_worker(providers, cmd_rx, event_tx, worker_active_resolutions);
+                run_stream_worker(
+                    providers,
+                    cmd_rx,
+                    event_tx,
+                    worker_active_resolutions,
+                    worker_pending_prefetch,
+                    worker_current_prefetch,
+                    worker_promoted_to_playback,
+                    worker_prefetch_running,
+                    worker_shutdown_flag,
+                );
             })
             .ok();
 
@@ -214,6 +241,10 @@ impl StreamController {
             download_jobs: Vec::new(),
             selected_download_format: DownloadFormat::Flac,
             active_resolutions,
+            pending_prefetch,
+            current_prefetch,
+            promoted_to_playback,
+            shutdown_flag,
         }
     }
 
@@ -399,13 +430,28 @@ impl StreamController {
         let _ = self.send(StreamCommand::PrefetchNextTrack(next_track));
     }
 
+    /// Prefetch and cache audio streams in the background for upcoming tracks.
+    pub fn prefetch_stream_tracks(&mut self, tracks: Vec<StreamTrack>) {
+        let _ = self.send(StreamCommand::PrefetchStreamTracks(tracks));
+    }
+
     /// Load and play a stream queue.
     pub fn load_stream_queue(&mut self, tracks: Vec<StreamTrack>, start_index: usize) {
         self.stream_queue = tracks;
         self.stream_queue_index = Some(start_index);
         if let Some(track) = self.stream_queue.get(start_index).cloned() {
             self.play_stream_track(track);
-            if let Some(next) = self.stream_queue.get(start_index + 1).cloned() {
+            let next_candidates: Vec<StreamTrack> = self
+                .stream_queue
+                .iter()
+                .skip(start_index + 1)
+                .take(2)
+                .cloned()
+                .collect();
+            if !next_candidates.is_empty() {
+                self.prefetch_stream_tracks(next_candidates.clone());
+            }
+            if let Some(next) = next_candidates.first().cloned() {
                 self.prefetch_next_track(next);
             }
         }
@@ -426,7 +472,17 @@ impl StreamController {
                 self.stream_queue_index = Some(next_idx);
                 let track = self.stream_queue[next_idx].clone();
                 self.play_stream_track(track);
-                if let Some(peek) = self.stream_queue.get(next_idx + 1).cloned() {
+                let next_candidates: Vec<StreamTrack> = self
+                    .stream_queue
+                    .iter()
+                    .skip(next_idx + 1)
+                    .take(2)
+                    .cloned()
+                    .collect();
+                if !next_candidates.is_empty() {
+                    self.prefetch_stream_tracks(next_candidates.clone());
+                }
+                if let Some(peek) = next_candidates.first().cloned() {
                     self.prefetch_next_track(peek);
                 }
                 return true;
@@ -627,6 +683,22 @@ impl StreamController {
         }
     }
 
+    /// Return the count of tracks currently waiting in the background prefetch queue.
+    pub fn pending_prefetch_count(&self) -> usize {
+        match self.pending_prefetch.lock() {
+            Ok(queue) => queue.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        }
+    }
+
+    /// Return true if the given track (by canonical ID) is currently being downloaded by the background prefetch worker.
+    pub fn is_prefetching(&self, track_id: &str) -> bool {
+        match self.current_prefetch.lock() {
+            Ok(guard) => guard.as_deref() == Some(track_id),
+            Err(poisoned) => poisoned.into_inner().as_deref() == Some(track_id),
+        }
+    }
+
     /// Drain incoming events non-blockingly on the UI frame loop.
     pub fn update(&mut self) -> Vec<StreamEvent> {
         let mut events = Vec::new();
@@ -787,6 +859,7 @@ impl Default for StreamController {
 
 impl Drop for StreamController {
     fn drop(&mut self) {
+        self.shutdown_flag.store(true, Ordering::SeqCst);
         let _ = self.cmd_tx.send(StreamCommand::Shutdown);
         if let Some(handle) = self.worker_handle.take() {
             let _ = handle.join();
@@ -797,7 +870,7 @@ impl Drop for StreamController {
 /// RAII guard ensuring track ID is removed from active resolutions when worker thread finishes.
 struct ActiveResolutionGuard {
     spotify_id: String,
-    active_resolutions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    active_resolutions: Arc<Mutex<HashSet<String>>>,
 }
 
 impl Drop for ActiveResolutionGuard {
@@ -810,12 +883,241 @@ impl Drop for ActiveResolutionGuard {
     }
 }
 
+/// Maximum concurrent prefetch workers allowed (single-worker concurrency).
+pub const MAX_CONCURRENT_PREFETCH: usize = 1;
+
+/// Trigger or spawn the background prefetch worker if one is not already running.
+fn trigger_prefetch_worker(
+    pending_prefetch: Arc<Mutex<VecDeque<StreamTrack>>>,
+    active_resolutions: Arc<Mutex<HashSet<String>>>,
+    current_prefetch: Arc<Mutex<Option<String>>>,
+    promoted_to_playback: Arc<Mutex<HashMap<String, StreamTrack>>>,
+    prefetch_running: Arc<AtomicBool>,
+    shutdown_flag: Arc<AtomicBool>,
+    event_tx: Sender<StreamEvent>,
+) {
+    if shutdown_flag.load(Ordering::Relaxed) {
+        return;
+    }
+
+    // Atomic compare_exchange ensures at most ONE background prefetch worker runs (MAX_CONCURRENT_PREFETCH = 1)
+    if prefetch_running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    let worker_prefetch_running = prefetch_running.clone();
+    let spawn_res = thread::Builder::new()
+        .name("stream-prefetch-worker".to_string())
+        .spawn(move || {
+            struct PrefetchWorkerStateGuard {
+                prefetch_running: Arc<AtomicBool>,
+                current_prefetch: Arc<Mutex<Option<String>>>,
+            }
+            impl Drop for PrefetchWorkerStateGuard {
+                fn drop(&mut self) {
+                    self.prefetch_running.store(false, Ordering::SeqCst);
+                    let mut cur = match self.current_prefetch.lock() {
+                        Ok(g) => g,
+                        Err(p) => p.into_inner(),
+                    };
+                    *cur = None;
+                }
+            }
+
+            let _worker_guard = PrefetchWorkerStateGuard {
+                prefetch_running: worker_prefetch_running.clone(),
+                current_prefetch: current_prefetch.clone(),
+            };
+
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_prefetch_loop(
+                    pending_prefetch,
+                    active_resolutions,
+                    current_prefetch,
+                    promoted_to_playback,
+                    shutdown_flag,
+                    event_tx,
+                );
+            }));
+        });
+
+    if spawn_res.is_err() {
+        prefetch_running.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Loop for the background prefetch worker executing sequential cache downloads off the UI thread.
+fn run_prefetch_loop(
+    pending_prefetch: Arc<Mutex<VecDeque<StreamTrack>>>,
+    active_resolutions: Arc<Mutex<HashSet<String>>>,
+    current_prefetch: Arc<Mutex<Option<String>>>,
+    promoted_to_playback: Arc<Mutex<HashMap<String, StreamTrack>>>,
+    shutdown_flag: Arc<AtomicBool>,
+    event_tx: Sender<StreamEvent>,
+) {
+    loop {
+        if shutdown_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Check if there are any pending tracks to prefetch
+        let is_empty = match pending_prefetch.lock() {
+            Ok(queue) => queue.is_empty(),
+            Err(poisoned) => poisoned.into_inner().is_empty(),
+        };
+        if is_empty {
+            break;
+        }
+
+        // Active Playback Priority Rule:
+        // Check if active_resolutions (active playback buffering) is busy.
+        // If an active PlayStreamTrack request is currently in progress, prefetch MUST defer or wait
+        // until active playback finishes resolving so 100% bandwidth is reserved for immediate playback.
+        let is_playback_busy = match active_resolutions.lock() {
+            Ok(guard) => !guard.is_empty(),
+            Err(poisoned) => !poisoned.into_inner().is_empty(),
+        };
+
+        if is_playback_busy {
+            thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+        }
+
+        // Dequeue next track from pending_prefetch
+        let track_opt = match pending_prefetch.lock() {
+            Ok(mut queue) => queue.pop_front(),
+            Err(poisoned) => {
+                let mut queue = poisoned.into_inner();
+                queue.pop_front()
+            }
+        };
+
+        let track = match track_opt {
+            Some(t) => t,
+            None => continue,
+        };
+
+        // Filter out if already cached
+        if crate::streams::downloader::get_cached_stream_path(&track).is_some() {
+            continue;
+        }
+
+        let spotify_id = crate::streams::downloader::extract_stream_track_id(&track);
+
+        // Mark as currently prefetching
+        {
+            let mut cur = match current_prefetch.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *cur = Some(spotify_id.clone());
+        }
+
+        struct CurrentPrefetchGuard {
+            current_prefetch: Arc<Mutex<Option<String>>>,
+            active: bool,
+        }
+        impl Drop for CurrentPrefetchGuard {
+            fn drop(&mut self) {
+                if self.active {
+                    let mut cur = match self.current_prefetch.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    *cur = None;
+                }
+            }
+        }
+        let mut prefetch_guard = CurrentPrefetchGuard {
+            current_prefetch: current_prefetch.clone(),
+            active: true,
+        };
+
+        // Download & Cache: call cache_stream_track protected with std::panic::catch_unwind
+        let track_clone = track.clone();
+        let cache_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::streams::downloader::cache_stream_track(&track_clone)
+        }));
+
+        // Check if this track was promoted to playback while prefetching
+        let promoted_track = {
+            let mut cur = match current_prefetch.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *cur = None;
+            prefetch_guard.active = false;
+            let mut prom = match promoted_to_playback.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            prom.remove(&spotify_id)
+        };
+
+        if let Some(target_track) = promoted_track {
+            // PROMOTED TO PLAYBACK:
+            // Remove from active_resolutions
+            {
+                let mut active = match active_resolutions.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                active.remove(&spotify_id);
+            }
+
+            match cache_res {
+                Ok(Ok((res_id, cache_path))) => {
+                    let _ = event_tx.send(StreamEvent::StreamPlaybackReady {
+                        spotify_id: res_id,
+                        cache_path,
+                        track: target_track,
+                    });
+                }
+                Ok(Err(err)) => {
+                    let _ = event_tx.send(StreamEvent::Error {
+                        provider_id: "stream".to_string(),
+                        action: "play_stream_track".to_string(),
+                        message: err,
+                    });
+                }
+                Err(panic_err) => {
+                    let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Stream prefetch worker panicked".to_string()
+                    };
+                    let _ = event_tx.send(StreamEvent::Error {
+                        provider_id: "stream".to_string(),
+                        action: "play_stream_track".to_string(),
+                        message: format!("Stream prefetch worker panicked: {msg}"),
+                    });
+                }
+            }
+        } else {
+            // NOT PROMOTED (normal silent prefetch):
+            // Keep completely silent to the UI.
+            // DO NOT dispatch StreamPlaybackReady, DO NOT alter is_busy or active_state.
+        }
+    }
+}
+
 /// Worker thread loop: executes network I/O and provider requests off the UI thread.
+#[allow(clippy::too_many_arguments)]
 fn run_stream_worker(
     mut providers: Vec<Box<dyn StreamProvider>>,
     cmd_rx: Receiver<StreamCommand>,
     event_tx: Sender<StreamEvent>,
-    active_resolutions: Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    active_resolutions: Arc<Mutex<HashSet<String>>>,
+    pending_prefetch: Arc<Mutex<VecDeque<StreamTrack>>>,
+    current_prefetch: Arc<Mutex<Option<String>>>,
+    promoted_to_playback: Arc<Mutex<HashMap<String, StreamTrack>>>,
+    prefetch_running: Arc<AtomicBool>,
+    shutdown_flag: Arc<AtomicBool>,
 ) {
     let mut provider_map: HashMap<String, usize> = HashMap::new();
     for (idx, p) in providers.iter().enumerate() {
@@ -831,12 +1133,16 @@ fn run_stream_worker(
         let cmd_opt = match cmd_rx.recv_timeout(poll_interval) {
             Ok(cmd) => Some(cmd),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                shutdown_flag.store(true, Ordering::SeqCst);
+                break;
+            }
         };
 
         if let Some(cmd) = cmd_opt {
             match cmd {
                 StreamCommand::Shutdown => {
+                    shutdown_flag.store(true, Ordering::SeqCst);
                     if let Some(mut p) = webview_player {
                         p.shutdown();
                     }
@@ -857,8 +1163,60 @@ fn run_stream_worker(
                         continue;
                     }
 
-                    // 2. Request Deduplication: avoid concurrent yt-dlp processes for the same track
                     let spotify_id = crate::streams::downloader::extract_stream_track_id(&track);
+
+                    // 2. In-Flight Promotion Check:
+                    // If the requested track is currently being actively resolved by the prefetch worker,
+                    // promote it to playback rather than spawning a duplicate yt-dlp process.
+                    let in_flight = {
+                        let cur_guard = match current_prefetch.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        if cur_guard.as_deref() == Some(&spotify_id) {
+                            let mut prom_guard = match promoted_to_playback.lock() {
+                                Ok(g) => g,
+                                Err(p) => p.into_inner(),
+                            };
+                            prom_guard.insert(spotify_id.clone(), track.clone());
+                            true
+                        } else {
+                            false
+                        }
+                    };
+
+                    if in_flight {
+                        // Mark track ID in active_resolutions so UI is_resolving() returns true
+                        let mut active = match active_resolutions.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        active.insert(spotify_id.clone());
+                        continue;
+                    }
+
+                    // 2b. Re-check instant cache in case prefetch finished just as we checked
+                    if let Some((cached_id, cache_path)) =
+                        crate::streams::downloader::get_cached_stream_path(&track)
+                    {
+                        let _ = event_tx.send(StreamEvent::StreamPlaybackReady {
+                            spotify_id: cached_id,
+                            cache_path,
+                            track,
+                        });
+                        continue;
+                    }
+
+                    // Remove from pending_prefetch queue if it was queued there
+                    {
+                        let mut queue = match pending_prefetch.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        queue.retain(|t| crate::streams::downloader::extract_stream_track_id(t) != spotify_id);
+                    }
+
+                    // 3. Request Deduplication: avoid concurrent yt-dlp processes for the same track
                     {
                         let mut active = match active_resolutions.lock() {
                             Ok(guard) => guard,
@@ -919,9 +1277,11 @@ fn run_stream_worker(
                         });
 
                     if let Err(e) = spawn_res {
-                        if let Ok(mut set) = active_resolutions.lock() {
-                            set.remove(&spotify_id);
-                        }
+                        let mut set = match active_resolutions.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        set.remove(&spotify_id);
                         let _ = event_tx.send(StreamEvent::Error {
                             provider_id: "stream".to_string(),
                             action: "play_stream_track".to_string(),
@@ -1037,6 +1397,50 @@ fn run_stream_worker(
                         let api_key = CredentialStore::get_youtube_api_key().ok().flatten();
                         prefetch_next_track_match(Arc::new(db), api_key, next_track);
                     }
+                }
+                StreamCommand::PrefetchStreamTracks(tracks) => {
+                    let cur_prefetch_id = match current_prefetch.lock() {
+                        Ok(g) => g.clone(),
+                        Err(p) => p.into_inner().clone(),
+                    };
+
+                    let mut filtered_tracks: Vec<StreamTrack> = Vec::new();
+                    for track in tracks {
+                        if crate::streams::downloader::get_cached_stream_path(&track).is_some() {
+                            continue;
+                        }
+                        let track_id = crate::streams::downloader::extract_stream_track_id(&track);
+                        if cur_prefetch_id.as_deref() == Some(&track_id) {
+                            continue;
+                        }
+                        filtered_tracks.push(track);
+                        if filtered_tracks.len() >= 2 {
+                            break;
+                        }
+                    }
+
+                    // Replace the pending prefetch queue with up-to-2 new tracks
+                    {
+                        let mut queue = match pending_prefetch.lock() {
+                            Ok(g) => g,
+                            Err(p) => p.into_inner(),
+                        };
+                        queue.clear();
+                        for t in filtered_tracks {
+                            queue.push_back(t);
+                        }
+                    }
+
+                    // Trigger background prefetch worker (at most 1 running)
+                    trigger_prefetch_worker(
+                        pending_prefetch.clone(),
+                        active_resolutions.clone(),
+                        current_prefetch.clone(),
+                        promoted_to_playback.clone(),
+                        prefetch_running.clone(),
+                        shutdown_flag.clone(),
+                        event_tx.clone(),
+                    );
                 }
                 StreamCommand::OpenBrowserUrl { url } => {
                     let u = url.clone();
@@ -2015,7 +2419,11 @@ mod tests {
             alternatives: HashMap::new(),
             download_jobs: Vec::new(),
             selected_download_format: DownloadFormat::default(),
-            active_resolutions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            active_resolutions: Arc::new(Mutex::new(HashSet::new())),
+            pending_prefetch: Arc::new(Mutex::new(VecDeque::new())),
+            current_prefetch: Arc::new(Mutex::new(None)),
+            promoted_to_playback: Arc::new(Mutex::new(HashMap::new())),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
         };
 
         let track = StreamTrack::new(
@@ -2233,5 +2641,312 @@ mod tests {
         // Check clear cache method
         let res = controller.clear_stream_cache();
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_prefetch_stream_tracks_queue_filtering_and_bounded_size() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        // 1. Create a dummy cached stream file for track 0
+        let cached_id = "test_pf_cached_001";
+        let cache_dir = crate::streams::downloader::get_stream_cache_dir();
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let cache_file = cache_dir.join(format!("eclipse_stream_{cached_id}.mp3"));
+        let _ = std::fs::write(&cache_file, vec![0u8; 2048]);
+
+        let t_cached = StreamTrack::new(
+            cached_id,
+            "Cached Song",
+            "Artist",
+            "Album",
+            180.0,
+            None,
+            format!("spotify:track:{cached_id}"),
+            "spotify",
+        );
+        let t1 = StreamTrack::new(
+            "test_pf_new_01",
+            "New Song 1",
+            "Artist",
+            "Album",
+            190.0,
+            None,
+            "spotify:track:test_pf_new_01",
+            "spotify",
+        );
+        let t2 = StreamTrack::new(
+            "test_pf_new_02",
+            "New Song 2",
+            "Artist",
+            "Album",
+            200.0,
+            None,
+            "spotify:track:test_pf_new_02",
+            "spotify",
+        );
+        let t3 = StreamTrack::new(
+            "test_pf_new_03",
+            "New Song 3",
+            "Artist",
+            "Album",
+            210.0,
+            None,
+            "spotify:track:test_pf_new_03",
+            "spotify",
+        );
+
+        // Keep active_resolutions non-empty so prefetch worker defers popping and we can inspect queue
+        if let Ok(mut active) = controller.active_resolutions.lock() {
+            active.insert("busy_token".to_string());
+        }
+
+        // In multi-threaded test runs, another test may briefly clear the cache dir; retry ensures test robustness
+        let mut verified = false;
+        for _ in 0..5 {
+            let _ = std::fs::write(&cache_file, vec![0u8; 2048]);
+            // Send 4 tracks: 1 cached, 3 new
+            controller.prefetch_stream_tracks(vec![t_cached.clone(), t1.clone(), t2.clone(), t3.clone()]);
+
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_millis(600) {
+                if !cache_file.exists() {
+                    let _ = std::fs::write(&cache_file, vec![0u8; 2048]);
+                }
+                let count = controller.pending_prefetch_count();
+                if count == 2 {
+                    let queue = match controller.pending_prefetch.lock() {
+                        Ok(g) => g.clone(),
+                        Err(p) => p.into_inner().clone(),
+                    };
+                    // Verify t_cached was filtered out and at most 2 items were queued (t1 and t2)
+                    if queue.len() == 2 && queue[0].id == "test_pf_new_01" && queue[1].id == "test_pf_new_02" {
+                        verified = true;
+                        break;
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            if verified {
+                break;
+            }
+        }
+
+        assert!(verified, "Pending prefetch queue should contain exactly 2 bounded tracks, excluding cached track");
+
+        // Now replace queue with a single new track t3 (stale tracks discarded)
+        controller.prefetch_stream_tracks(vec![t3.clone()]);
+        let start = std::time::Instant::now();
+        let mut replaced = false;
+        while start.elapsed() < Duration::from_millis(1000) {
+            let queue = match controller.pending_prefetch.lock() {
+                Ok(g) => g.clone(),
+                Err(p) => p.into_inner().clone(),
+            };
+            if queue.len() == 1 && queue[0].id == "test_pf_new_03" {
+                replaced = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(replaced, "Subsequent prefetch command should replace stale pending queue items");
+
+        // Cleanup
+        if let Ok(mut active) = controller.active_resolutions.lock() {
+            active.clear();
+        }
+        let _ = std::fs::remove_file(&cache_file);
+    }
+
+    #[test]
+    fn test_prefetch_in_flight_promotion_state_transition() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        let track_id = "test_promo_inflight_999";
+        let track = StreamTrack::new(
+            track_id,
+            "Inflight Song",
+            "Artist",
+            "Album",
+            200.0,
+            None,
+            format!("spotify:track:{track_id}"),
+            "spotify",
+        );
+
+        // 1. Simulate track currently being actively resolved by background prefetch worker
+        {
+            let mut cur = match controller.current_prefetch.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            *cur = Some(track_id.to_string());
+        }
+
+        // Verify is_prefetching returns true
+        assert!(controller.is_prefetching(track_id));
+
+        // 2. PlayStreamTrack is dispatched for the in-flight prefetching track
+        controller.play_stream_track(track.clone());
+
+        // Wait for worker to process PlayStreamTrack and promote the track
+        let start = std::time::Instant::now();
+        let mut promoted = false;
+        while start.elapsed() < Duration::from_millis(1000) {
+            let is_promoted = match controller.promoted_to_playback.lock() {
+                Ok(g) => g.contains_key(track_id),
+                Err(p) => p.into_inner().contains_key(track_id),
+            };
+            let is_res = controller.is_resolving(track_id);
+            if is_promoted && is_res {
+                promoted = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(promoted, "In-flight track should be promoted to playback and marked in active_resolutions");
+
+        // 3. Simulate prefetch worker finishing cache and dispatching StreamPlaybackReady
+        let cache_path = std::env::temp_dir().join(format!("eclipse_stream_{track_id}.mp3"));
+        let (promoted_track, was_promoted) = {
+            let mut cur = match controller.current_prefetch.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            *cur = None;
+            let mut prom = match controller.promoted_to_playback.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            (prom.remove(track_id), true)
+        };
+        assert!(was_promoted);
+        assert!(promoted_track.is_some());
+
+        // Worker removes from active_resolutions and sends StreamPlaybackReady
+        {
+            let mut active = match controller.active_resolutions.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            active.remove(track_id);
+        }
+
+        // Deliver ready event to event channel
+        let (cmd_tx, _cmd_rx) = channel::<StreamCommand>();
+        let (event_tx, event_rx) = channel::<StreamEvent>();
+        let _ = event_tx.send(StreamEvent::StreamPlaybackReady {
+            spotify_id: track_id.to_string(),
+            cache_path: cache_path.clone(),
+            track: track.clone(),
+        });
+        controller.cmd_tx = cmd_tx;
+        controller.event_rx = event_rx;
+
+        let events = controller.update();
+        assert_eq!(events.len(), 1);
+        assert!(!controller.is_busy);
+        let state = controller.active_state.as_ref().expect("playback state updated");
+        assert!(state.is_playing);
+        assert_eq!(state.current_track.as_ref().unwrap().id, track_id);
+    }
+
+    #[test]
+    fn test_silent_prefetch_remains_silent_to_ui() {
+        let (provider, _) = TestProvider::new();
+        let mut controller = StreamController::new(vec![Box::new(provider)]);
+
+        // Create a dummy cached stream file so prefetch loop succeeds immediately
+        let track_id = "test_silent_pf_888";
+        let cache_dir = crate::streams::downloader::get_stream_cache_dir();
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let cache_file = cache_dir.join(format!("eclipse_stream_{track_id}.mp3"));
+        let _ = std::fs::write(&cache_file, vec![0u8; 2048]);
+
+        let track = StreamTrack::new(
+            track_id,
+            "Silent Track",
+            "Artist",
+            "Album",
+            180.0,
+            None,
+            format!("spotify:track:{track_id}"),
+            "spotify",
+        );
+
+        controller.prefetch_stream_tracks(vec![track]);
+
+        // Poll update loop for 500ms
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(500) {
+            let events = controller.update();
+            for ev in events {
+                if let StreamEvent::StreamPlaybackReady { .. } = ev {
+                    panic!("Silent prefetch must NEVER emit StreamPlaybackReady for unrequested tracks");
+                }
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        // UI state remains unaffected
+        assert!(!controller.is_busy);
+        assert!(controller.active_state.is_none());
+
+        let _ = std::fs::remove_file(&cache_file);
+    }
+
+    #[test]
+    fn test_prefetch_defers_during_active_playback() {
+        let (provider, _) = TestProvider::new();
+        let controller = StreamController::new(vec![Box::new(provider)]);
+
+        // Mark active playback buffering in progress
+        let active_playback_id = "active_playback_busy_trk";
+        if let Ok(mut active) = controller.active_resolutions.lock() {
+            active.insert(active_playback_id.to_string());
+        }
+
+        // Queue a track into pending_prefetch
+        let t_pending = StreamTrack::new(
+            "test_pending_defer_1",
+            "Defer Song",
+            "Artist",
+            "Album",
+            180.0,
+            None,
+            "spotify:track:test_pending_defer_1",
+            "spotify",
+        );
+        if let Ok(mut queue) = controller.pending_prefetch.lock() {
+            queue.push_back(t_pending.clone());
+        }
+
+        // Spawn prefetch worker
+        let (event_tx, _event_rx) = channel::<StreamEvent>();
+        let prefetch_running = Arc::new(AtomicBool::new(false));
+        trigger_prefetch_worker(
+            controller.pending_prefetch.clone(),
+            controller.active_resolutions.clone(),
+            controller.current_prefetch.clone(),
+            controller.promoted_to_playback.clone(),
+            prefetch_running,
+            controller.shutdown_flag.clone(),
+            event_tx,
+        );
+
+        // While active_resolutions is non-empty, prefetch must defer and not pop t_pending
+        thread::sleep(Duration::from_millis(250));
+        assert_eq!(controller.pending_prefetch_count(), 1);
+
+        // Now clear active playback resolutions
+        if let Ok(mut active) = controller.active_resolutions.lock() {
+            active.clear();
+        }
+
+        // Cleanup
+        controller.shutdown_flag.store(true, Ordering::SeqCst);
     }
 }

@@ -1,5 +1,6 @@
 /target
 *.exe
+*.old
 *.pdb
 *.log
 *.sqlite
