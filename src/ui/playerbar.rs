@@ -79,6 +79,7 @@ pub fn render_playerbar(
     toggle_now_playing: &mut bool,
     on_toggle_fav: &mut Option<i64>,
     art_manager: &mut AlbumArtManager,
+    on_enter_fullscreen: &mut bool,
 ) -> egui::Response {
     let full_w = ui.available_width();
     ui.set_width(full_w);
@@ -529,10 +530,18 @@ pub fn render_playerbar(
                     // Resize Grip Handle in Bottom-Right Corner
                     render_resize_grip(ui, theme);
 
+                    // View Toggle: Cinematic Fullscreen Mode
+                    if icon_button(ui, Icon::Maximize, 15.0, theme.text_secondary)
+                        .on_hover_text("Cinematic Fullscreen (F11)")
+                        .clicked()
+                    {
+                        *on_enter_fullscreen = true;
+                    }
+
                     // View Toggle: Now Playing / Analyzer Toggle
                     let np_color = if *toggle_now_playing { Color32::WHITE } else { theme.text_secondary };
                     if icon_button(ui, Icon::BarChart, 15.0, np_color)
-                        .on_hover_text("Audio Analyzer (F11)")
+                        .on_hover_text("Audio Analyzer")
                         .clicked()
                     {
                         *toggle_now_playing = !*toggle_now_playing;
@@ -909,6 +918,7 @@ mod tests {
                 let mut on_fav = None;
 
                 let mut stream_ctrl = StreamController::new(vec![]);
+                let mut on_fullscreen = false;
 
                 // Render when not playing
                 render_playerbar(
@@ -921,6 +931,7 @@ mod tests {
                     &mut toggle_np,
                     &mut on_fav,
                     &mut art_manager,
+                    &mut on_fullscreen,
                 );
 
                 // Load track into queue
@@ -958,6 +969,7 @@ mod tests {
                     &mut toggle_np,
                     &mut on_fav,
                     &mut art_manager,
+                    &mut on_fullscreen,
                 );
 
                 // Switch to stream track and render
@@ -983,6 +995,7 @@ mod tests {
                     &mut toggle_np,
                     &mut on_fav,
                     &mut art_manager,
+                    &mut on_fullscreen,
                 );
             });
         });

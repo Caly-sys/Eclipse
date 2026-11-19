@@ -1,4 +1,5 @@
-﻿pub mod art;
+﻿pub mod ambient_blur;
+pub mod art;
 pub mod components;
 pub mod context_menu;
 pub mod downloads;
@@ -67,6 +68,8 @@ pub struct EclipseApp {
     pub tray_manager: Option<tray::TrayManager>,
     pub is_window_visible: bool,
     pub is_background_hidden: bool,
+    pub is_cinematic_fullscreen: bool,
+    pub ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache,
     pub allow_exit: bool,
     pub is_exiting: bool,
     ipc_rx: Receiver<()>,
@@ -169,6 +172,8 @@ impl EclipseApp {
             tray_manager,
             is_window_visible: true,
             is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
@@ -464,6 +469,16 @@ impl App for EclipseApp {
             self.focus_search = true;
         }
 
+        // Hotkey Handling: F11 toggles Cinematic Fullscreen, Escape exits
+        if ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            self.is_cinematic_fullscreen = !self.is_cinematic_fullscreen;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_cinematic_fullscreen));
+        }
+        if self.is_cinematic_fullscreen && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.is_cinematic_fullscreen = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        }
+
         // Secondary instance IPC signal: Re-open window if user launches Eclipse again
         if self.ipc_rx.try_recv().is_ok() {
             self.is_window_visible = true;
@@ -585,20 +600,40 @@ impl App for EclipseApp {
         let mut toggle_now_playing = false;
         let mut on_navigate = None;
         let mut on_close = false;
+        let mut on_enter_fullscreen = false;
 
         let can_back = self.can_go_back();
         let can_fwd = self.can_go_forward();
         let mut on_back = false;
         let mut on_forward = false;
 
-        // Apply dark custom background with rounded corners when not fullscreen / not maximized
-        let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-        let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-        let is_floating = !is_maximized && !is_fullscreen;
+        if self.is_cinematic_fullscreen {
+            let mut on_exit_fullscreen = false;
+            let fullscreen_frame = egui::Frame::none().fill(Color32::BLACK);
+            egui::CentralPanel::default().frame(fullscreen_frame).show(ctx, |ui| {
+                crate::ui::views::fullscreen::render_cinematic_fullscreen(
+                    ui,
+                    &mut self.player,
+                    &self.theme,
+                    &mut self.art_manager,
+                    &mut self.ambient_blur_cache,
+                    &mut on_exit_fullscreen,
+                );
+            });
 
-        let central_frame = self.theme.panel_frame_with_state(is_floating);
+            if on_exit_fullscreen {
+                self.is_cinematic_fullscreen = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            }
+        } else {
+            // Apply dark custom background with rounded corners when not fullscreen / not maximized
+            let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+            let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            let is_floating = !is_maximized && !is_fullscreen;
 
-        egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
+            let central_frame = self.theme.panel_frame_with_state(is_floating);
+
+            egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
 
             // 1. TOP TITLEBAR (with 14px horizontal padding)
@@ -1116,6 +1151,7 @@ impl App for EclipseApp {
                         &mut toggle_now_playing,
                         &mut on_toggle_fav,
                         &mut self.art_manager,
+                        &mut on_enter_fullscreen,
                     );
                 },
             );
@@ -1123,6 +1159,12 @@ impl App for EclipseApp {
 
         // Window border edge & corner resize detection (evaluated after panel widgets)
         resize::handle_window_resize(ctx);
+        }
+
+        if on_enter_fullscreen {
+            self.is_cinematic_fullscreen = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+        }
 
         // Handle navigation history buttons
         if on_back {
@@ -1513,6 +1555,8 @@ mod tests {
             tray_manager: None,
             is_window_visible: true,
             is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
@@ -1614,6 +1658,8 @@ mod tests {
             tray_manager: None,
             is_window_visible: true,
             is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
             allow_exit: false,
             is_exiting: false,
             ipc_rx,
@@ -1651,5 +1697,112 @@ mod tests {
         assert!(app.is_window_visible);
         assert!(!app.is_background_hidden);
         assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn test_cinematic_fullscreen_state_and_cache_initialization() {
+        let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+        let cfg = AppConfig::default();
+
+        let app = EclipseApp {
+            cfg: cfg.clone(),
+            theme: Theme::from_name(&cfg.theme, None),
+            db: Database::open_in_memory().unwrap(),
+            player: PlayerController::new(&cfg),
+            tracks: Vec::new(),
+            playlists: Vec::new(),
+            recent_history: Vec::new(),
+            current_tab: NavTab::Home,
+            nav_history: vec![NavTab::Home],
+            nav_history_idx: 0,
+            search_query: String::new(),
+            focus_search: false,
+            show_queue: false,
+            show_downloads: false,
+            songs_state: SongsViewState::default(),
+            albums_state: AlbumsViewState::default(),
+            artists_state: ArtistsViewState::default(),
+            genres_state: GenresViewState::default(),
+            folders_state: FoldersViewState::default(),
+            playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
+            art_manager: art::AlbumArtManager::new(),
+            scan_rx,
+            scan_tx,
+            is_scanning: false,
+            status_msg: None,
+            last_active_track_id: None,
+            track_context_menu: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
+            allow_exit: false,
+            is_exiting: false,
+            ipc_rx,
+        };
+
+        assert!(!app.is_cinematic_fullscreen);
+    }
+
+    #[test]
+    fn test_cinematic_fullscreen_enter_and_exit_flow() {
+        let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+        let cfg = AppConfig::default();
+
+        let mut app = EclipseApp {
+            cfg: cfg.clone(),
+            theme: Theme::from_name(&cfg.theme, None),
+            db: Database::open_in_memory().unwrap(),
+            player: PlayerController::new(&cfg),
+            tracks: Vec::new(),
+            playlists: Vec::new(),
+            recent_history: Vec::new(),
+            current_tab: NavTab::Home,
+            nav_history: vec![NavTab::Home],
+            nav_history_idx: 0,
+            search_query: String::new(),
+            focus_search: false,
+            show_queue: false,
+            show_downloads: false,
+            songs_state: SongsViewState::default(),
+            albums_state: AlbumsViewState::default(),
+            artists_state: ArtistsViewState::default(),
+            genres_state: GenresViewState::default(),
+            folders_state: FoldersViewState::default(),
+            playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
+            art_manager: art::AlbumArtManager::new(),
+            scan_rx,
+            scan_tx,
+            is_scanning: false,
+            status_msg: None,
+            last_active_track_id: None,
+            track_context_menu: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
+            allow_exit: false,
+            is_exiting: false,
+            ipc_rx,
+        };
+
+        // 1. Initial state is non-fullscreen
+        assert!(!app.is_cinematic_fullscreen);
+
+        // 2. Toggle fullscreen on
+        app.is_cinematic_fullscreen = true;
+        assert!(app.is_cinematic_fullscreen);
+
+        // 3. Exit fullscreen
+        app.is_cinematic_fullscreen = false;
+        assert!(!app.is_cinematic_fullscreen);
     }
 }

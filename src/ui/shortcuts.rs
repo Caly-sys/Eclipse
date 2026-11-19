@@ -29,10 +29,7 @@ pub fn handle_shortcuts(
         };
     }
 
-    if ctx.input(|i| i.key_pressed(Key::F11)) {
-        let is_full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_full));
-    }
+    // Note: F11 is handled by EclipseApp::update to toggle cinematic fullscreen and viewport command
 
     // If a text input has focus, do NOT trigger playback or navigation shortcuts
     if ctx.wants_keyboard_input() {

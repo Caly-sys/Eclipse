@@ -2,6 +2,7 @@
 pub mod albums;
 pub mod artists;
 pub mod folders;
+pub mod fullscreen;
 pub mod genres;
 pub mod home;
 pub mod now_playing;
@@ -14,6 +15,7 @@ pub use about::render_about;
 pub use albums::{render_albums, AlbumsViewState};
 pub use artists::{render_artists, ArtistsViewState};
 pub use folders::{render_folders, FoldersViewState};
+pub use fullscreen::render_cinematic_fullscreen;
 pub use genres::{render_genres, GenresViewState};
 pub use home::render_home;
 pub use now_playing::render_now_playing;
