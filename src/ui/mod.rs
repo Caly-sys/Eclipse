@@ -4,6 +4,7 @@ pub mod components;
 pub mod context_menu;
 pub mod downloads;
 pub mod fonts;
+pub mod fullscreen_lyrics;
 pub mod icons;
 pub mod pip;
 pub mod playerbar;

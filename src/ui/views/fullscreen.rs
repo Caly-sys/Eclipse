@@ -50,6 +50,11 @@ pub fn render_cinematic_fullscreen(
         .as_ref()
         .map(|t| format!("{}_{}", t.artist, t.title))
         .unwrap_or_default();
+    let track_hash = if track_key.is_empty() {
+        0u64
+    } else {
+        Id::new(&track_key).value()
+    };
 
     // 3. Ambient Blurred Artwork Background
     // Optimized: Only read raw bytes once when track_key changes to preserve 60+ FPS
@@ -123,7 +128,7 @@ pub fn render_cinematic_fullscreen(
             .max_rect(right_rect)
             .layout(Layout::top_down(egui::Align::Min)),
         |right_ui| {
-            render_right_lyrics_column(right_ui, player, theme, right_rect);
+            render_right_lyrics_column(right_ui, player, theme, right_rect, track_hash);
         },
     );
 
@@ -547,22 +552,191 @@ fn render_volume_control(
     });
 }
 
+/// Persistent smooth scroll and autoscroll tracking state for cinematic fullscreen lyrics.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct LyricsScrollState {
+    pub current_y: f32,
+    pub target_y: f32,
+    pub last_active_idx: Option<usize>,
+    pub manual_scroll_until: f64,
+    pub last_track_key: u64,
+}
+
+/// Visual presentation attributes for a single lyric line.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineStyle {
+    pub font_size: f32,
+    pub color: Color32,
+    pub is_strong: bool,
+    pub is_active: bool,
+}
+
+/// Computes the visual hierarchy and contrast for a lyric line based on its state relative to playback.
+pub fn compute_line_style(
+    idx: usize,
+    active_idx: Option<usize>,
+    is_instrumental: bool,
+) -> LineStyle {
+    let is_active = Some(idx) == active_idx;
+
+    if is_active {
+        let color = if is_instrumental {
+            Color32::from_white_alpha(150)
+        } else {
+            Color32::WHITE
+        };
+        LineStyle {
+            font_size: 28.0,
+            color,
+            is_strong: true,
+            is_active: true,
+        }
+    } else {
+        match active_idx {
+            Some(active) => {
+                if idx < active {
+                    // Past line: soft muted translucent white
+                    let color = if is_instrumental {
+                        Color32::from_white_alpha(55)
+                    } else {
+                        Color32::from_white_alpha(95)
+                    };
+                    LineStyle {
+                        font_size: 16.0,
+                        color,
+                        is_strong: false,
+                        is_active: false,
+                    }
+                } else if idx == active + 1 {
+                    // Immediate next upcoming line
+                    let color = if is_instrumental {
+                        Color32::from_white_alpha(100)
+                    } else {
+                        Color32::from_white_alpha(175)
+                    };
+                    LineStyle {
+                        font_size: 18.0,
+                        color,
+                        is_strong: false,
+                        is_active: false,
+                    }
+                } else {
+                    // Upcoming lines further ahead (idx >= active + 2)
+                    let color = if is_instrumental {
+                        Color32::from_white_alpha(65)
+                    } else {
+                        Color32::from_white_alpha(115)
+                    };
+                    LineStyle {
+                        font_size: 16.0,
+                        color,
+                        is_strong: false,
+                        is_active: false,
+                    }
+                }
+            }
+            None => {
+                // Before playback reaches the first synced lyric line
+                if idx == 0 {
+                    let color = if is_instrumental {
+                        Color32::from_white_alpha(100)
+                    } else {
+                        Color32::from_white_alpha(175)
+                    };
+                    LineStyle {
+                        font_size: 18.0,
+                        color,
+                        is_strong: false,
+                        is_active: false,
+                    }
+                } else {
+                    let color = if is_instrumental {
+                        Color32::from_white_alpha(65)
+                    } else {
+                        Color32::from_white_alpha(115)
+                    };
+                    LineStyle {
+                        font_size: 16.0,
+                        color,
+                        is_strong: false,
+                        is_active: false,
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Returns true if the lyric line denotes an instrumental break.
+pub fn is_instrumental_break(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty()
+        || t == "..."
+        || t == "···"
+        || t == "· · ·"
+        || t == "---"
+        || (!t.is_empty() && t.chars().all(|c| c == '.' || c == ' ' || c == '·' || c == '-'))
+}
+
+/// Formats lyric line text for clean non-emoji display.
+pub fn format_lyric_line_display(text: &str) -> &str {
+    let trimmed = text.trim();
+    if is_instrumental_break(trimmed) {
+        "· · ·"
+    } else {
+        trimmed
+    }
+}
+
+/// Calculates the active lyric line index from playback seconds, with a 50ms early highlight threshold.
+pub fn calculate_active_line_index(lines: &[crate::lyrics::LyricLine], current_pos_secs: f64) -> Option<usize> {
+    if lines.is_empty() || current_pos_secs.is_nan() {
+        return None;
+    }
+    let threshold_ms = ((current_pos_secs + 0.05).max(0.0) * 1000.0) as u64;
+    let first_line_ms = lines.first()?.timestamp_ms;
+    if threshold_ms < first_line_ms {
+        return None;
+    }
+    let mut active = None;
+    for (i, line) in lines.iter().enumerate() {
+        if threshold_ms >= line.timestamp_ms {
+            active = Some(i);
+        } else {
+            break;
+        }
+    }
+    active
+}
+
+/// Calculates target content-local scroll offset targeting 45% viewport centering.
+pub fn calculate_target_scroll_y(local_center_y: f32, viewport_h: f32) -> f32 {
+    (local_center_y - viewport_h * 0.45).max(0.0)
+}
+
+/// Lerps scroll offset toward target offset.
+pub fn lerp_scroll(current_y: f32, target_y: f32, dt: f32) -> f32 {
+    let dt_clamped = dt.clamp(0.001, 0.1);
+    let t = (dt_clamped * 8.0).clamp(0.0, 1.0);
+    current_y + (target_y - current_y) * t
+}
+
 /// Renders the right column lyrics stream (synchronized, plain, instrumental, or empty fallback).
 fn render_right_lyrics_column(
     ui: &mut Ui,
     player: &mut PlayerController,
     theme: &Theme,
     panel_rect: Rect,
+    track_hash: u64,
 ) {
     let current_pos_secs = player.engine.position().as_secs_f64();
-    let current_ms = (current_pos_secs * 1000.0) as u64;
 
     let seek_target_ms = if let Some(ref lyrics) = player.lyrics {
         if lyrics.lines.is_empty() {
             render_no_lyrics_card(ui, player.is_loading_lyrics, theme, panel_rect);
             None
         } else if lyrics.is_synced {
-            render_synced_lyrics(ui, lyrics, current_ms, theme, panel_rect)
+            render_synced_lyrics(ui, lyrics, current_pos_secs, theme, panel_rect, track_hash)
         } else {
             render_plain_lyrics(ui, lyrics, theme, panel_rect);
             None
@@ -577,100 +751,151 @@ fn render_right_lyrics_column(
     }
 }
 
-/// Renders synchronized .lrc lyrics with autoscroll lerp centering and interactive seeking.
+/// Renders synchronized .lrc lyrics with content-local auto-centering scroll,
+/// manual wheel scroll respect, and high-contrast visual hierarchy.
 fn render_synced_lyrics(
     ui: &mut Ui,
     lyrics: &Lyrics,
-    current_ms: u64,
+    current_pos_secs: f64,
     theme: &Theme,
-    panel_rect: Rect,
+    _panel_rect: Rect,
+    track_hash: u64,
 ) -> Option<u64> {
-    let active_idx = lyrics.current_index(current_ms);
-    let mut seek_target: Option<u64> = None;
+    let viewport_h = ui.available_height().max(1.0);
+    let scroll_state_id = Id::new("fullscreen_lyrics_scroll_state");
+    let mut scroll_state: LyricsScrollState = ui
+        .data(|d| d.get_temp(scroll_state_id))
+        .unwrap_or_default();
 
-    // Calculate vertical centering target for active lyric line
-    let line_height_approx = 46.0;
-    let top_padding = (panel_rect.height() * 0.38).max(60.0);
-
-    let target_scroll_y = if let Some(idx) = active_idx {
-        let active_y = top_padding + (idx as f32) * line_height_approx;
-        (active_y - panel_rect.height() * 0.40).max(0.0)
-    } else {
-        0.0
-    };
-
-    // Smooth lerp scrolling
-    let scroll_id = Id::new("fullscreen_lyrics_smooth_scroll_offset");
-    let prev_scroll_y = ui.ctx().data(|d| d.get_temp::<f32>(scroll_id)).unwrap_or(target_scroll_y);
-    let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.1);
-    let lerp_factor = (8.0 * dt).min(1.0);
-    let cur_scroll_y = prev_scroll_y + (target_scroll_y - prev_scroll_y) * lerp_factor;
-    ui.ctx().data_mut(|d| d.insert_temp(scroll_id, cur_scroll_y));
-
-    if (cur_scroll_y - target_scroll_y).abs() > 0.5 {
-        ui.ctx().request_repaint();
+    let now_secs = ui.input(|i| i.time);
+    let track_changed = scroll_state.last_track_key != track_hash;
+    if track_changed {
+        scroll_state.last_track_key = track_hash;
+        scroll_state.manual_scroll_until = 0.0;
+        scroll_state.last_active_idx = None;
     }
 
-    ScrollArea::vertical()
-        .vertical_scroll_offset(cur_scroll_y)
+    let active_line_idx = calculate_active_line_index(&lyrics.lines, current_pos_secs);
+
+    let mut seek_target: Option<u64> = None;
+    let mut detected_target_y: Option<f32> = None;
+
+    let scroll_area_output = ScrollArea::vertical()
+        .id_salt("fullscreen_lyrics_scroll")
+        .vertical_scroll_offset(scroll_state.current_y)
         .auto_shrink([false, false])
         .show(ui, |s_ui| {
-            s_ui.add_space(top_padding);
+            let content_origin_y = s_ui.cursor().top();
+            s_ui.add_space(viewport_h * 0.42);
 
-            for (i, line) in lyrics.lines.iter().enumerate() {
-                let is_active = active_idx == Some(i);
-                let is_past = active_idx.is_some_and(|curr| i < curr);
+            for (idx, line) in lyrics.lines.iter().enumerate() {
+                let is_active = Some(idx) == active_line_idx;
+                let trimmed = line.text.trim();
+                let is_instrumental = is_instrumental_break(trimmed);
+                let display_text = format_lyric_line_display(trimmed);
+                let style = compute_line_style(idx, active_line_idx, is_instrumental);
 
-                let font_size = if is_active { 22.0 } else { 16.5 };
-                let text_color = if is_active {
-                    Color32::WHITE
-                } else if is_past {
-                    Color32::from_rgba_premultiplied(190, 185, 205, 115)
-                } else {
-                    Color32::from_rgba_premultiplied(160, 155, 175, 75)
-                };
-
-                let line_text = if line.text.trim().is_empty() {
-                    "..."
-                } else {
-                    line.text.trim()
-                };
-
-                let rich = RichText::new(line_text)
-                    .size(font_size)
-                    .color(text_color);
-                let rich = if is_active { rich.strong() } else { rich };
-
-                let resp = s_ui.add(
-                    egui::Button::new(rich)
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::NONE)
-                        .rounding(Rounding::same(8.0)),
-                );
-
-                if resp.hovered() && !is_active {
-                    s_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                let mut rich = RichText::new(display_text)
+                    .size(style.font_size)
+                    .color(style.color);
+                if style.is_strong {
+                    rich = rich.strong();
                 }
 
-                // Vertical glowing indicator bar for the active line
+                let line_response = s_ui.horizontal(|h_ui| {
+                    h_ui.add_space(20.0);
+                    h_ui.add(
+                        egui::Button::new(rich)
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::NONE)
+                            .rounding(Rounding::same(8.0)),
+                    )
+                }).inner;
+
                 if is_active {
-                    let bar_rect = Rect::from_min_size(
-                        pos2(resp.rect.min.x - 12.0, resp.rect.min.y + 4.0),
-                        vec2(3.5, resp.rect.height() - 8.0),
+                    let local_center_y = line_response.rect.center().y - content_origin_y;
+                    detected_target_y = Some(calculate_target_scroll_y(local_center_y, viewport_h));
+
+                    // Glowing accent vertical bar next to the active line
+                    let bar_h = (line_response.rect.height() - 8.0).clamp(16.0, 32.0);
+                    let bar_rect = Rect::from_center_size(
+                        pos2(line_response.rect.min.x - 14.0, line_response.rect.center().y),
+                        vec2(4.0, bar_h),
                     );
+                    // Glowing aura
+                    s_ui.painter().rect_filled(
+                        bar_rect.expand(3.0),
+                        Rounding::same(4.0),
+                        Color32::from_rgba_premultiplied(
+                            theme.accent.r(),
+                            theme.accent.g(),
+                            theme.accent.b(),
+                            45,
+                        ),
+                    );
+                    // Crisp indicator bar
                     s_ui.painter().rect_filled(bar_rect, Rounding::same(2.0), theme.accent);
                 }
 
-                // Click line to seek
-                if resp.clicked() {
+                if line_response.hovered() {
+                    s_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    if !is_active {
+                        s_ui.painter().rect_filled(
+                            line_response.rect.expand2(vec2(8.0, 2.0)),
+                            Rounding::same(6.0),
+                            Color32::from_rgba_premultiplied(255, 255, 255, 14),
+                        );
+                    }
+                }
+
+                if line_response.clicked() {
                     seek_target = Some(line.timestamp_ms);
                 }
 
                 s_ui.add_space(8.0);
             }
 
-            s_ui.add_space(panel_rect.height() * 0.50);
+            s_ui.add_space(viewport_h * 0.42);
         });
+
+    if let Some(target) = detected_target_y {
+        scroll_state.target_y = target;
+    } else if active_line_idx.is_none() {
+        scroll_state.target_y = 0.0;
+    }
+
+    if seek_target.is_some() {
+        scroll_state.manual_scroll_until = 0.0;
+    }
+
+    // Requirement 2: Manual wheel scroll respect & smooth interpolation
+    let actual_offset_y = scroll_area_output.state.offset.y;
+    let wheel_delta = ui.input(|i| i.raw_scroll_delta.y.abs() + i.smooth_scroll_delta.y.abs());
+    let offset_diff = (actual_offset_y - scroll_state.current_y).abs();
+    let is_dragging = ui.input(|i| i.pointer.is_decidedly_dragging());
+
+    if (offset_diff > 0.5 && (wheel_delta > 0.0 || is_dragging)) || wheel_delta > 0.0 {
+        scroll_state.current_y = actual_offset_y;
+        scroll_state.manual_scroll_until = now_secs + 2.5;
+    }
+
+    if now_secs >= scroll_state.manual_scroll_until {
+        if track_changed || (scroll_state.target_y - scroll_state.current_y).abs() > viewport_h * 1.5 {
+            scroll_state.current_y = scroll_state.target_y;
+        } else {
+            let dt = ui.input(|i| i.stable_dt);
+            scroll_state.current_y = lerp_scroll(scroll_state.current_y, scroll_state.target_y, dt);
+            if (scroll_state.target_y - scroll_state.current_y).abs() > 0.5 {
+                ui.ctx().request_repaint();
+            }
+        }
+    } else {
+        let remaining_secs = (scroll_state.manual_scroll_until - now_secs).max(0.0);
+        ui.ctx().request_repaint_after(Duration::from_secs_f64(remaining_secs));
+    }
+
+    scroll_state.last_active_idx = active_line_idx;
+    ui.data_mut(|d| d.insert_temp(scroll_state_id, scroll_state));
 
     seek_target
 }
@@ -985,5 +1210,159 @@ mod tests {
                 assert!(!on_exit);
             });
         });
+    }
+
+    #[test]
+    fn test_calculate_target_scroll_y_content_local() {
+        let viewport_h = 1000.0;
+        // Top spacer is at viewport_h * 0.42 = 420.0
+        // Line 0 center with 40px height is at 440.0
+        let line_0_center = 440.0;
+        let target_0 = calculate_target_scroll_y(line_0_center, viewport_h);
+        // (440.0 - 450.0).max(0.0) == 0.0
+        assert_eq!(target_0, 0.0);
+
+        // Mid-track line at local_center 1200.0
+        let target_mid = calculate_target_scroll_y(1200.0, viewport_h);
+        assert_eq!(target_mid, 1200.0 - 450.0);
+        // When scrolled by target_mid, on-screen line center is exactly 45% of viewport
+        let onscreen_center = 1200.0 - target_mid;
+        assert_eq!(onscreen_center, viewport_h * 0.45);
+    }
+
+    #[test]
+    fn test_lerp_scroll_convergence() {
+        let cur = 100.0;
+        let target = 200.0;
+        let next = lerp_scroll(cur, target, 0.016);
+        // With dt=0.016, t = 0.016 * 8.0 = 0.128, delta = 12.8
+        assert!(next > cur && next < target);
+
+        // Static convergence
+        assert_eq!(lerp_scroll(200.0, 200.0, 0.016), 200.0);
+
+        // Clamped dt test
+        let next_huge_dt = lerp_scroll(cur, target, 5.0);
+        assert!(next_huge_dt <= target);
+    }
+
+    #[test]
+    fn test_compute_line_style_hierarchy() {
+        let active_idx = Some(2);
+
+        // Past lines: 16px, muted white alpha 95
+        let past_style = compute_line_style(0, active_idx, false);
+        assert_eq!(past_style.font_size, 16.0);
+        assert_eq!(past_style.color, Color32::from_white_alpha(95));
+        assert!(!past_style.is_strong);
+        assert!(!past_style.is_active);
+
+        // Active line: 28px, crisp bold white, active
+        let active_style = compute_line_style(2, active_idx, false);
+        assert_eq!(active_style.font_size, 28.0);
+        assert_eq!(active_style.color, Color32::WHITE);
+        assert!(active_style.is_strong);
+        assert!(active_style.is_active);
+
+        // Next upcoming line (active + 1): 18px, alpha 175
+        let next_style = compute_line_style(3, active_idx, false);
+        assert_eq!(next_style.font_size, 18.0);
+        assert_eq!(next_style.color, Color32::from_white_alpha(175));
+        assert!(!next_style.is_strong);
+        assert!(!next_style.is_active);
+
+        // Upcoming lines (active + 2): 16px, alpha 115
+        let upcoming_style = compute_line_style(4, active_idx, false);
+        assert_eq!(upcoming_style.font_size, 16.0);
+        assert_eq!(upcoming_style.color, Color32::from_white_alpha(115));
+        assert!(!upcoming_style.is_strong);
+        assert!(!upcoming_style.is_active);
+    }
+
+    #[test]
+    fn test_compute_line_style_instrumental_and_no_active() {
+        // Instrumental active break: 28px with lower opacity
+        let active_break = compute_line_style(1, Some(1), true);
+        assert_eq!(active_break.font_size, 28.0);
+        assert_eq!(active_break.color, Color32::from_white_alpha(150));
+        assert!(active_break.is_active);
+
+        // No active line (before song starts)
+        let first_style = compute_line_style(0, None, false);
+        assert_eq!(first_style.font_size, 18.0);
+        assert_eq!(first_style.color, Color32::from_white_alpha(175));
+
+        let later_style = compute_line_style(1, None, false);
+        assert_eq!(later_style.font_size, 16.0);
+        assert_eq!(later_style.color, Color32::from_white_alpha(115));
+    }
+
+    #[test]
+    fn test_instrumental_break_detection_and_formatting() {
+        assert!(is_instrumental_break(""));
+        assert!(is_instrumental_break("   "));
+        assert!(is_instrumental_break("..."));
+        assert!(is_instrumental_break("···"));
+        assert!(is_instrumental_break("· · ·"));
+        assert!(is_instrumental_break("---"));
+        assert!(!is_instrumental_break("Never gonna give you up"));
+
+        assert_eq!(format_lyric_line_display("..."), "· · ·");
+        assert_eq!(format_lyric_line_display("  Hello world  "), "Hello world");
+    }
+
+    #[test]
+    fn test_calculate_active_line_index_early_threshold() {
+        let lines = vec![
+            LyricLine { timestamp_ms: 2000, text: "Line 0".to_string() },
+            LyricLine { timestamp_ms: 5000, text: "Line 1".to_string() },
+            LyricLine { timestamp_ms: 10000, text: "Line 2".to_string() },
+        ];
+
+        // Well before line 0
+        assert_eq!(calculate_active_line_index(&lines, 0.5), None);
+
+        // 1.94s is before threshold (1.94 + 0.05 = 1.99 < 2.00)
+        assert_eq!(calculate_active_line_index(&lines, 1.94), None);
+
+        // 1.96s activates line 0 with 50ms early highlight (1.96 + 0.05 = 2.01 >= 2.00)
+        assert_eq!(calculate_active_line_index(&lines, 1.96), Some(0));
+
+        // 3.0s is inside line 0
+        assert_eq!(calculate_active_line_index(&lines, 3.0), Some(0));
+
+        // 4.96s activates line 1
+        assert_eq!(calculate_active_line_index(&lines, 4.96), Some(1));
+
+        // 15.0s is past the final line
+        assert_eq!(calculate_active_line_index(&lines, 15.0), Some(2));
+
+        // NaN handling
+        assert_eq!(calculate_active_line_index(&lines, f64::NAN), None);
+
+        // Empty lines
+        assert_eq!(calculate_active_line_index(&[], 2.0), None);
+    }
+
+    #[test]
+    fn test_lyrics_scroll_state_struct() {
+        let mut state = LyricsScrollState::default();
+        assert_eq!(state.current_y, 0.0);
+        assert_eq!(state.target_y, 0.0);
+        assert_eq!(state.last_active_idx, None);
+        assert_eq!(state.manual_scroll_until, 0.0);
+        assert_eq!(state.last_track_key, 0);
+
+        state.current_y = 150.0;
+        state.target_y = 300.0;
+        state.last_active_idx = Some(4);
+        state.manual_scroll_until = 12.5;
+        state.last_track_key = 42;
+
+        assert_eq!(state.current_y, 150.0);
+        assert_eq!(state.target_y, 300.0);
+        assert_eq!(state.last_active_idx, Some(4));
+        assert_eq!(state.manual_scroll_until, 12.5);
+        assert_eq!(state.last_track_key, 42);
     }
 }
