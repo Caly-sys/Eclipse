@@ -12,6 +12,139 @@ use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Rect, Rounding, Stroke, Ui};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "windows")]
+#[allow(clippy::upper_case_acronyms)]
+mod win32_rounding {
+    use std::sync::Mutex;
+
+    type Hwnd = *mut std::ffi::c_void;
+    type Hrgn = *mut std::ffi::c_void;
+    type Hresult = i32;
+    type Bool = i32;
+
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_ROUND: u32 = 2;
+    const DWMWA_BORDER_COLOR: u32 = 34;
+    const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> Hwnd;
+        fn SetWindowRgn(hWnd: Hwnd, hRgn: Hrgn, bRedraw: Bool) -> i32;
+    }
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: Hwnd,
+            dwAttribute: u32,
+            pvAttribute: *const std::ffi::c_void,
+            cbAttribute: u32,
+        ) -> Hresult;
+    }
+
+    #[link(name = "gdi32")]
+    extern "system" {
+        fn CreateRoundRectRgn(
+            x1: i32,
+            y1: i32,
+            x2: i32,
+            y2: i32,
+            w: i32,
+            h: i32,
+        ) -> Hrgn;
+        fn DeleteObject(ho: *mut std::ffi::c_void) -> Bool;
+    }
+
+    static LAST_APPLIED: Mutex<Option<(usize, i32, i32)>> = Mutex::new(None);
+
+    /// Safely apply rounded window corners to the native Win32 window matching `title`.
+    ///
+    /// Win 11: Uses `DwmSetWindowAttribute(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND)`
+    /// and `DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE`.
+    /// Win 10: Falls back to `CreateRoundRectRgn` + `SetWindowRgn` if DWM corner preference fails.
+    pub fn apply_rounded_window_corners(
+        title: &str,
+        phys_w: i32,
+        phys_h: i32,
+        corner_radius_px: i32,
+    ) {
+        if phys_w <= 0 || phys_h <= 0 {
+            return;
+        }
+
+        let wide_title: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        let hwnd = unsafe { FindWindowW(std::ptr::null(), wide_title.as_ptr()) };
+        if hwnd.is_null() {
+            return;
+        }
+
+        let key = (hwnd as usize, phys_w, phys_h);
+        if let Ok(mut last) = LAST_APPLIED.lock() {
+            if *last == Some(key) {
+                return;
+            }
+
+            // 1. Windows 11 DWM Corner Preference
+            let corner_pref: u32 = DWMWCP_ROUND;
+            let hr_corner = unsafe {
+                DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    &corner_pref as *const u32 as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                )
+            };
+
+            let border_color: u32 = DWMWA_COLOR_NONE;
+            let _ = unsafe {
+                DwmSetWindowAttribute(
+                    hwnd,
+                    DWMWA_BORDER_COLOR,
+                    &border_color as *const u32 as *const std::ffi::c_void,
+                    std::mem::size_of::<u32>() as u32,
+                )
+            };
+
+            // 2. Windows 10 Fallback: GDI SetWindowRgn if DWM preference returned non-zero error
+            if hr_corner != 0 {
+                let rgn = unsafe {
+                    CreateRoundRectRgn(
+                        0,
+                        0,
+                        phys_w + 1,
+                        phys_h + 1,
+                        corner_radius_px * 2,
+                        corner_radius_px * 2,
+                    )
+                };
+                if !rgn.is_null() {
+                    let set_res = unsafe { SetWindowRgn(hwnd, rgn, 1) };
+                    if set_res == 0 {
+                        unsafe {
+                            DeleteObject(rgn);
+                        }
+                    }
+                }
+            }
+
+            *last = Some(key);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub use win32_rounding::apply_rounded_window_corners;
+
+#[cfg(not(target_os = "windows"))]
+pub fn apply_rounded_window_corners(
+    _title: &str,
+    _phys_w: i32,
+    _phys_h: i32,
+    _corner_radius_px: i32,
+) {
+}
+
 /// Truncate string to `max_chars` with an ellipsis if longer.
 fn truncate_str(s: &str, max_chars: usize) -> String {
     if s.chars().count() > max_chars {
@@ -101,10 +234,10 @@ pub fn render_desktop_lyrics(
 /// Render the unified dark-glass floating mini-player card.
 ///
 /// Styling:
-/// - Inset: `2.0px` transparent border margin to eliminate black square corners
-/// - Background: `Color32::from_rgba_unmultiplied(16, 16, 22, 245)`
-/// - Border: `Stroke::new(1.0, Color32::from_white_alpha(28))`
-/// - Rounding: `Rounding::same(14.0)`
+/// - Window-edge flush layout (no outer black gap)
+/// - Background: solid card color `Color32::from_rgb(16, 16, 22)`
+/// - Border: `Stroke::new(1.0, Color32::from_white_alpha(32))` hugging native rounded edge
+/// - Rounding: `Rounding::same(8.0)` matching native Win32 window rounding
 /// - Top lyrics strip: centered `13.5px` white text separated by `Color32::from_white_alpha(18)` hairline divider
 /// - Left: 54px x 54px album cover art clipped with `Rounding::same(8.0)`, fallback to vector `Icon::Disc`
 /// - Top-Right Pinned: Close button `[×]` (`Icon::Close`, size 10.0) with subtle circular hover effect
@@ -132,29 +265,21 @@ pub fn render_unified_pip_card(
     let card_height = if has_lyrics { 122.0 } else { 86.0 };
     let card_width = 386.0;
 
-    let full_width = card_width + 4.0; // 390.0
-    let full_height = card_height + 4.0; // 126.0 with lyrics, 90.0 without
-
-    let (viewport_rect, resp) = ui.allocate_exact_size(vec2(full_width, full_height), egui::Sense::click_and_drag());
-
-    let card_rect = Rect::from_min_size(
-        pos2(viewport_rect.min.x + 2.0, viewport_rect.min.y + 2.0),
-        vec2(card_width, card_height),
-    );
+    let (card_rect, resp) = ui.allocate_exact_size(vec2(card_width, card_height), egui::Sense::click_and_drag());
 
     let painter = ui.painter();
 
     // 1. Draw unified card background
     painter.rect_filled(
         card_rect,
-        Rounding::same(14.0),
-        Color32::from_rgba_unmultiplied(16, 16, 22, 245),
+        Rounding::same(8.0),
+        Color32::from_rgb(16, 16, 22),
     );
-    // 2. Subtle glass border
+    // 2. Subtle glass border hugging native rounded edge
     painter.rect_stroke(
-        card_rect,
-        Rounding::same(14.0),
-        Stroke::new(1.0_f32, Color32::from_white_alpha(28)),
+        card_rect.shrink(0.5),
+        Rounding::same(8.0),
+        Stroke::new(1.0_f32, Color32::from_white_alpha(32)),
     );
 
     // 3. Lyrics strip if present
@@ -605,13 +730,12 @@ pub fn show_pip_viewport(
     };
 
     let has_lyrics = pip_settings.show_desktop_lyrics && active_lyric_text(player).is_some();
-    let target_height = if has_lyrics { 126.0 } else { 90.0 };
-    let target_width = 390.0;
+    let target_height = if has_lyrics { 122.0 } else { 86.0 };
+    let target_width = 386.0;
 
     let mut builder = egui::ViewportBuilder::default()
         .with_title("Eclipse Mini Player")
         .with_inner_size(vec2(target_width, target_height))
-        .with_transparent(true)
         .with_decorations(false)
         .with_always_on_top()
         .with_taskbar(false)
@@ -644,8 +768,15 @@ pub fn show_pip_viewport(
                 *show_pip = false;
             }
 
+            // Apply Win32 native rounded corners (cached, only re-applied if size/HWND changes)
+            let ppp = ctx.pixels_per_point();
+            let phys_w = (target_width * ppp).round() as i32;
+            let phys_h = (target_height * ppp).round() as i32;
+            let corner_radius_px = (8.0 * ppp).round() as i32;
+            apply_rounded_window_corners("Eclipse Mini Player", phys_w, phys_h, corner_radius_px);
+
             egui::CentralPanel::default()
-                .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
+                .frame(egui::Frame::none().fill(Color32::from_rgb(16, 16, 22)))
                 .show(ctx, |ui| {
                     render_pip_overlay_content(
                         ui,
@@ -801,7 +932,7 @@ mod tests {
                 let mut show_pip = true;
                 let mut on_toggle_fav = None;
 
-                // Render full content with lyrics
+                // Render full content with lyrics setting on (no track playing -> 86.0 fallback)
                 let resp_lyrics = render_pip_overlay_content(
                     ui,
                     &mut player,
@@ -812,7 +943,8 @@ mod tests {
                     &mut on_toggle_fav,
                     true,
                 );
-                assert_eq!(resp_lyrics.rect.width(), 390.0);
+                assert_eq!(resp_lyrics.rect.width(), 386.0);
+                assert_eq!(resp_lyrics.rect.height(), 86.0);
 
                 // Render full content without lyrics
                 let resp_no_lyrics = render_pip_overlay_content(
@@ -825,8 +957,8 @@ mod tests {
                     &mut on_toggle_fav,
                     false,
                 );
-                assert_eq!(resp_no_lyrics.rect.width(), 390.0);
-                assert_eq!(resp_no_lyrics.rect.height(), 90.0);
+                assert_eq!(resp_no_lyrics.rect.width(), 386.0);
+                assert_eq!(resp_no_lyrics.rect.height(), 86.0);
             });
         });
     }
@@ -888,8 +1020,8 @@ mod tests {
                     &mut on_toggle_fav,
                     true,
                 );
-                assert_eq!(resp_with.rect.width(), 390.0);
-                assert_eq!(resp_with.rect.height(), 126.0);
+                assert_eq!(resp_with.rect.width(), 386.0);
+                assert_eq!(resp_with.rect.height(), 122.0);
 
                 let resp_without = render_unified_pip_card(
                     ui,
@@ -901,10 +1033,19 @@ mod tests {
                     &mut on_toggle_fav,
                     false,
                 );
-                assert_eq!(resp_without.rect.width(), 390.0);
-                assert_eq!(resp_without.rect.height(), 90.0);
+                assert_eq!(resp_without.rect.width(), 386.0);
+                assert_eq!(resp_without.rect.height(), 86.0);
             });
         });
+    }
+
+    #[test]
+    fn test_apply_rounded_window_corners_safety() {
+        // Safe no-op on non-existent window handle
+        apply_rounded_window_corners("NonExistentWindow_EclipseTest", 386, 122, 8);
+        // Safe no-op on zero or negative dimensions
+        apply_rounded_window_corners("Eclipse Mini Player", 0, 0, 8);
+        apply_rounded_window_corners("Eclipse Mini Player", -1, 122, 8);
     }
 
     #[test]
