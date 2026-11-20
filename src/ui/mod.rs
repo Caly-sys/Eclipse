@@ -1,5 +1,8 @@
 ﻿pub mod ambient_blur;
 pub mod art;
+pub mod bento_player_bar;
+pub mod bento_sidebar;
+pub mod bento_theme;
 pub mod components;
 pub mod context_menu;
 pub mod downloads;
@@ -9,6 +12,7 @@ pub mod icons;
 pub mod pip;
 pub mod playerbar;
 pub mod resize;
+pub mod right_inspector;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod theme;
@@ -16,20 +20,29 @@ pub mod titlebar;
 pub mod tray;
 pub mod views;
 
+pub use bento_player_bar::{render_bento_player_dock, BentoPlayerDockAction};
+pub use bento_sidebar::{render_bento_sidebar, BentoSidebarAction};
+pub use bento_theme::{
+    apply_bento_visuals, bento_dock_frame, bento_panel_frame, BG_CANVAS, BG_CARD, BG_DOCK,
+    BG_PANEL, BENTO_GAP, BENTO_RADIUS, BORDER_SUBTLE,
+};
 pub use context_menu::{render_track_context_menu, TrackContextMenuAction, TrackContextMenuState};
 pub use playerbar::{current_playback_time, seek_to};
+pub use right_inspector::{
+    render_right_inspector, InspectorAction, InspectorContext, InspectorTab,
+};
 
 use crate::audio::PlayerController;
 use crate::config::AppConfig;
 use crate::library::db::Database;
 use crate::library::model::{Playlist, Track};
 use crate::library::scanner::scan_directories;
-use crate::ui::icons::{icon_button, paint_icon, render_icon, Icon};
+use crate::ui::icons::{render_icon, Icon};
 use crate::ui::sidebar::NavTab;
 use crate::ui::theme::Theme;
 use crate::ui::views::*;
 use eframe::App;
-use egui::{vec2, Color32, Layout, RichText, Rounding, ScrollArea, Stroke};
+use egui::{vec2, Color32, Layout, RichText, Rounding, Stroke};
 use rand::seq::SliceRandom;
 use std::time::Duration;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -51,6 +64,9 @@ pub struct EclipseApp {
     pub focus_search: bool,
     pub show_queue: bool,
     pub show_downloads: bool,
+    pub sidebar_collapsed: bool,
+    pub right_inspector_open: bool,
+    pub right_inspector_tab: InspectorTab,
     pub songs_state: SongsViewState,
     pub albums_state: AlbumsViewState,
     pub artists_state: ArtistsViewState,
@@ -156,6 +172,9 @@ impl EclipseApp {
             focus_search: false,
             show_queue: false,
             show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
@@ -316,6 +335,8 @@ impl EclipseApp {
 
 impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        apply_bento_visuals(ctx);
+
         #[cfg(windows)]
         {
             if tray::MAIN_HWND.load(std::sync::atomic::Ordering::SeqCst) == 0 {
@@ -332,7 +353,7 @@ impl App for EclipseApp {
             }
         }
 
-        // High frame rate during playback for smooth spectrum visualizer and PiP overlay
+        // High frame rate during playback for smooth spectrum visualizer, synced lyrics, and PiP overlay
         let is_stream_playing = self.stream_controller.active_state.as_ref().map(|s| s.is_playing).unwrap_or(false);
         if self.player.engine.is_playing()
             || (self.player.playback_source.is_stream() && is_stream_playing)
@@ -340,6 +361,9 @@ impl App for EclipseApp {
             || self.is_scanning
             || crate::library::genre_fetcher::is_genre_fetch_running()
             || self.cfg.pip.enabled
+            || (self.right_inspector_open
+                && self.right_inspector_tab == InspectorTab::Lyrics
+                && (self.player.engine.is_playing() || is_stream_playing))
         {
             ctx.request_repaint();
         }
@@ -627,7 +651,7 @@ impl App for EclipseApp {
         let mut on_create_playlist = None;
         let mut on_delete_playlist = None;
         let mut on_refresh_library = false;
-        let mut toggle_now_playing = false;
+        let toggle_now_playing = false;
         let mut on_navigate = None;
         let mut on_close = false;
         let mut on_enter_fullscreen = false;
@@ -656,12 +680,15 @@ impl App for EclipseApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             }
         } else {
-            // Apply dark custom background with rounded corners when not fullscreen / not maximized
+            // Apply dark canvas background with rounded corners when not fullscreen / not maximized
             let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
             let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
             let is_floating = !is_maximized && !is_fullscreen;
 
-            let central_frame = self.theme.panel_frame_with_state(is_floating);
+            let central_frame = egui::Frame::none()
+                .fill(BG_CANVAS)
+                .rounding(if is_floating { Rounding::same(BENTO_RADIUS) } else { Rounding::ZERO })
+                .stroke(if is_floating { Stroke::new(1.0_f32, BORDER_SUBTLE) } else { Stroke::NONE });
 
             egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -709,42 +736,43 @@ impl App for EclipseApp {
                 }
             }
 
-            // 2. MAIN WORKSPACE (Sidebar + Viewport + Queue drawer)
-            let playerbar_h = 72.0_f32;
-            let workspace_height = (ui.available_height() - playerbar_h).max(100.0);
+            // 2. MAIN 3-COLUMN BENTO WORKSPACE
+            let dock_total_height = 76.0 + BENTO_GAP;
+            let workspace_height = (ui.available_height() - dock_total_height).max(100.0);
 
             ui.allocate_ui_with_layout(
                 vec2(ui.available_width(), workspace_height),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
                     egui::Frame::none()
-                        .inner_margin(egui::Margin { left: 14.0, right: 14.0, top: 4.0, bottom: 8.0 })
+                        .inner_margin(egui::Margin {
+                            left: BENTO_GAP,
+                            right: BENTO_GAP,
+                            top: 4.0,
+                            bottom: BENTO_GAP,
+                        })
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+                                ui.spacing_mut().item_spacing = vec2(BENTO_GAP, 0.0);
 
-                                // Sidebar Left
-                                let mut sidebar_frame = self.theme.glass_frame(12.0);
-                                sidebar_frame.inner_margin = egui::Margin::symmetric(12.0_f32, 10.0_f32);
+                                // Column 1: Left Navigation Rail (Bento Sidebar)
+                                let sidebar_w = if self.sidebar_collapsed { 64.0 } else { 220.0 };
+                                let mut sidebar_action = BentoSidebarAction::default();
 
-                                let sidebar_width = 240.0;
-                                let mut next_tab = self.current_tab;
-                                let mut on_create_sidebar_playlist = false;
-
-                                ui.push_id("sidebar_panel", |ui| {
+                                ui.push_id("bento_sidebar_panel", |ui| {
                                     ui.allocate_ui_with_layout(
-                                        vec2(sidebar_width, workspace_height - 12.0),
+                                        vec2(sidebar_w, workspace_height - 12.0),
                                         Layout::top_down(egui::Align::Min),
                                         |ui| {
-                                            sidebar_frame.show(ui, |ui| {
-                                                sidebar::render_sidebar(
+                                            bento_panel_frame().show(ui, |ui| {
+                                                sidebar_action = render_bento_sidebar(
                                                     ui,
-                                                    &mut next_tab,
+                                                    self.current_tab,
+                                                    self.sidebar_collapsed,
                                                     &self.playlists,
                                                     &self.theme,
                                                     self.tracks.len(),
                                                     self.playlists.len(),
-                                                    &mut on_create_sidebar_playlist,
                                                     self.cfg.streaming.show_spotify,
                                                     self.cfg.streaming.show_youtube_music,
                                                 );
@@ -753,11 +781,13 @@ impl App for EclipseApp {
                                     );
                                 });
 
-                                if next_tab != self.current_tab {
-                                    self.navigate_to(next_tab);
+                                if sidebar_action.toggle_collapse {
+                                    self.sidebar_collapsed = !self.sidebar_collapsed;
                                 }
-
-                                if on_create_sidebar_playlist {
+                                if let Some(tab) = sidebar_action.new_tab {
+                                    self.navigate_to(tab);
+                                }
+                                if sidebar_action.create_playlist {
                                     let default_name = format!("New Playlist {}", self.playlists.len() + 1);
                                     if let Ok(id) = self.db.create_playlist(&default_name) {
                                         self.reload_data();
@@ -767,23 +797,24 @@ impl App for EclipseApp {
                                     }
                                 }
 
-                                // Center Content Area (Borderless: outer white border removed)
-                                let content_width = if self.show_queue {
-                                    ui.available_width() - 250.0
+                                // Column 3: Determine Inspector visibility (when open and window width >= 1080.0px)
+                                let show_inspector = self.right_inspector_open && ui.ctx().screen_rect().width() >= 1080.0;
+                                let inspector_w = if show_inspector { 310.0 } else { 0.0 };
+                                let center_w = if show_inspector {
+                                    (ui.available_width() - inspector_w - BENTO_GAP).max(300.0)
                                 } else {
                                     ui.available_width()
                                 };
 
+                                // Column 2: Center Content Area (wrapped in bento_panel_frame)
                                 let mut on_trigger_scan = false;
-                                let content_frame = egui::Frame::none()
-                                    .inner_margin(egui::Margin::symmetric(10.0_f32, 6.0_f32));
 
                                 ui.push_id("main_content_panel", |ui| {
                                     ui.allocate_ui_with_layout(
-                                        vec2(content_width, workspace_height - 12.0),
+                                        vec2(center_w, workspace_height - 12.0),
                                         Layout::top_down(egui::Align::Min),
                                         |ui| {
-                                        content_frame.show(ui, |ui| {
+                                        bento_panel_frame().show(ui, |ui| {
                                             match self.current_tab {
                                 NavTab::Home => {
                                     render_home(
@@ -1090,99 +1121,89 @@ impl App for EclipseApp {
                     self.trigger_scan();
                 }
 
-                // Queue Side Drawer (if toggled open)
-                if self.show_queue {
-                    let queue_frame = self.theme.glass_frame(12.0);
-
-                    let mut play_queue_idx = None;
-
-                    ui.allocate_ui_with_layout(
-                        vec2(240.0, workspace_height),
-                        Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            queue_frame.show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    render_icon(ui, Icon::Queue, 15.0, self.theme.accent);
-                                    ui.add_space(4.0);
-                                    ui.label(RichText::new("Play Queue").size(14.0).color(self.theme.text_primary).strong());
-                                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if icon_button(ui, Icon::Close, 11.0, self.theme.text_muted).clicked() {
-                                            self.show_queue = false;
-                                        }
-                                    });
-                                });
-
-                                ui.add_space(6.0);
-                                ui.separator();
-                                ui.add_space(6.0);
-
-                                if self.player.queue.is_empty() {
-                                    ui.label(RichText::new("Queue is empty").color(self.theme.text_muted).size(12.0));
-                                } else {
-                                    ScrollArea::vertical()
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
-
-                                            for (i, t) in self.player.queue.iter().enumerate() {
-                                                let is_current = self.player.current_index == Some(i);
-                                                let color = if is_current { self.theme.accent } else { self.theme.text_primary };
-
-                                                ui.horizontal(|ui| {
-                                                    let (icon_r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), egui::Sense::hover());
-                                                    if is_current {
-                                                        let state_icon = if self.player.engine.is_playing() { Icon::Play } else { Icon::Pause };
-                                                        paint_icon(ui.painter(), state_icon, icon_r, color);
-                                                    } else {
-                                                        ui.painter().circle_filled(icon_r.center(), 1.5, self.theme.text_muted);
-                                                    }
-                                                    let btn = ui.add(
-                                                        egui::Button::new(
-                                                            RichText::new(t.display_title()).color(color).size(12.0),
-                                                        )
-                                                        .fill(Color32::TRANSPARENT)
-                                                        .stroke(Stroke::NONE),
-                                                    );
-                                                    if btn.clicked() {
-                                                        play_queue_idx = Some(i);
-                                                    }
-                                                });
-                                            }
-                                        });
+                // Column 3: Right Inspector Panel (persistent 3-tab inspector)
+                if show_inspector {
+                    ui.push_id("right_inspector_panel", |ui| {
+                        ui.allocate_ui_with_layout(
+                            vec2(inspector_w, workspace_height - 12.0),
+                            Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                let mut insp_ctx = InspectorContext {
+                                    player: &mut self.player,
+                                    stream_controller: Some(&self.stream_controller),
+                                    art_manager: &mut self.art_manager,
+                                    theme: &self.theme,
+                                    active_tab: self.right_inspector_tab,
+                                };
+                                let (new_tab, insp_action) = render_right_inspector(ui, &mut insp_ctx);
+                                self.right_inspector_tab = new_tab;
+                                match insp_action {
+                                    InspectorAction::None => {},
+                                    InspectorAction::SeekTo(secs) => {
+                                        seek_to(&mut self.player, Some(&self.stream_controller), secs);
+                                    },
+                                    InspectorAction::PlayUpcomingIndex(idx) => {
+                                        self.player.play_index(idx);
+                                    },
+                                    InspectorAction::ToggleFavorite(track_id) => {
+                                        on_toggle_fav = Some(track_id);
+                                    },
+                                    InspectorAction::OpenFullscreen => {
+                                        on_enter_fullscreen = true;
+                                    },
                                 }
-                            });
-                        },
-                    );
-
-                    if let Some(i) = play_queue_idx {
-                        self.player.play_index(i);
-                    }
+                            },
+                        );
+                    });
                 }
                             });
                         });
                 },
             );
 
-            // 3. BOTTOM PLAYERBAR DOCKED (spans 100% full width across window)
+            // 3. FLOATING BOTTOM PLAYER DOCK (inset by BENTO_GAP)
             let pb_w = ui.available_width();
             ui.allocate_ui_with_layout(
-                vec2(pb_w, playerbar_h),
+                vec2(pb_w, 76.0),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
-                    ui.set_width(pb_w);
-                    ui.set_min_width(pb_w);
-                    playerbar::render_playerbar(
-                        ui,
-                        &mut self.player,
-                        &mut self.stream_controller,
-                        &self.theme,
-                        &mut self.show_queue,
-                        &mut self.cfg.pip.enabled,
-                        &mut toggle_now_playing,
-                        &mut on_toggle_fav,
-                        &mut self.art_manager,
-                        &mut on_enter_fullscreen,
-                    );
+                    egui::Frame::none()
+                        .inner_margin(egui::Margin {
+                            left: BENTO_GAP,
+                            right: BENTO_GAP,
+                            top: 0.0,
+                            bottom: BENTO_GAP,
+                        })
+                        .show(ui, |ui| {
+                            let dock_action = render_bento_player_dock(
+                                ui,
+                                &mut self.player,
+                                Some(&self.stream_controller),
+                                &mut self.art_manager,
+                                &self.theme,
+                                self.right_inspector_open,
+                            );
+
+                            match dock_action {
+                                BentoPlayerDockAction::None => {},
+                                BentoPlayerDockAction::ToggleFavorite(track_id) => {
+                                    on_toggle_fav = Some(track_id);
+                                },
+                                BentoPlayerDockAction::ToggleRightInspector => {
+                                    self.right_inspector_open = !self.right_inspector_open;
+                                },
+                                BentoPlayerDockAction::JumpToLyrics => {
+                                    self.right_inspector_open = true;
+                                    self.right_inspector_tab = InspectorTab::Lyrics;
+                                },
+                                BentoPlayerDockAction::OpenPopoutPip => {
+                                    self.cfg.pip.enabled = !self.cfg.pip.enabled;
+                                },
+                                BentoPlayerDockAction::OpenFullscreen => {
+                                    on_enter_fullscreen = true;
+                                },
+                            }
+                        });
                 },
             );
         });
@@ -1567,6 +1588,9 @@ mod tests {
             focus_search: false,
             show_queue: false,
             show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
@@ -1671,6 +1695,9 @@ mod tests {
             focus_search: false,
             show_queue: false,
             show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
@@ -1752,6 +1779,9 @@ mod tests {
             focus_search: false,
             show_queue: false,
             show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
@@ -1802,6 +1832,9 @@ mod tests {
             focus_search: false,
             show_queue: false,
             show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
@@ -1861,6 +1894,9 @@ mod tests {
             focus_search: false,
             show_queue: false,
             show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
             songs_state: SongsViewState::default(),
             albums_state: AlbumsViewState::default(),
             artists_state: ArtistsViewState::default(),
