@@ -164,16 +164,6 @@ pub fn render_genres(
                                 },
                                 icon_bg,
                             );
-                            ui.painter().rect_stroke(
-                                icon_rect,
-                                Rounding {
-                                    nw: 11.0,
-                                    ne: 11.0,
-                                    sw: 4.0,
-                                    se: 4.0,
-                                },
-                                Stroke::new(1.0_f32, theme.border),
-                            );
 
                             let icon_color = if is_unknown {
                                 theme.text_muted

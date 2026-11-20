@@ -208,7 +208,7 @@ pub fn render_track_table(
             pos2(header_rect.min.x, header_rect.max.y),
             pos2(header_rect.max.x, header_rect.max.y),
         ],
-        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)),
+        Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 53)),
     );
 
     ui.painter().text(
@@ -316,20 +316,10 @@ pub fn render_track_table(
                 if let Some(tex) = art_manager.get_or_load(ui.ctx(), &track.path) {
                     let img = egui::Image::new(tex).rounding(Rounding::same(6.0));
                     img.paint_at(ui, thumb_rect);
-                    ui.painter().rect_stroke(
-                        thumb_rect,
-                        Rounding::same(6.0),
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)),
-                    );
                     painted_thumb = true;
                 }
                 if !painted_thumb {
                     ui.painter().rect_filled(thumb_rect, Rounding::same(6.0), Color32::from_rgb(26, 26, 30));
-                    ui.painter().rect_stroke(
-                        thumb_rect,
-                        Rounding::same(6.0),
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 10)),
-                    );
                     let icon_r = Rect::from_center_size(thumb_rect.center(), vec2(16.0, 16.0));
                     paint_icon(ui.painter(), Icon::Music, icon_r, theme.text_muted);
                 }

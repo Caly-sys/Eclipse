@@ -2,7 +2,7 @@
 
 /// Central Design Tokens module for Eclipse.
 /// Defines colors, surfaces, borders, typography, and standard frame geometries
-/// defining the signature dark purple glass aesthetic.
+/// defining the signature Feishin matte-slate and purple accent aesthetic.
 #[derive(Debug, Clone)]
 pub struct Theme {
     pub name: String,
@@ -11,7 +11,7 @@ pub struct Theme {
     pub surface: Color32,
     pub surface_hover: Color32,
     pub card: Color32,
-    // Hairline Glass Borders
+    // Hairline Dark Seams & Borders
     pub border: Color32,
     pub border_accent: Color32,
     // Typography
@@ -30,21 +30,21 @@ impl Theme {
 
         match name {
             "Obsidian" => {
-                let accent = accent_override.unwrap_or(Color32::WHITE);
+                let accent = accent_override.unwrap_or(Color32::from_rgb(156, 108, 255));
                 Self {
                     name: "Obsidian".into(),
-                    bg: Color32::from_rgb(10, 10, 12),
-                    surface: Color32::from_rgb(17, 17, 19),
-                    surface_hover: Color32::from_rgb(28, 28, 31),
-                    card: Color32::from_rgb(22, 22, 24),
-                    border: Color32::from_rgba_premultiplied(255, 255, 255, 15),
-                    border_accent: Color32::from_rgba_premultiplied(255, 255, 255, 25),
-                    text_primary: Color32::from_rgb(244, 244, 245),
-                    text_secondary: Color32::from_rgb(161, 161, 170),
-                    text_muted: Color32::from_rgb(113, 113, 122),
+                    bg: Color32::from_rgb(18, 21, 26),
+                    surface: Color32::from_rgb(22, 26, 32),
+                    surface_hover: Color32::from_rgb(47, 53, 66),
+                    card: Color32::from_rgb(37, 42, 52),
+                    border: Color32::from_rgb(38, 43, 53),
+                    border_accent: Color32::from_rgba_premultiplied(156, 108, 255, 50),
+                    text_primary: Color32::from_rgb(240, 242, 246),
+                    text_secondary: Color32::from_rgb(168, 174, 188),
+                    text_muted: Color32::from_rgb(118, 124, 138),
                     accent,
                     accent_glow: Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 25),
-                    accent_warm: Color32::from_rgb(244, 244, 245),
+                    accent_warm: Color32::from_rgb(240, 242, 246),
                 }
             }
             "Glacier" => {
@@ -119,60 +119,65 @@ impl Theme {
                     accent_warm: Color32::from_rgb(255, 178, 92),
                 }
             }
-            // Signature Default: Eclipse (Umbra Obsidian Theme)
+            // Signature Default: Eclipse (Feishin Matte-Slate Theme)
             _ => {
-                let accent = accent_override.unwrap_or(Color32::WHITE);
+                let accent = accent_override.unwrap_or(Color32::from_rgb(156, 108, 255));
                 Self {
                     name: "Eclipse".into(),
-                    bg: Color32::from_rgb(10, 10, 12),
-                    surface: Color32::from_rgb(16, 16, 19),
-                    surface_hover: Color32::from_rgb(26, 26, 30),
-                    card: Color32::from_rgb(20, 20, 23),
-                    border: Color32::from_rgba_premultiplied(255, 255, 255, 15),
-                    border_accent: Color32::from_rgba_premultiplied(255, 255, 255, 25),
-                    text_primary: Color32::from_rgb(244, 244, 245),
-                    text_secondary: Color32::from_rgb(161, 161, 170),
-                    text_muted: Color32::from_rgb(113, 113, 122),
+                    bg: Color32::from_rgb(18, 21, 26),
+                    surface: Color32::from_rgb(22, 26, 32),
+                    surface_hover: Color32::from_rgb(47, 53, 66),
+                    card: Color32::from_rgb(37, 42, 52),
+                    border: Color32::from_rgb(38, 43, 53),
+                    border_accent: Color32::from_rgba_premultiplied(156, 108, 255, 50),
+                    text_primary: Color32::from_rgb(240, 242, 246),
+                    text_secondary: Color32::from_rgb(168, 174, 188),
+                    text_muted: Color32::from_rgb(118, 124, 138),
                     accent,
                     accent_glow: Color32::from_rgba_premultiplied(accent.r(), accent.g(), accent.b(), 25),
-                    accent_warm: Color32::from_rgb(244, 244, 245),
+                    accent_warm: Color32::from_rgb(240, 242, 246),
                 }
             }
         }
     }
 
-    /// Standard frosted glass frame for structural panels (sidebar, playerbar, header bars)
+    /// Clean flat matte frame for structural panels (sidebar, playerbar, header bars)
     pub fn glass_frame(&self, rounding: f32) -> Frame {
         Frame {
             inner_margin: Margin::same(12.0_f32),
             outer_margin: Margin::ZERO,
             rounding: Rounding::same(rounding),
             fill: self.surface,
-            stroke: Stroke::new(1.0_f32, self.border),
+            stroke: Stroke::NONE,
             shadow: egui::epaint::Shadow::NONE,
         }
     }
 
-    /// Standard frosted card frame for track cards, list containers, and popovers
+    /// Borderless elevated card frame for track cards, list containers, and popovers
     pub fn card_frame(&self, rounding: f32) -> Frame {
         Frame {
             inner_margin: Margin::same(12.0_f32),
             outer_margin: Margin::ZERO,
             rounding: Rounding::same(rounding),
             fill: self.card,
-            stroke: Stroke::new(1.0_f32, self.border),
+            stroke: Stroke::NONE,
             shadow: egui::epaint::Shadow::NONE,
         }
     }
 
     /// Standard pill badge frame for lossless, hi-res, and format tags
     pub fn badge_frame(&self, bg: Color32, border: Color32) -> Frame {
+        let stroke = if border != Color32::TRANSPARENT {
+            Stroke::new(1.0_f32, border)
+        } else {
+            Stroke::NONE
+        };
         Frame {
             inner_margin: Margin::symmetric(6.0_f32, 2.0_f32),
             outer_margin: Margin::ZERO,
             rounding: Rounding::same(10.0_f32),
             fill: bg,
-            stroke: Stroke::new(1.0_f32, border),
+            stroke,
             shadow: egui::epaint::Shadow::NONE,
         }
     }
@@ -182,7 +187,7 @@ impl Theme {
         self.panel_frame_with_state(true)
     }
 
-    /// Application canvas frame adapting to floating (rounded corners with luminous border)
+    /// Application canvas frame adapting to floating (rounded corners with dark seam)
     /// or maximized/fullscreen (flush square edges)
     pub fn panel_frame_with_state(&self, is_floating: bool) -> Frame {
         let (rounding, stroke) = if is_floating {
@@ -215,18 +220,18 @@ mod tests {
     #[test]
     fn test_default_eclipse_theme_tokens() {
         let theme = Theme::from_name("Eclipse", None);
-        assert_eq!(theme.bg, Color32::from_rgb(10, 10, 12));
-        assert_eq!(theme.surface, Color32::from_rgb(16, 16, 19));
-        assert_eq!(theme.surface_hover, Color32::from_rgb(26, 26, 30));
-        assert_eq!(theme.card, Color32::from_rgb(20, 20, 23));
-        assert_eq!(theme.border, Color32::from_rgba_premultiplied(255, 255, 255, 15));
-        assert_eq!(theme.border_accent, Color32::from_rgba_premultiplied(255, 255, 255, 25));
-        assert_eq!(theme.accent, Color32::WHITE);
-        assert_eq!(theme.accent_glow, Color32::from_rgba_premultiplied(255, 255, 255, 25));
-        assert_eq!(theme.accent_warm, Color32::from_rgb(244, 244, 245));
-        assert_eq!(theme.text_primary, Color32::from_rgb(244, 244, 245));
-        assert_eq!(theme.text_secondary, Color32::from_rgb(161, 161, 170));
-        assert_eq!(theme.text_muted, Color32::from_rgb(113, 113, 122));
+        assert_eq!(theme.bg, Color32::from_rgb(18, 21, 26));
+        assert_eq!(theme.surface, Color32::from_rgb(22, 26, 32));
+        assert_eq!(theme.surface_hover, Color32::from_rgb(47, 53, 66));
+        assert_eq!(theme.card, Color32::from_rgb(37, 42, 52));
+        assert_eq!(theme.border, Color32::from_rgb(38, 43, 53));
+        assert_eq!(theme.border_accent, Color32::from_rgba_premultiplied(156, 108, 255, 50));
+        assert_eq!(theme.accent, Color32::from_rgb(156, 108, 255));
+        assert_eq!(theme.accent_glow, Color32::from_rgba_premultiplied(156, 108, 255, 25));
+        assert_eq!(theme.accent_warm, Color32::from_rgb(240, 242, 246));
+        assert_eq!(theme.text_primary, Color32::from_rgb(240, 242, 246));
+        assert_eq!(theme.text_secondary, Color32::from_rgb(168, 174, 188));
+        assert_eq!(theme.text_muted, Color32::from_rgb(118, 124, 138));
     }
 
     #[test]
@@ -235,12 +240,12 @@ mod tests {
 
         let glass = theme.glass_frame(12.0);
         assert_eq!(glass.fill, theme.surface);
-        assert_eq!(glass.stroke.color, theme.border);
+        assert_eq!(glass.stroke, Stroke::NONE);
         assert_eq!(glass.rounding, Rounding::same(12.0));
 
         let card = theme.card_frame(10.0);
         assert_eq!(card.fill, theme.card);
-        assert_eq!(card.stroke.color, theme.border);
+        assert_eq!(card.stroke, Stroke::NONE);
         assert_eq!(card.rounding, Rounding::same(10.0));
 
         let badge = theme.badge_frame(theme.card, theme.accent_warm);

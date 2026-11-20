@@ -273,7 +273,7 @@ pub fn render_playlist_hero_header(
     ui.painter().rect_stroke(
         header_rect,
         Rounding::same(14.0),
-        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 12)),
+        Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 53)),
     );
 
     // 2. Large rounded Playlist Cover Art (136x136px, Rounding::same(12.0)) on left
@@ -287,18 +287,12 @@ pub fn render_playlist_hero_header(
         if let Some(tex) = art_manager.get_or_load(ui.ctx(), &first_track.path) {
             let img = egui::Image::new(tex).rounding(Rounding::same(12.0));
             img.paint_at(ui, cover_rect);
-            ui.painter().rect_stroke(
-                cover_rect,
-                Rounding::same(12.0),
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 25)),
-            );
             painted_cover = true;
         }
     }
 
     if !painted_cover {
         ui.painter().rect_filled(cover_rect, Rounding::same(12.0), Color32::from_rgb(22, 22, 26));
-        ui.painter().rect_stroke(cover_rect, Rounding::same(12.0), Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)));
         let icon_rect = Rect::from_center_size(cover_rect.center(), vec2(48.0, 48.0));
         paint_icon(ui.painter(), Icon::Playlist, icon_rect, theme.text_muted);
     }
@@ -411,9 +405,7 @@ pub fn render_playlist_action_bar(
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         let more_bg = if more_resp.hovered() { Color32::from_rgb(42, 42, 47) } else { Color32::from_rgb(34, 34, 38) };
-        let more_stroke = Stroke::new(1.0_f32, Color32::from_white_alpha(20));
         ui.painter().rect_filled(more_rect, Rounding::same(15.0), more_bg);
-        ui.painter().rect_stroke(more_rect, Rounding::same(15.0), more_stroke);
         let dot_rect = Rect::from_center_size(more_rect.center(), vec2(14.0, 14.0));
         paint_icon(ui.painter(), Icon::MoreHorizontal, dot_rect, Color32::from_rgb(228, 228, 231));
 
@@ -453,7 +445,7 @@ pub fn render_filter_input(ui: &mut Ui, query: &mut String, theme: &Theme) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
 
     let bg_color = Color32::from_rgb(26, 26, 30);
-    let stroke_color = Color32::from_rgba_premultiplied(255, 255, 255, 20);
+    let stroke_color = Color32::from_rgb(38, 43, 53);
     ui.painter().rect_filled(rect, Rounding::same(15.0), bg_color);
     ui.painter().rect_stroke(rect, Rounding::same(15.0), Stroke::new(1.0_f32, stroke_color));
 

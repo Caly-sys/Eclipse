@@ -1,4 +1,7 @@
-﻿use crate::ui::icons::{paint_icon, render_icon, Icon};
+﻿use crate::ui::bento_theme::{
+    ACCENT_SOFT, BG_CARD, BG_CARD_HOVER, BG_SIDEBAR, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+};
+use crate::ui::icons::{paint_icon, render_icon, Icon};
 use crate::ui::theme::Theme;
 use egui::{vec2, Color32, Layout, Rect, RichText, Rounding, Stroke, Ui, UiBuilder};
 
@@ -65,12 +68,7 @@ pub fn render_titlebar(
             ui.painter().circle_filled(
                 logo_rect.center(),
                 11.0,
-                Color32::from_rgb(20, 20, 24),
-            );
-            ui.painter().circle_stroke(
-                logo_rect.center(),
-                11.0,
-                Stroke::new(1.0_f32, theme.border),
+                BG_CARD,
             );
             let logo_icon_rect = Rect::from_center_size(logo_rect.center(), vec2(13.0, 13.0));
             paint_icon(ui.painter(), Icon::Sparkle, logo_icon_rect, Color32::WHITE);
@@ -78,36 +76,35 @@ pub fn render_titlebar(
             // Bold Uppercase Spaced Wordmark
             ui.label(
                 RichText::new("E C L I P S E D")
-                    .color(theme.text_primary)
+                    .color(TEXT_PRIMARY)
                     .size(13.5)
                     .strong(),
             );
 
             // History navigation buttons (ChevronLeft / ChevronRight)
             let history_btn = |ui: &mut Ui, icon: Icon, enabled: bool| -> bool {
-                let (fill, stroke, icon_color, sense) = if enabled {
+                let (fill, icon_color, sense) = if enabled {
                     (
-                        theme.card,
-                        Stroke::new(1.0_f32, theme.border),
-                        theme.text_primary,
+                        BG_CARD,
+                        TEXT_PRIMARY,
                         egui::Sense::click(),
                     )
                 } else {
                     (
-                        Color32::from_rgb(14, 14, 16),
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 10)),
-                        theme.text_muted,
+                        BG_SIDEBAR,
+                        TEXT_MUTED,
                         egui::Sense::hover(),
                     )
                 };
 
                 let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), sense);
-                if enabled && resp.hovered() {
+                let is_hovered = enabled && resp.hovered();
+                if is_hovered {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
 
-                ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
-                ui.painter().rect_stroke(rect, Rounding::same(6.0), stroke);
+                let bg_fill = if is_hovered { BG_CARD_HOVER } else { fill };
+                ui.painter().rect_filled(rect, Rounding::same(6.0), bg_fill);
                 let icon_rect = Rect::from_center_size(rect.center(), vec2(11.0, 11.0));
                 paint_icon(ui.painter(), icon, icon_rect, icon_color);
 
@@ -158,23 +155,18 @@ pub fn render_titlebar(
             let is_maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
             let max_icon = if is_maximized { Icon::Restore } else { Icon::Maximize };
             let (max_rect, max_resp) = ui.allocate_exact_size(vec2(32.0, 26.0), egui::Sense::click());
-            let (max_bg, max_stroke, max_color) = if max_resp.hovered() {
+            let (max_bg, max_color) = if max_resp.hovered() {
                 (
-                    theme.surface_hover,
-                    Stroke::new(1.0_f32, theme.border),
-                    theme.text_primary,
+                    BG_CARD_HOVER,
+                    TEXT_PRIMARY,
                 )
             } else {
                 (
                     Color32::TRANSPARENT,
-                    Stroke::NONE,
-                    theme.text_secondary,
+                    TEXT_SECONDARY,
                 )
             };
             ui.painter().rect_filled(max_rect, Rounding::same(6.0), max_bg);
-            if max_stroke != Stroke::NONE {
-                ui.painter().rect_stroke(max_rect, Rounding::same(6.0), max_stroke);
-            }
             let max_icon_rect = Rect::from_center_size(max_rect.center(), vec2(11.0, 11.0));
             paint_icon(ui.painter(), max_icon, max_icon_rect, max_color);
             if max_resp.clicked() {
@@ -183,23 +175,18 @@ pub fn render_titlebar(
 
             // 3. Minimize Button
             let (min_rect, min_resp) = ui.allocate_exact_size(vec2(32.0, 26.0), egui::Sense::click());
-            let (min_bg, min_stroke, min_color) = if min_resp.hovered() {
+            let (min_bg, min_color) = if min_resp.hovered() {
                 (
-                    theme.surface_hover,
-                    Stroke::new(1.0_f32, theme.border),
-                    theme.text_primary,
+                    BG_CARD_HOVER,
+                    TEXT_PRIMARY,
                 )
             } else {
                 (
                     Color32::TRANSPARENT,
-                    Stroke::NONE,
-                    theme.text_secondary,
+                    TEXT_SECONDARY,
                 )
             };
             ui.painter().rect_filled(min_rect, Rounding::same(6.0), min_bg);
-            if min_stroke != Stroke::NONE {
-                ui.painter().rect_stroke(min_rect, Rounding::same(6.0), min_stroke);
-            }
             let min_icon_rect = Rect::from_center_size(min_rect.center(), vec2(11.0, 11.0));
             paint_icon(ui.painter(), Icon::Minimize, min_icon_rect, min_color);
             if min_resp.clicked() {
@@ -208,26 +195,20 @@ pub fn render_titlebar(
 
             ui.add_space(6.0);
 
-            // Quick Scan Button
+            // Quick Scan Button: Borderless BG_CARD pill
             let (scan_rect, scan_resp) = ui.allocate_exact_size(vec2(68.0, 24.0), egui::Sense::click());
             let scan_bg = if scan_resp.hovered() {
-                theme.surface_hover
+                BG_CARD_HOVER
             } else {
-                theme.surface
-            };
-            let scan_stroke = if scan_resp.hovered() {
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 30))
-            } else {
-                Stroke::new(1.0_f32, theme.border)
+                BG_CARD
             };
             ui.painter().rect_filled(scan_rect, Rounding::same(8.0), scan_bg);
-            ui.painter().rect_stroke(scan_rect, Rounding::same(8.0), scan_stroke);
 
             let scan_icon_rect = Rect::from_center_size(
                 egui::pos2(scan_rect.min.x + 14.0, scan_rect.center().y),
                 vec2(12.0, 12.0),
             );
-            let scan_color = if scan_resp.hovered() { theme.text_primary } else { theme.text_secondary };
+            let scan_color = if scan_resp.hovered() { TEXT_PRIMARY } else { TEXT_SECONDARY };
             paint_icon(ui.painter(), Icon::Refresh, scan_icon_rect, scan_color);
 
             ui.painter().text(
@@ -255,24 +236,14 @@ pub fn render_titlebar(
             };
             let dl_w = if active_downloads > 0 { 108.0 } else { 94.0 };
             let (dl_rect, dl_resp) = ui.allocate_exact_size(vec2(dl_w, 24.0), egui::Sense::click());
-            let dl_bg = if *show_downloads {
-                Color32::from_rgba_premultiplied(124, 77, 255, 45)
+            let dl_bg = if *show_downloads || active_downloads > 0 {
+                ACCENT_SOFT
             } else if dl_resp.hovered() {
-                theme.surface_hover
-            } else if active_downloads > 0 {
-                Color32::from_rgba_premultiplied(124, 77, 255, 20)
+                BG_CARD_HOVER
             } else {
-                theme.surface
-            };
-            let dl_stroke = if *show_downloads || active_downloads > 0 {
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(124, 77, 255, 120))
-            } else if dl_resp.hovered() {
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 30))
-            } else {
-                Stroke::new(1.0_f32, theme.border)
+                BG_CARD
             };
             ui.painter().rect_filled(dl_rect, Rounding::same(8.0), dl_bg);
-            ui.painter().rect_stroke(dl_rect, Rounding::same(8.0), dl_stroke);
 
             let dl_icon_rect = Rect::from_center_size(
                 egui::pos2(dl_rect.min.x + 14.0, dl_rect.center().y),
@@ -281,9 +252,9 @@ pub fn render_titlebar(
             let dl_color = if *show_downloads || active_downloads > 0 {
                 theme.accent
             } else if dl_resp.hovered() {
-                theme.text_primary
+                TEXT_PRIMARY
             } else {
-                theme.text_secondary
+                TEXT_SECONDARY
             };
             paint_icon(ui.painter(), Icon::Download, dl_icon_rect, dl_color);
 
@@ -316,22 +287,22 @@ pub fn render_titlebar(
 
     ui.allocate_new_ui(UiBuilder::new().max_rect(search_rect), |ui| {
         let search_frame = egui::Frame::none()
-            .fill(Color32::from_rgb(20, 20, 24))
-            .stroke(Stroke::new(1.0_f32, theme.border))
+            .fill(BG_CARD)
+            .stroke(Stroke::NONE)
             .rounding(Rounding::same(14.0))
             .inner_margin(egui::Margin::symmetric(10.0, 4.0));
 
         search_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-                render_icon(ui, Icon::Search, 13.0, theme.text_muted);
+                render_icon(ui, Icon::Search, 13.0, TEXT_MUTED);
 
                 let edit_w = (search_w - 68.0).max(80.0);
                 let search_id = ui.id().with("titlebar_search_input");
                 let edit = egui::TextEdit::singleline(search_query)
                     .id(search_id)
-                    .hint_text(RichText::new("Search your library...").color(theme.text_muted))
-                    .text_color(theme.text_primary)
+                    .hint_text(RichText::new("Search your library...").color(TEXT_MUTED))
+                    .text_color(TEXT_PRIMARY)
                     .frame(false)
                     .desired_width(edit_w);
                 let edit_resp = ui.add(edit);
@@ -343,7 +314,7 @@ pub fn render_titlebar(
 
                 if !search_query.is_empty() {
                     let (close_rect, close_resp) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::click());
-                    let close_color = if close_resp.hovered() { theme.text_primary } else { theme.text_muted };
+                    let close_color = if close_resp.hovered() { TEXT_PRIMARY } else { TEXT_MUTED };
                     paint_icon(ui.painter(), Icon::Close, close_rect, close_color);
                     if close_resp.clicked() {
                         search_query.clear();
@@ -351,12 +322,12 @@ pub fn render_titlebar(
                 } else {
                     // Pill shortcut badge Ctrl K
                     let badge_frame = egui::Frame::none()
-                        .fill(Color32::from_rgb(26, 26, 30))
-                        .stroke(Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 18)))
+                        .fill(BG_CARD_HOVER)
+                        .stroke(Stroke::NONE)
                         .rounding(Rounding::same(4.0))
                         .inner_margin(egui::Margin::symmetric(5.0, 1.5));
                     badge_frame.show(ui, |ui| {
-                        ui.label(RichText::new("Ctrl K").size(9.5).color(theme.text_secondary));
+                        ui.label(RichText::new("Ctrl K").size(9.5).color(TEXT_SECONDARY));
                     });
                 }
             });

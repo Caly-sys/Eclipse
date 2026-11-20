@@ -9,17 +9,20 @@ use crate::library::model::Playlist;
 use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::sidebar::NavTab;
 use crate::ui::theme::Theme;
-use egui::{pos2, vec2, Color32, FontId, Layout, Rect, RichText, Rounding, ScrollArea, Ui};
+use egui::{pos2, vec2, Color32, FontId, Layout, Rect, RichText, Rounding, ScrollArea, Stroke, Ui};
 
-/// Bento design tokens matching Umbra Obsidian and purple glass aesthetic
-const ACCENT_PURPLE: Color32 = Color32::from_rgb(156, 108, 255); // #9C6CFF
-const ACCENT_PURPLE_SOFT: Color32 = Color32::from_rgba_premultiplied(156, 108, 255, 34);
-const TEXT_PRIMARY: Color32 = Color32::from_rgb(244, 244, 245);
-const TEXT_MUTED: Color32 = Color32::from_rgb(152, 152, 168);
-const TEXT_SECONDARY: Color32 = Color32::from_rgb(161, 161, 170);
-const TEXT_HOVER: Color32 = Color32::from_rgb(228, 228, 231);
-const BG_CARD_HOVER: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 12);
-const DIVIDER_COLOR: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 15);
+/// Feishin Matte-Slate Design Tokens
+const BG_SIDEBAR: Color32 = Color32::from_rgb(22, 26, 32);
+const BG_CARD: Color32 = Color32::from_rgb(37, 42, 52);
+const BG_CARD_HOVER: Color32 = Color32::from_rgb(47, 53, 66);
+const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
+const ACCENT_PRIMARY: Color32 = Color32::from_rgb(156, 108, 255);
+const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(59, 39, 102, 34);
+const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
+const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
+const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
+const TEXT_HOVER: Color32 = Color32::from_rgb(240, 242, 246);
+const DIVIDER_COLOR: Color32 = Color32::from_rgb(38, 43, 53);
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BentoSidebarAction {
@@ -46,112 +49,133 @@ pub fn render_bento_sidebar(
 
     let mut action = BentoSidebarAction::default();
 
-    ui.vertical(|ui| {
-        // Top Header Row
-        render_sidebar_header(ui, is_collapsed, theme, &mut action);
+    let sidebar_frame = egui::Frame::none()
+        .fill(BG_SIDEBAR)
+        .rounding(Rounding::ZERO)
+        .stroke(Stroke::NONE)
+        .inner_margin(egui::Margin {
+            left: 0.0,
+            right: 0.0,
+            top: 0.0,
+            bottom: 0.0,
+        });
 
-        ui.add_space(4.0);
+    let frame_resp = sidebar_frame.show(ui, |ui| {
+        ui.vertical(|ui| {
+            // Top Header Row
+            render_sidebar_header(ui, is_collapsed, theme, &mut action);
 
-        // Scrollable content area
-        ScrollArea::vertical()
-            .id_salt("bento_sidebar_scroll")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
+            ui.add_space(4.0);
 
-                // Section 1: LIBRARY
-                if !is_collapsed {
-                    section_header(ui, "LIBRARY", Some(total_tracks));
-                } else {
-                    collapsed_divider(ui);
-                }
+            // Scrollable content area
+            ScrollArea::vertical()
+                .id_salt("bento_sidebar_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
-                render_nav_item(ui, current_tab, NavTab::Home, Icon::Home, "Home", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::Songs, Icon::Music, "Songs", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::Artists, Icon::Mic, "Artists", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::Albums, Icon::Disc, "Albums", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::Genres, Icon::Tag, "Genres", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::Folders, Icon::Folder, "Folders", is_collapsed, None, &mut action);
-
-                ui.add_space(6.0);
-
-                // Section 2: SMART PLAYLISTS
-                if !is_collapsed {
-                    section_header(ui, "SMART", None);
-                } else {
-                    collapsed_divider(ui);
-                }
-
-                render_nav_item(ui, current_tab, NavTab::RecentlyPlayed, Icon::Clock, "Recently Played", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::MostPlayed, Icon::Fire, "Most Played", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::RecentlyAdded, Icon::Sparkle, "Recently Added", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::Favorites, Icon::Heart, "Favorites", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::NeverPlayed, Icon::Hourglass, "Never Played", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::RandomDiscovery, Icon::Dices, "Random Discovery", is_collapsed, None, &mut action);
-
-                // Section 3: STREAM
-                if show_spotify || show_youtube {
-                    ui.add_space(6.0);
+                    // Section 1: LIBRARY
                     if !is_collapsed {
-                        section_header(ui, "STREAM", None);
+                        section_header(ui, "LIBRARY", Some(total_tracks));
                     } else {
                         collapsed_divider(ui);
                     }
 
-                    if show_spotify {
-                        render_nav_item(ui, current_tab, NavTab::Spotify, Icon::Spotify, "Spotify", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Home, Icon::Home, "Home", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Songs, Icon::Music, "Songs", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Artists, Icon::Mic, "Artists", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Albums, Icon::Disc, "Albums", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Genres, Icon::Tag, "Genres", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Folders, Icon::Folder, "Folders", is_collapsed, None, &mut action);
+
+                    ui.add_space(6.0);
+
+                    // Section 2: SMART PLAYLISTS
+                    if !is_collapsed {
+                        section_header(ui, "SMART", None);
+                    } else {
+                        collapsed_divider(ui);
                     }
-                    if show_youtube {
-                        render_nav_item(ui, current_tab, NavTab::YouTubeMusic, Icon::YouTube, "YouTube Music", is_collapsed, None, &mut action);
+
+                    render_nav_item(ui, current_tab, NavTab::RecentlyPlayed, Icon::Clock, "Recently Played", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::MostPlayed, Icon::Fire, "Most Played", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::RecentlyAdded, Icon::Sparkle, "Recently Added", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Favorites, Icon::Heart, "Favorites", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::NeverPlayed, Icon::Hourglass, "Never Played", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::RandomDiscovery, Icon::Dices, "Random Discovery", is_collapsed, None, &mut action);
+
+                    // Section 3: STREAM
+                    if show_spotify || show_youtube {
+                        ui.add_space(6.0);
+                        if !is_collapsed {
+                            section_header(ui, "STREAM", None);
+                        } else {
+                            collapsed_divider(ui);
+                        }
+
+                        if show_spotify {
+                            render_nav_item(ui, current_tab, NavTab::Spotify, Icon::Spotify, "Spotify", is_collapsed, None, &mut action);
+                        }
+                        if show_youtube {
+                            render_nav_item(ui, current_tab, NavTab::YouTubeMusic, Icon::YouTube, "YouTube Music", is_collapsed, None, &mut action);
+                        }
                     }
-                }
 
-                ui.add_space(6.0);
+                    ui.add_space(6.0);
 
-                // Section 4: PLAYLISTS
-                if !is_collapsed {
-                    render_playlists_header(ui, total_playlists, &mut action);
-                } else {
-                    collapsed_divider(ui);
-                    render_collapsed_create_playlist(ui, &mut action);
-                }
+                    // Section 4: PLAYLISTS
+                    if !is_collapsed {
+                        render_playlists_header(ui, total_playlists, &mut action);
+                    } else {
+                        collapsed_divider(ui);
+                        render_collapsed_create_playlist(ui, &mut action);
+                    }
 
-                render_nav_item(ui, current_tab, NavTab::Playlists, Icon::Playlist, "All Playlists", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Playlists, Icon::Playlist, "All Playlists", is_collapsed, None, &mut action);
 
-                for pl in user_playlists {
-                    let target = NavTab::Playlist(pl.id);
-                    render_nav_item(
-                        ui,
-                        current_tab,
-                        target,
-                        Icon::Playlist,
-                        &pl.name,
-                        is_collapsed,
-                        Some(pl.track_count),
-                        &mut action,
-                    );
-                }
+                    for pl in user_playlists {
+                        let target = NavTab::Playlist(pl.id);
+                        render_nav_item(
+                            ui,
+                            current_tab,
+                            target,
+                            Icon::Playlist,
+                            &pl.name,
+                            is_collapsed,
+                            Some(pl.track_count),
+                            &mut action,
+                        );
+                    }
 
-                ui.add_space(6.0);
+                    ui.add_space(6.0);
 
-                // Section 5: PREFERENCES & INFO
-                if !is_collapsed {
-                    section_header(ui, "PREFERENCES", None);
-                } else {
-                    collapsed_divider(ui);
-                }
+                    // Section 5: PREFERENCES & INFO
+                    if !is_collapsed {
+                        section_header(ui, "PREFERENCES", None);
+                    } else {
+                        collapsed_divider(ui);
+                    }
 
-                render_nav_item(ui, current_tab, NavTab::Settings, Icon::Settings, "Settings", is_collapsed, None, &mut action);
-                render_nav_item(ui, current_tab, NavTab::About, Icon::Info, "About", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Settings, Icon::Settings, "Settings", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::About, Icon::Info, "About", is_collapsed, None, &mut action);
 
-                // Expanded stats card at bottom
-                if !is_collapsed {
-                    ui.add_space(10.0);
-                    render_stats_card(ui, theme, total_tracks, total_playlists);
-                    ui.add_space(8.0);
-                }
-            });
+                    // Expanded stats card at bottom
+                    if !is_collapsed {
+                        ui.add_space(10.0);
+                        render_stats_card(ui, theme, total_tracks, total_playlists);
+                        ui.add_space(8.0);
+                    }
+                });
+        });
     });
+
+    // Single 1.0px SEAM_DARK right border seam
+    let r = frame_resp.response.rect;
+    let right_seam = Rect::from_min_max(
+        pos2(r.max.x - 1.0, r.min.y),
+        pos2(r.max.x, r.max.y),
+    );
+    ui.painter().rect_filled(right_seam, Rounding::ZERO, SEAM_DARK);
 
     action
 }
@@ -307,7 +331,7 @@ fn render_nav_item_expanded(
 
     // Active / Hover styling
     let (bg_fill, text_color, icon_color) = if is_selected {
-        (ACCENT_PURPLE_SOFT, TEXT_PRIMARY, ACCENT_PURPLE)
+        (ACCENT_SOFT, TEXT_PRIMARY, ACCENT_PRIMARY)
     } else if is_hovered {
         (BG_CARD_HOVER, TEXT_HOVER, TEXT_HOVER)
     } else {
@@ -316,13 +340,13 @@ fn render_nav_item_expanded(
 
     ui.painter().rect_filled(rect, Rounding::same(8.0), bg_fill);
 
-    // Left vertical purple indicator bar when active (3px width, 16px height, rounded)
+    // Left vertical thin 3.0px ACCENT_PRIMARY indicator bar when active
     if is_selected {
         let bar_rect = Rect::from_min_size(
             pos2(rect.min.x + 2.0, rect.center().y - 8.0),
             vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(999.0), ACCENT_PURPLE);
+        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), ACCENT_PRIMARY);
     }
 
     // Icon (16x16)
@@ -355,13 +379,29 @@ fn render_nav_item_expanded(
     let label_font = FontId::proportional(12.5);
 
     let display_label = truncate_label(ui, label, label_font.clone(), text_color, max_text_w);
-    ui.painter().text(
-        pos2(text_left, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        display_label,
-        label_font,
-        text_color,
+    let label_rect = Rect::from_min_max(
+        pos2(text_left, rect.min.y),
+        pos2(rect.max.x - count_w - 4.0, rect.max.y),
     );
+    let mut label_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(label_rect)
+            .layout(Layout::left_to_right(egui::Align::Center)),
+    );
+    if is_selected {
+        label_ui.label(
+            RichText::new(display_label)
+                .size(12.5)
+                .strong()
+                .color(TEXT_PRIMARY),
+        );
+    } else {
+        label_ui.label(
+            RichText::new(display_label)
+                .size(12.5)
+                .color(text_color),
+        );
+    }
 
     if resp.clicked() {
         action.new_tab = Some(target);
@@ -390,7 +430,7 @@ fn render_nav_item_collapsed(
     let pill_rect = rect.shrink2(vec2(8.0, 2.0));
 
     let (bg_fill, icon_color) = if is_selected {
-        (ACCENT_PURPLE_SOFT, ACCENT_PURPLE)
+        (ACCENT_SOFT, ACCENT_PRIMARY)
     } else if is_hovered {
         (BG_CARD_HOVER, TEXT_HOVER)
     } else {
@@ -405,7 +445,7 @@ fn render_nav_item_collapsed(
             pos2(pill_rect.min.x + 2.0, pill_rect.center().y - 8.0),
             vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(999.0), ACCENT_PURPLE);
+        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), ACCENT_PRIMARY);
     }
 
     // Centered 16px icon
@@ -496,11 +536,15 @@ fn render_collapsed_create_playlist(ui: &mut Ui, action: &mut BentoSidebarAction
 /// Library overview stats card at the bottom of the expanded sidebar.
 fn render_stats_card(
     ui: &mut Ui,
-    theme: &Theme,
+    _theme: &Theme,
     total_tracks: usize,
     total_playlists: usize,
 ) {
-    let stats_frame = theme.card_frame(8.0);
+    let mut stats_frame = egui::Frame::none();
+    stats_frame.fill = BG_CARD;
+    stats_frame.rounding = Rounding::same(8.0);
+    stats_frame.stroke = Stroke::NONE;
+    stats_frame.inner_margin = egui::Margin::same(8.0);
     stats_frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {

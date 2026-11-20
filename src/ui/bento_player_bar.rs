@@ -18,17 +18,17 @@ use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, FontId, Layout, Rect, RichText, Rounding, Stroke, Ui};
 use std::time::Duration;
 
-/// Design tokens matching Eclipse Bento dark purple glass aesthetic
+/// Design tokens matching Feishin matte-slate aesthetic
 const ACCENT_PURPLE: Color32 = Color32::from_rgb(156, 108, 255); // #9C6CFF
 const ACCENT_PURPLE_HOVER: Color32 = Color32::from_rgb(175, 132, 255);
 const ACCENT_PURPLE_DOWN: Color32 = Color32::from_rgb(138, 90, 240);
-const TEXT_PRIMARY: Color32 = Color32::from_rgb(244, 244, 245);
-const TEXT_SECONDARY: Color32 = Color32::from_rgb(161, 161, 170);
-const TEXT_MUTED: Color32 = Color32::from_rgb(152, 152, 168);
-const BG_DOCK: Color32 = Color32::from_rgb(16, 16, 19);
+const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
+const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
+const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
+const BG_BAR: Color32 = Color32::from_rgb(18, 21, 26);
+const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
 const RAIL_BG: Color32 = Color32::from_rgb(39, 39, 42);
 const BG_BUTTON_HOVER: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 12);
-const DOCK_BORDER: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BentoPlayerDockAction {
@@ -58,12 +58,12 @@ pub fn render_bento_player_dock(
     ui.set_min_width(full_w);
 
     let dock_frame = egui::Frame::none()
-        .fill(BG_DOCK)
-        .rounding(Rounding::same(12.0))
-        .stroke(Stroke::new(1.0_f32, DOCK_BORDER))
+        .fill(BG_BAR)
+        .rounding(Rounding::ZERO)
+        .stroke(Stroke::NONE)
         .inner_margin(egui::Margin::symmetric(16.0, 5.0));
 
-    dock_frame.show(ui, |ui| {
+    let frame_resp = dock_frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.set_height(dock_h - 10.0);
 
@@ -95,15 +95,29 @@ pub fn render_bento_player_dock(
             );
 
             // Zone 3: Right (~220px) - Volume slider and view mode toggle buttons
+            // Centered on the exact same vertical centerline as transport controls (controls_h = 36.0)
             ui.allocate_ui_with_layout(
                 vec2(right_w, dock_h - 10.0),
-                Layout::right_to_left(egui::Align::Center),
+                Layout::top_down(egui::Align::Min),
                 |ui| {
-                    render_zone3_controls(ui, player, stream_controller, is_inspector_open, &mut action);
+                    ui.allocate_ui_with_layout(
+                        vec2(right_w, 36.0),
+                        Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            render_zone3_controls(ui, player, stream_controller, is_inspector_open, &mut action);
+                        },
+                    );
                 },
             );
         });
     });
+
+    // 1.0px SEAM_DARK top divider line across the top edge
+    let top_line_rect = Rect::from_min_max(
+        pos2(frame_resp.response.rect.min.x, frame_resp.response.rect.min.y),
+        pos2(frame_resp.response.rect.max.x, frame_resp.response.rect.min.y + 1.0),
+    );
+    ui.painter().rect_filled(top_line_rect, Rounding::ZERO, SEAM_DARK);
 
     action
 }
@@ -131,10 +145,9 @@ fn render_zone1_metadata(
                 _ => (Icon::Disc, ACCENT_PURPLE),
             };
 
-            // 46x46 Album Art / Stream Badge with Rounding::same(8.0)
+            // 46x46 Album Art / Stream Badge with Rounding::same(8.0) (borderless)
             let (art_rect, _) = ui.allocate_exact_size(vec2(46.0, 46.0), egui::Sense::hover());
             ui.painter().rect_filled(art_rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 25));
-            ui.painter().rect_stroke(art_rect, Rounding::same(8.0), Stroke::new(1.0_f32, theme.border));
             let icon_rect = Rect::from_center_size(art_rect.center(), vec2(20.0, 20.0));
             paint_icon(ui.painter(), prov_icon, icon_rect, prov_color);
 
@@ -142,7 +155,7 @@ fn render_zone1_metadata(
 
             // Title and Artist column
             let text_w = (left_w - 46.0 - 16.0).max(60.0);
-            render_title_artist_column(ui, track.display_title(), track.display_artist(), "STREAM", text_w);
+            render_title_artist_column(ui, track.display_title(), track.display_artist(), "STREAM", false, text_w);
         } else {
             render_empty_track_zone(ui, theme);
         }
@@ -151,24 +164,18 @@ fn render_zone1_metadata(
         let is_fav = track.favorite;
 
         // 46x46 Rounded Album Art Thumbnail
-        // Rule: Always use egui::Image with .rounding(Rounding::same(8.0)) painted at rect.
+        // Clean 8.0px rounded egui::Image with Stroke::NONE
         let (art_rect, _) = ui.allocate_exact_size(vec2(46.0, 46.0), egui::Sense::hover());
         let mut painted_cover = false;
 
         if let Some(tex) = art_manager.get_or_load(ui.ctx(), &track.path) {
             let img = egui::Image::new(tex).rounding(Rounding::same(8.0));
             img.paint_at(ui, art_rect);
-            ui.painter().rect_stroke(
-                art_rect,
-                Rounding::same(8.0),
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 18)),
-            );
             painted_cover = true;
         }
 
         if !painted_cover {
             ui.painter().rect_filled(art_rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 25));
-            ui.painter().rect_stroke(art_rect, Rounding::same(8.0), Stroke::new(1.0_f32, theme.border));
             let icon_rect = Rect::from_center_size(art_rect.center(), vec2(20.0, 20.0));
             paint_icon(ui.painter(), Icon::Disc, icon_rect, TEXT_MUTED);
         }
@@ -176,25 +183,26 @@ fn render_zone1_metadata(
         ui.add_space(8.0);
 
         // Compute format badge text (e.g. FLAC 24/48, MP3 320k)
-        let format_badge_text = if track.is_lossless() {
+        let (format_badge_text, is_hires) = if track.is_lossless() {
+            let is_hires = track.sample_rate > 48000 || track.bitrate_kbps > 2000;
             if track.sample_rate > 0 {
                 let khz = track.sample_rate / 1000;
-                let bit_depth = if track.is_lossless() { 24 } else { 16 };
-                format!("FLAC {}/{}", bit_depth, khz)
+                let bit_depth = if is_hires { 24 } else { 16 };
+                (format!("FLAC {}/{}", bit_depth, khz), is_hires)
             } else {
-                "FLAC 24/48".to_string()
+                ("FLAC 24/48".to_string(), true)
             }
         } else {
             let fmt = track.format.to_uppercase();
             if fmt.is_empty() {
-                "MP3 320k".to_string()
+                ("MP3 320k".to_string(), false)
             } else {
-                format!("{} 320k", fmt)
+                (format!("{} 320k", fmt), false)
             }
         };
 
         let text_w = (left_w - 46.0 - 32.0 - 18.0).max(60.0);
-        render_title_artist_column(ui, track.display_title(), track.display_artist(), &format_badge_text, text_w);
+        render_title_artist_column(ui, track.display_title(), track.display_artist(), &format_badge_text, is_hires, text_w);
 
         ui.add_space(4.0);
 
@@ -227,6 +235,7 @@ fn render_title_artist_column(
     title: &str,
     artist: &str,
     badge: &str,
+    is_hires: bool,
     max_w: f32,
 ) {
     ui.allocate_ui_with_layout(
@@ -248,18 +257,17 @@ fn render_title_artist_column(
                 let truncated_artist = truncate_string(ui, artist, artist_font, TEXT_SECONDARY, artist_max_w);
                 ui.label(RichText::new(truncated_artist).size(11.0).color(TEXT_SECONDARY));
 
-                // Quality format pill badge
-                render_dock_format_badge(ui, badge);
+                // Quality format pill badge via quality_badge_pill
+                crate::ui::bento_theme::quality_badge_pill(ui, badge, is_hires);
             });
         },
     );
 }
 
 /// Fallback placeholder when no track is currently playing.
-fn render_empty_track_zone(ui: &mut Ui, theme: &Theme) {
+fn render_empty_track_zone(ui: &mut Ui, _theme: &Theme) {
     let (art_rect, _) = ui.allocate_exact_size(vec2(46.0, 46.0), egui::Sense::hover());
     ui.painter().rect_filled(art_rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 25));
-    ui.painter().rect_stroke(art_rect, Rounding::same(8.0), Stroke::new(1.0_f32, theme.border));
     let icon_rect = Rect::from_center_size(art_rect.center(), vec2(20.0, 20.0));
     paint_icon(ui.painter(), Icon::Music, icon_rect, TEXT_MUTED);
 
@@ -271,27 +279,10 @@ fn render_empty_track_zone(ui: &mut Ui, theme: &Theme) {
 }
 
 /// Renders a crisp format pill badge (e.g. FLAC 24/48, MP3 320k, STREAM).
+#[allow(dead_code)]
 fn render_dock_format_badge(ui: &mut Ui, text: &str) {
-    let font = FontId::proportional(9.0);
-    let text_w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), TEXT_MUTED).rect.width();
-    let badge_rect = Rect::from_min_size(
-        ui.cursor().min,
-        vec2(text_w + 8.0, 14.0),
-    );
-    let (rect, _) = ui.allocate_exact_size(badge_rect.size(), egui::Sense::hover());
-
-    ui.painter().rect_filled(
-        rect,
-        Rounding::same(3.0),
-        Color32::from_rgba_premultiplied(255, 255, 255, 12),
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        font,
-        TEXT_MUTED,
-    );
+    let is_hires = text.contains("24/") || text.contains("96") || text.contains("192");
+    crate::ui::bento_theme::quality_badge_pill(ui, text, is_hires);
 }
 
 // =============================================================================
@@ -684,7 +675,7 @@ fn render_zone3_controls(
         Icon::VolumeHigh
     };
 
-    let (mute_rect, mute_resp) = ui.allocate_exact_size(vec2(26.0, 26.0), egui::Sense::click());
+    let (mute_rect, mute_resp) = ui.allocate_exact_size(vec2(28.0, 28.0), egui::Sense::click());
     let is_mute_hovered = mute_resp.hovered();
 
     if is_mute_hovered {

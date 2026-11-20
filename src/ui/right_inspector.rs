@@ -19,35 +19,60 @@ use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Rect, RichText, Rounding, ScrollArea, Stroke};
 
 // ============================================================================
-// Design tokens matching signature Bento theme & dark glass aesthetic
+// Feishin Matte-Slate Design Tokens
 // ============================================================================
 
-/// Bento surface fill (#101016)
-pub const BG_PANEL: Color32 = Color32::from_rgb(16, 16, 22);
+/// Matte-slate bar background (#12151A)
+pub const BG_BAR: Color32 = Color32::from_rgb(18, 21, 26);
 
-/// Elevated card sub-surface (#171720)
-pub const BG_CARD: Color32 = Color32::from_rgb(23, 23, 32);
+/// Matte-slate sidebar & inspector background (#161A20)
+pub const BG_SIDEBAR: Color32 = Color32::from_rgb(22, 26, 32);
 
-/// Subtle interactive hover highlight for table rows and buttons (#20202C)
-pub const BG_CARD_HOVER: Color32 = Color32::from_rgb(32, 32, 44);
+/// Central content area background (#1D2129)
+pub const BG_CENTER: Color32 = Color32::from_rgb(29, 33, 41);
 
-/// 1.0px hairline edge for bento frames and dividers
-pub const BORDER_HAIRLINE: Color32 = Color32::from_rgba_premultiplied(71, 71, 71, 16);
+/// Elevated card sub-surface (#252A34)
+pub const BG_CARD: Color32 = Color32::from_rgb(37, 42, 52);
+
+/// Interactive hover highlight (#2F3542)
+pub const BG_CARD_HOVER: Color32 = Color32::from_rgb(47, 53, 66);
+
+/// Seam & panel divider dark line (#262B35)
+pub const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
 
 /// Primary vibrant brand accent (#9C6CFF)
-pub const ACCENT_PURPLE: Color32 = Color32::from_rgb(156, 108, 255);
+pub const ACCENT_PRIMARY: Color32 = Color32::from_rgb(156, 108, 255);
 
-/// Soft pill fill for active navigation items and active tabs
-pub const ACCENT_PURPLE_SOFT: Color32 = Color32::from_rgba_premultiplied(59, 39, 102, 34);
+/// Soft accent pill tint for active tabs and selections (rgba: 156, 108, 255, 34)
+pub const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(59, 39, 102, 34);
 
-/// High-contrast crisp text for track titles and active lyrics (#F2F2F8)
-pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(242, 242, 248);
+/// High-contrast crisp primary text (#F0F2F6)
+pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
 
-/// Muted secondary text for artists, album names, and keys (#9898A8)
-pub const TEXT_MUTED: Color32 = Color32::from_rgb(152, 152, 168);
+/// Secondary text for subtitles and metadata (#A8AEBC)
+pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
 
-/// Faint timestamps and inactive lyrics (#585868)
-pub const TEXT_FAINT: Color32 = Color32::from_rgb(88, 88, 104);
+/// Muted secondary text for artists, album names, and keys (#767C8A)
+pub const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
+
+/// Faint text and subtle details (#565C69)
+pub const TEXT_FAINT: Color32 = Color32::from_rgb(86, 92, 105);
+
+// Lyric-specific color tokens
+/// Active lyric row background tint (rgba: 156, 108, 255, 26)
+pub const LYRIC_ACTIVE_BG: Color32 = Color32::from_rgba_premultiplied(52, 33, 90, 26);
+
+/// Inactive upcoming lyrics (#B0B6C4)
+pub const LYRIC_UPCOMING: Color32 = Color32::from_rgb(176, 182, 196);
+
+/// Inactive past lyrics (#707684)
+pub const LYRIC_PAST: Color32 = Color32::from_rgb(112, 118, 132);
+
+// Backward-compatibility aliases
+pub const BG_PANEL: Color32 = BG_SIDEBAR;
+pub const ACCENT_PURPLE: Color32 = ACCENT_PRIMARY;
+pub const ACCENT_PURPLE_SOFT: Color32 = ACCENT_SOFT;
+pub const BORDER_HAIRLINE: Color32 = Color32::TRANSPARENT;
 
 // Hi-Res Badge Tokens (Dark Amber-Gold Glass)
 pub const BADGE_HIRES_BG: Color32 = Color32::from_rgba_premultiplied(101, 78, 21, 36);
@@ -62,7 +87,7 @@ pub const BADGE_LOSSLESS_TEXT: Color32 = Color32::from_rgb(220, 200, 255);
 // Spacing & Corner Radii
 pub const BENTO_RADIUS: f32 = 12.0_f32;
 pub const CARD_RADIUS: f32 = 8.0_f32;
-pub const ART_RADIUS: f32 = 10.0_f32;
+pub const ART_RADIUS: f32 = 8.0_f32;
 pub const RIGHT_INSPECTOR_WIDTH: f32 = 310.0_f32;
 
 /// Active tab in the inspector panel.
@@ -133,14 +158,14 @@ fn render_quality_badge(
     is_hires: bool,
     is_lossless: bool,
 ) {
-    let (bg, border, text_color) = if is_hires {
-        (BADGE_HIRES_BG, BADGE_HIRES_BORDER, BADGE_HIRES_TEXT)
+    let (bg, border_color, text_color) = if is_hires {
+        (BADGE_HIRES_BG, Some(BADGE_HIRES_BORDER), BADGE_HIRES_TEXT)
     } else if is_lossless {
-        (BADGE_LOSSLESS_BG, BADGE_LOSSLESS_BORDER, BADGE_LOSSLESS_TEXT)
+        (BADGE_LOSSLESS_BG, Some(BADGE_LOSSLESS_BORDER), BADGE_LOSSLESS_TEXT)
     } else {
         (
-            Color32::from_rgb(24, 24, 28),
-            Color32::from_white_alpha(20),
+            BG_CARD,
+            None,
             TEXT_MUTED,
         )
     };
@@ -153,7 +178,9 @@ fn render_quality_badge(
         let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
         ui.painter().rect_filled(rect, Rounding::same(5.0_f32), bg);
-        ui.painter().rect_stroke(rect, Rounding::same(5.0_f32), Stroke::new(1.0_f32, border));
+        if let Some(border) = border_color {
+            ui.painter().rect_stroke(rect, Rounding::same(5.0_f32), Stroke::new(1.0_f32, border));
+        }
         ui.painter().galley(rect.min + padding, galley, text_color);
     });
 }
@@ -168,14 +195,14 @@ fn render_details_row(ui: &mut egui::Ui, key: &str, val: &str, bg_tint: bool) {
         ui.painter().rect_filled(
             rect,
             Rounding::same(4.0_f32),
-            Color32::from_rgba_premultiplied(255, 255, 255, 4),
+            Color32::from_rgba_unmultiplied(37, 42, 52, 90),
         );
     }
     if resp.hovered() {
         ui.painter().rect_filled(
             rect,
             Rounding::same(4.0_f32),
-            Color32::from_rgba_premultiplied(255, 255, 255, 8),
+            BG_CARD_HOVER,
         );
     }
 
@@ -256,10 +283,7 @@ fn render_now_playing_card(
             paint_icon(ui.painter(), Icon::Disc, disc_rect, Color32::from_white_alpha(35));
         }
 
-        // Hairline border
-        ui.painter().rect_stroke(art_rect, art_rounding, Stroke::new(1.0_f32, BORDER_HAIRLINE));
-
-        // Hover overlay: darken slightly and show vector Expand icon
+        // Hover overlay: darken slightly and show vector Expand icon (Stroke::NONE)
         if art_resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             ui.painter().rect_filled(
@@ -334,7 +358,7 @@ fn render_now_playing_card(
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if is_fav {
-                    paint_icon(ui.painter(), Icon::Heart, heart_rect, ACCENT_PURPLE);
+                    paint_icon(ui.painter(), Icon::Heart, heart_rect, ACCENT_PRIMARY);
                 } else {
                     paint_icon(
                         ui.painter(),
@@ -360,7 +384,7 @@ fn render_now_playing_card(
     };
     let max_sub_chars = ((avail_w - 20.0_f32) / 7.0_f32) as usize + 2;
     let trunc_sub = truncate_str(&artist_album, max_sub_chars);
-    let sub_label = ui.label(RichText::new(trunc_sub).size(12.0_f32).color(TEXT_MUTED));
+    let sub_label = ui.label(RichText::new(trunc_sub).size(12.0_f32).color(TEXT_SECONDARY));
     if artist_album.len() > 24 {
         sub_label.on_hover_text(&artist_album);
     }
@@ -381,8 +405,8 @@ fn render_tab_switcher(ui: &mut egui::Ui, active_tab: InspectorTab) -> Inspector
     let (track_rect, _) = ui.allocate_exact_size(vec2(track_width, track_height), egui::Sense::hover());
 
     let track_rounding = Rounding::same(CARD_RADIUS);
+    // Borderless BG_CARD pill track (Stroke::NONE)
     ui.painter().rect_filled(track_rect, track_rounding, BG_CARD);
-    ui.painter().rect_stroke(track_rect, track_rounding, Stroke::new(1.0_f32, BORDER_HAIRLINE));
 
     let tabs = [
         (InspectorTab::Queue, "Queue"),
@@ -410,13 +434,10 @@ fn render_tab_switcher(ui: &mut egui::Ui, active_tab: InspectorTab) -> Inspector
         let seg_rounding = Rounding::same(6.0_f32);
 
         if is_active {
-            ui.painter().rect_filled(seg_rect, seg_rounding, ACCENT_PURPLE_SOFT);
-            ui.painter().rect_stroke(
-                seg_rect,
-                seg_rounding,
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(156, 108, 255, 110)),
-            );
+            // Active tab: ACCENT_SOFT with Stroke::NONE
+            ui.painter().rect_filled(seg_rect, seg_rounding, ACCENT_SOFT);
         } else if is_hovered {
+            // Hovered tab: BG_CARD_HOVER with Stroke::NONE
             ui.painter().rect_filled(seg_rect, seg_rounding, BG_CARD_HOVER);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
@@ -424,7 +445,7 @@ fn render_tab_switcher(ui: &mut egui::Ui, active_tab: InspectorTab) -> Inspector
         let text_color = if is_active || is_hovered {
             TEXT_PRIMARY
         } else {
-            TEXT_MUTED
+            TEXT_SECONDARY
         };
 
         let font_id = if is_active {
@@ -456,16 +477,11 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
 
         let count_str = format!("{}", upcoming.len());
         let font_id = egui::FontId::proportional(10.5_f32);
-        let galley = ui.painter().layout_no_wrap(count_str, font_id, ACCENT_PURPLE);
+        let galley = ui.painter().layout_no_wrap(count_str, font_id, ACCENT_PRIMARY);
         let badge_size = galley.size() + vec2(10.0_f32, 3.0_f32);
         let (b_rect, _) = ui.allocate_exact_size(badge_size, egui::Sense::hover());
-        ui.painter().rect_filled(b_rect, Rounding::same(10.0_f32), ACCENT_PURPLE_SOFT);
-        ui.painter().rect_stroke(
-            b_rect,
-            Rounding::same(10.0_f32),
-            Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(156, 108, 255, 90)),
-        );
-        ui.painter().galley(b_rect.min + vec2(5.0_f32, 1.5_f32), galley, ACCENT_PURPLE);
+        ui.painter().rect_filled(b_rect, Rounding::same(10.0_f32), ACCENT_SOFT);
+        ui.painter().galley(b_rect.min + vec2(5.0_f32, 1.5_f32), galley, ACCENT_PRIMARY);
     });
 
     ui.add_space(6.0_f32);
@@ -498,12 +514,8 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
         let is_hovered = row_resp.hovered();
         if is_hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            // Borderless row hover (Stroke::NONE)
             ui.painter().rect_filled(row_rect, Rounding::same(6.0_f32), BG_CARD_HOVER);
-            ui.painter().rect_stroke(
-                row_rect,
-                Rounding::same(6.0_f32),
-                Stroke::new(1.0_f32, BORDER_HAIRLINE),
-            );
         }
 
         if row_resp.clicked() {
@@ -542,7 +554,6 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
             let disc_r = mini_art_rect.shrink(6.0_f32);
             paint_icon(ui.painter(), Icon::Music, disc_r, Color32::from_white_alpha(40));
         }
-        ui.painter().rect_stroke(mini_art_rect, mini_rounding, Stroke::new(1.0_f32, BORDER_HAIRLINE));
 
         // 3. Duration on right
         let dur_str = format_time_secs(track.duration_secs);
@@ -631,6 +642,11 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
 
     for (i, line) in fs_lyrics.lines.iter().enumerate() {
         let is_active = Some(i) == active_idx;
+        let is_past = match active_idx {
+            Some(act) => i < act,
+            None => false,
+        };
+
         let is_instrumental = line.is_instrumental || line.text.trim().is_empty() || line.text == "...";
         let display_text = if is_instrumental {
             "..."
@@ -638,23 +654,38 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
             line.text.trim()
         };
 
-        let font_size = if is_active { 14.5_f32 } else { 12.5_f32 };
-        let text_color = if is_active {
-            ACCENT_PURPLE
+        let avail_w = ui.available_width();
+        let wrap_width = (avail_w - 24.0_f32).max(100.0_f32);
+
+        // Active line: Bold pure crisp white (~15.0px) for 100% legibility (English & CJK)
+        // Inactive upcoming lines: #B0B6C4 (LYRIC_UPCOMING)
+        // Inactive past lines: #707684 (LYRIC_PAST)
+        let rich = if is_active {
+            RichText::new(display_text)
+                .size(15.0_f32)
+                .strong()
+                .color(Color32::WHITE)
+        } else if is_past {
+            RichText::new(display_text)
+                .size(13.0_f32)
+                .color(LYRIC_PAST)
         } else {
-            TEXT_FAINT
+            RichText::new(display_text)
+                .size(13.0_f32)
+                .color(LYRIC_UPCOMING)
         };
 
-        let galley = ui.painter().layout(
-            display_text.to_string(),
-            egui::FontId::proportional(font_size),
-            text_color,
-            ui.available_width() - 16.0_f32,
+        let widget_text: egui::WidgetText = rich.into();
+        let galley = widget_text.into_galley(
+            ui,
+            Some(egui::TextWrapMode::Wrap),
+            wrap_width,
+            egui::TextStyle::Body,
         );
 
         let row_height = (galley.size().y + 10.0_f32).max(28.0_f32);
         let (row_rect, row_resp) = ui.allocate_exact_size(
-            vec2(ui.available_width(), row_height),
+            vec2(avail_w, row_height),
             egui::Sense::click(),
         );
 
@@ -664,30 +695,47 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
         }
 
         let rounding = Rounding::same(6.0_f32);
+
         if is_active {
-            ui.painter().rect_filled(
-                row_rect,
-                rounding,
-                Color32::from_rgba_premultiplied(156, 108, 255, 25),
+            // Subtle low-opacity background tint (rounded 6.0px, Stroke::NONE)
+            ui.painter().rect_filled(row_rect, rounding, LYRIC_ACTIVE_BG);
+
+            // Crisp 3.0px vertical ACCENT_PRIMARY indicator bar on the left edge
+            let bar_h = (row_rect.height() - 6.0_f32).max(14.0_f32);
+            let bar_rect = Rect::from_min_size(
+                pos2(row_rect.min.x + 2.0_f32, row_rect.min.y + (row_rect.height() - bar_h) * 0.5_f32),
+                vec2(3.0_f32, bar_h),
             );
-            ui.painter().rect_stroke(
-                row_rect,
-                rounding,
-                Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(156, 108, 255, 65)),
-            );
+            ui.painter().rect_filled(bar_rect, Rounding::same(1.5_f32), ACCENT_PRIMARY);
         } else if is_hovered {
+            // Inactive row hover background (Stroke::NONE)
             ui.painter().rect_filled(row_rect, rounding, BG_CARD_HOVER);
         }
 
-        let final_text_color = if is_active || is_hovered {
-            TEXT_PRIMARY
-        } else {
-            TEXT_FAINT
-        };
-
-        let text_x = row_rect.min.x + 8.0_f32;
+        let text_x = row_rect.min.x + 12.0_f32;
         let text_y = row_rect.min.y + (row_height - galley.size().y) * 0.5_f32;
-        ui.painter().galley(pos2(text_x, text_y), galley, final_text_color);
+        let text_pos = pos2(text_x, text_y);
+
+        if !is_active && is_hovered {
+            let hover_rich = RichText::new(display_text).size(13.0_f32).color(TEXT_PRIMARY);
+            let hover_widget: egui::WidgetText = hover_rich.into();
+            let hover_galley = hover_widget.into_galley(
+                ui,
+                Some(egui::TextWrapMode::Wrap),
+                wrap_width,
+                egui::TextStyle::Body,
+            );
+            ui.painter().galley(text_pos, hover_galley, TEXT_PRIMARY);
+        } else {
+            let fallback_color = if is_active {
+                Color32::WHITE
+            } else if is_past {
+                LYRIC_PAST
+            } else {
+                LYRIC_UPCOMING
+            };
+            ui.painter().galley(text_pos, galley, fallback_color);
+        }
 
         if row_resp.clicked() {
             action = InspectorAction::SeekTo(line.time_secs);
@@ -779,10 +827,10 @@ pub fn render_right_inspector(
     let mut action = InspectorAction::None;
 
     let outer_frame = egui::Frame::none()
-        .fill(BG_PANEL)
+        .fill(BG_SIDEBAR)
         .rounding(Rounding::same(BENTO_RADIUS))
         .inner_margin(egui::Margin::same(10.0_f32))
-        .stroke(Stroke::new(1.0_f32, BORDER_HAIRLINE));
+        .stroke(Stroke::NONE);
 
     outer_frame.show(ui, |ui| {
         ui.vertical(|ui| {
@@ -1053,5 +1101,76 @@ mod tests {
 
         assert_eq!(truncate_str("Hello", 10), "Hello");
         assert_eq!(truncate_str("Long Track Name Exceeding", 12), "Long Trac...");
+    }
+
+    #[test]
+    fn test_feishin_matte_slate_tokens_and_radii() {
+        assert_eq!(BG_SIDEBAR, Color32::from_rgb(22, 26, 32));
+        assert_eq!(BG_CARD, Color32::from_rgb(37, 42, 52));
+        assert_eq!(BG_CARD_HOVER, Color32::from_rgb(47, 53, 66));
+        assert_eq!(ACCENT_PRIMARY, Color32::from_rgb(156, 108, 255));
+        let expected_soft = Color32::from_rgba_unmultiplied(156, 108, 255, 34);
+        let expected_active = Color32::from_rgba_unmultiplied(156, 108, 255, 26);
+        assert_eq!(ACCENT_SOFT, expected_soft, "ACCENT_SOFT should match Color32::from_rgba_unmultiplied(156, 108, 255, 34)");
+        assert_eq!(LYRIC_ACTIVE_BG, expected_active, "LYRIC_ACTIVE_BG should match Color32::from_rgba_unmultiplied(156, 108, 255, 26)");
+        assert_eq!(LYRIC_UPCOMING, Color32::from_rgb(176, 182, 196));
+        assert_eq!(LYRIC_PAST, Color32::from_rgb(112, 118, 132));
+
+        assert_eq!(ART_RADIUS, 8.0_f32);
+        assert_eq!(CARD_RADIUS, 8.0_f32);
+        assert_eq!(BENTO_RADIUS, 12.0_f32);
+    }
+
+    #[test]
+    fn test_cjk_lyrics_rendering_no_panic() {
+        let ctx = egui::Context::default();
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let mut art_manager = AlbumArtManager::new();
+        let theme = Theme::from_name("Eclipse", None);
+
+        // Japanese & CJK lyric lines (Aimyon, Yorushika, Kenshi Yonezu)
+        let lrc_cjk = "[00:01.00] 君はロックを聴かない\n[00:05.00] ただ君に晴れ\n[00:10.00] 晩餐歌\n[00:15.00] 星座になれたら";
+        player.lyrics = Some(crate::lyrics::lrc::Lyrics::parse(lrc_cjk, "cjk_test"));
+
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut insp_ctx = InspectorContext {
+                    player: &mut player,
+                    stream_controller: None,
+                    art_manager: &mut art_manager,
+                    theme: &theme,
+                    active_tab: InspectorTab::Lyrics,
+                };
+                let (tab, action) = render_right_inspector(ui, &mut insp_ctx);
+                assert_eq!(tab, InspectorTab::Lyrics);
+                assert_eq!(action, InspectorAction::None);
+            });
+        });
+    }
+
+    #[test]
+    fn test_lyrics_active_past_upcoming_hierarchy() {
+        let lrc_text = "[00:02.00] Past or upcoming 1\n[00:05.00] Current active line\n[00:10.00] Upcoming line 2";
+        let parsed = crate::lyrics::lrc::Lyrics::parse(lrc_text, "hierarchy_test");
+        let fs_lyrics = FullscreenLyrics::from_lyrics(&parsed);
+
+        // Position 1.0s: before any line
+        let act_early = fs_lyrics.active_line_index(1.0);
+        assert_eq!(act_early, None);
+
+        // Position 5.5s: line 1 is active (index 1)
+        let act_mid = fs_lyrics.active_line_index(5.5);
+        assert_eq!(act_mid, Some(1));
+
+        // When index 1 is active:
+        // index 0 (< 1) is past
+        // index 1 (== 1) is active
+        // index 2 (> 1) is upcoming
+        if let Some(active) = act_mid {
+            assert!(0 < active, "line 0 should be past");
+            assert_eq!(active, 1, "line 1 should be active");
+            assert!(2 > active, "line 2 should be upcoming");
+        }
     }
 }

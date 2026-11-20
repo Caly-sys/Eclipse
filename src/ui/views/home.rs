@@ -1,12 +1,25 @@
 ﻿use crate::audio::PlayerController;
 use crate::library::model::Track;
 use crate::ui::art::AlbumArtManager;
-use crate::ui::components::{dark_pill_button, white_pill_button};
 use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::sidebar::NavTab;
 use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, ScrollArea, Sense, Stroke, Ui};
 use std::collections::HashSet;
+
+// Feishin Matte-Slate Palette Tokens
+const BG_CENTER: Color32 = Color32::from_rgb(29, 33, 41);
+const BG_CARD: Color32 = Color32::from_rgb(37, 42, 52);
+const BG_CARD_HOVER: Color32 = Color32::from_rgb(47, 53, 66);
+const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
+const ACCENT_PRIMARY: Color32 = Color32::from_rgb(156, 108, 255);
+#[allow(dead_code)]
+const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(59, 39, 102, 34);
+const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
+const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
+const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
+#[allow(dead_code)]
+const TEXT_FAINT: Color32 = Color32::from_rgb(86, 92, 105);
 
 #[cfg(windows)]
 fn get_local_date_and_greeting() -> (String, String) {
@@ -80,6 +93,86 @@ fn get_local_date_and_greeting() -> (String, String) {
     (format!("{} · CATALOG", day_name), greeting.to_string())
 }
 
+/// Crisp high-contrast Feishin primary action pill (#F0F2F6 fill + #12151A bold dark text, Stroke::NONE).
+fn feishin_primary_pill(ui: &mut Ui, label: &str, icon: Option<Icon>) -> egui::Response {
+    let font_id = egui::FontId::proportional(12.5);
+    let text_color = Color32::from_rgb(18, 21, 26); // #12151A
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font_id, text_color);
+    let icon_w = if icon.is_some() { 18.0 } else { 0.0 };
+    let padding_x = 14.0;
+    let height = 30.0;
+    let width = galley.rect.width() + icon_w + (padding_x * 2.0);
+
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let bg_color = if resp.is_pointer_button_down_on() {
+        Color32::from_rgb(220, 222, 226)
+    } else if resp.hovered() {
+        Color32::WHITE
+    } else {
+        Color32::from_rgb(240, 242, 246) // #F0F2F6
+    };
+
+    ui.painter().rect_filled(rect, Rounding::same(15.0), bg_color);
+
+    let mut cur_x = rect.min.x + padding_x;
+    let center_y = rect.center().y;
+
+    if let Some(ic) = icon {
+        let icon_rect = Rect::from_center_size(pos2(cur_x + 7.0, center_y), vec2(14.0, 14.0));
+        paint_icon(ui.painter(), ic, icon_rect, text_color);
+        cur_x += icon_w;
+    }
+
+    let text_pos = pos2(cur_x, center_y - galley.rect.height() / 2.0);
+    ui.painter().galley(text_pos, galley, text_color);
+
+    resp
+}
+
+/// Borderless BG_CARD_HOVER pill with TEXT_PRIMARY text.
+fn feishin_secondary_pill(ui: &mut Ui, label: &str, icon: Option<Icon>) -> egui::Response {
+    let font_id = egui::FontId::proportional(12.5);
+    let text_color = TEXT_PRIMARY;
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font_id, text_color);
+    let icon_w = if icon.is_some() { 18.0 } else { 0.0 };
+    let padding_x = 14.0;
+    let height = 30.0;
+    let width = galley.rect.width() + icon_w + (padding_x * 2.0);
+
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let bg_color = if resp.is_pointer_button_down_on() {
+        Color32::from_rgb(55, 62, 78)
+    } else if resp.hovered() {
+        Color32::from_rgb(58, 66, 82)
+    } else {
+        BG_CARD_HOVER // Color32::from_rgb(47, 53, 66)
+    };
+
+    ui.painter().rect_filled(rect, Rounding::same(15.0), bg_color);
+
+    let mut cur_x = rect.min.x + padding_x;
+    let center_y = rect.center().y;
+
+    if let Some(ic) = icon {
+        let icon_rect = Rect::from_center_size(pos2(cur_x + 7.0, center_y), vec2(14.0, 14.0));
+        paint_icon(ui.painter(), ic, icon_rect, text_color);
+        cur_x += icon_w;
+    }
+
+    let text_pos = pos2(cur_x, center_y - galley.rect.height() / 2.0);
+    ui.painter().galley(text_pos, galley, text_color);
+
+    resp
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_home(
     ui: &mut Ui,
@@ -96,6 +189,36 @@ pub fn render_home(
         .id_salt("home_view_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            // Atmospheric Feishin Top Glow in Center Header:
+            // Soft vertical gradient fading from faint moody purple/slate wash down to transparent BG_CENTER over top 220px
+            let glow_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 220.0));
+            let mut glow_mesh = egui::Mesh::default();
+            glow_mesh.add_triangle(0, 1, 2);
+            glow_mesh.add_triangle(0, 2, 3);
+            let top_glow = Color32::from_rgba_unmultiplied(110, 88, 170, 32);
+            let bot_glow = Color32::from_rgba_unmultiplied(BG_CENTER.r(), BG_CENTER.g(), BG_CENTER.b(), 0);
+            glow_mesh.vertices.push(egui::epaint::Vertex {
+                pos: glow_rect.left_top(),
+                uv: egui::epaint::WHITE_UV,
+                color: top_glow,
+            });
+            glow_mesh.vertices.push(egui::epaint::Vertex {
+                pos: glow_rect.right_top(),
+                uv: egui::epaint::WHITE_UV,
+                color: top_glow,
+            });
+            glow_mesh.vertices.push(egui::epaint::Vertex {
+                pos: glow_rect.right_bottom(),
+                uv: egui::epaint::WHITE_UV,
+                color: bot_glow,
+            });
+            glow_mesh.vertices.push(egui::epaint::Vertex {
+                pos: glow_rect.left_bottom(),
+                uv: egui::epaint::WHITE_UV,
+                color: bot_glow,
+            });
+            ui.painter().add(egui::Shape::mesh(glow_mesh));
+
             ui.spacing_mut().item_spacing = vec2(0.0, 16.0);
 
             // =================================================================
@@ -149,7 +272,7 @@ pub fn render_home(
 // =============================================================================
 // 1. GREETING HEADER
 // =============================================================================
-fn render_greeting_header(ui: &mut Ui, theme: &Theme) {
+fn render_greeting_header(ui: &mut Ui, _theme: &Theme) {
     let (date_str, greeting) = get_local_date_and_greeting();
     let total_w = ui.available_width();
     let header_h = 52.0_f32;
@@ -167,13 +290,13 @@ fn render_greeting_header(ui: &mut Ui, theme: &Theme) {
                     ui.label(
                         RichText::new(&date_str)
                             .size(11.5)
-                            .color(theme.text_muted)
+                            .color(TEXT_MUTED)
                             .strong(),
                     );
                     ui.label(
                         RichText::new(&greeting)
                             .size(32.0)
-                            .color(Color32::from_rgb(244, 244, 245))
+                            .color(TEXT_PRIMARY)
                             .strong(),
                     );
                 },
@@ -183,21 +306,16 @@ fn render_greeting_header(ui: &mut Ui, theme: &Theme) {
             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing = vec2(14.0, 0.0);
 
-                // Circular waveform/equalizer badge on far right
+                // Circular waveform/equalizer badge on far right (borderless)
                 let (badge_rect, badge_resp) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
                 let badge_bg = if badge_resp.hovered() {
-                    Color32::from_rgb(28, 28, 32)
+                    BG_CARD_HOVER
                 } else {
-                    Color32::from_rgb(20, 20, 24)
+                    BG_CARD
                 };
                 ui.painter().circle_filled(badge_rect.center(), 22.0, badge_bg);
-                ui.painter().circle_stroke(
-                    badge_rect.center(),
-                    22.0,
-                    Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
-                );
                 let icon_rect = Rect::from_center_size(badge_rect.center(), vec2(20.0, 20.0));
-                paint_icon(ui.painter(), Icon::BarChart, icon_rect, theme.accent);
+                paint_icon(ui.painter(), Icon::BarChart, icon_rect, ACCENT_PRIMARY);
 
                 // Right-aligned text column placed left of the circular badge
                 ui.allocate_ui_with_layout(
@@ -210,19 +328,19 @@ fn render_greeting_header(ui: &mut Ui, theme: &Theme) {
                             ui.label(
                                 RichText::new("E C L I P S E D")
                                     .size(13.5)
-                                    .color(Color32::from_rgb(244, 244, 245))
+                                    .color(TEXT_PRIMARY)
                                     .strong(),
                             );
                             ui.label(
                                 RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
                                     .size(10.5)
-                                    .color(theme.text_muted),
+                                    .color(TEXT_MUTED),
                             );
                         });
                         ui.label(
                             RichText::new("music, in the dark.")
                                 .size(11.0)
-                                .color(theme.text_muted),
+                                .color(TEXT_MUTED),
                         );
                     },
                 );
@@ -230,7 +348,7 @@ fn render_greeting_header(ui: &mut Ui, theme: &Theme) {
         },
     );
 
-    ui.add_space(20.0); // margin-bottom: 20px
+    ui.add_space(20.0);
 }
 
 // =============================================================================
@@ -305,7 +423,6 @@ fn render_row1_bento(
             );
         });
     } else {
-        // Vertically stacked for narrow viewports
         render_pick_up_card(
             ui,
             left_w,
@@ -330,15 +447,16 @@ fn render_pick_up_card(
     card_h: f32,
     active_track: Option<&Track>,
     player: &mut PlayerController,
-    theme: &Theme,
+    _theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_play_track: &mut Option<Track>,
     on_navigate: &mut Option<NavTab>,
     on_trigger_scan: &mut bool,
 ) {
-    let mut frame = theme.card_frame(14.0);
-    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
-    frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15)); // subtle rgba(255,255,255,0.06)
+    let mut frame = egui::Frame::none();
+    frame.fill = BG_CARD;
+    frame.rounding = Rounding::same(10.0);
+    frame.stroke = Stroke::NONE;
     frame.inner_margin = egui::Margin::symmetric(16.0, 16.0);
 
     let frame_response = frame.show(ui, |ui| {
@@ -357,20 +475,16 @@ fn render_pick_up_card(
             let mut painted = false;
             if let Some(track) = active_track {
                 if let Some(tex) = art_manager.get_or_load(ui.ctx(), &track.path) {
-                    ui.painter().image(
-                        tex.id(),
-                        art_box,
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
+                    let img = egui::Image::new(tex).rounding(Rounding::same(8.0));
+                    img.paint_at(ui, art_box);
                     painted = true;
                 }
             }
 
             if !painted {
-                ui.painter().rect_filled(art_box, Rounding::same(8.0), Color32::from_rgb(26, 26, 30));
+                ui.painter().rect_filled(art_box, Rounding::same(8.0), BG_CARD_HOVER);
                 let icon_box = Rect::from_center_size(art_box.center(), vec2(48.0, 48.0));
-                paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
+                paint_icon(ui.painter(), Icon::Disc, icon_box, TEXT_MUTED);
             }
 
             if art_resp.clicked() {
@@ -391,39 +505,39 @@ fn render_pick_up_card(
                     ui.label(
                         RichText::new("PICK UP WHERE YOU LEFT OFF")
                             .size(11.0)
-                            .color(theme.text_muted)
+                            .color(TEXT_MUTED)
                             .strong(),
                     );
 
                     if let Some(track) = active_track {
-                        // Large bold track title: 18px bold #f4f4f5
+                        // Large bold track title: 18px bold TEXT_PRIMARY
                         let char_limit = (right_content_w / 10.5).max(10.0) as usize;
                         let title_str = truncate_str(track.display_title(), char_limit);
                         ui.label(
                             RichText::new(title_str)
                                 .size(18.0)
-                                .color(Color32::from_rgb(244, 244, 245))
+                                .color(TEXT_PRIMARY)
                                 .strong(),
                         );
 
-                        // Muted artist name: 13px #a1a1aa
+                        // Muted artist name: 13px TEXT_SECONDARY
                         let artist_str = truncate_str(track.display_artist(), char_limit + 4);
                         ui.label(
                             RichText::new(artist_str)
                                 .size(13.0)
-                                .color(Color32::from_rgb(161, 161, 170)),
+                                .color(TEXT_SECONDARY),
                         );
 
-                        // Single-line technical metadata: track.tech_summary_str() using 11.5px #71717a
+                        // Single-line technical metadata: track.tech_summary_str() using 11.5px TEXT_MUTED
                         ui.label(
                             RichText::new(track.tech_summary_str())
                                 .size(11.5)
-                                .color(Color32::from_rgb(113, 113, 122)),
+                                .color(TEXT_MUTED),
                         );
 
                         ui.add_space(8.0);
 
-                        // Action row: solid white Play pill button and dark Open pill button
+                        // Action row: crisp high-contrast Feishin primary pill and borderless secondary pill
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
 
@@ -436,7 +550,7 @@ fn render_pick_up_card(
                                 ("Play", Icon::Play)
                             };
 
-                            if white_pill_button(ui, btn_text, Some(btn_icon)).clicked() {
+                            if feishin_primary_pill(ui, btn_text, Some(btn_icon)).clicked() {
                                 if is_current_playing {
                                     player.engine.pause();
                                 } else if player.current_track().is_some_and(|t| t.id == track.id) {
@@ -446,7 +560,7 @@ fn render_pick_up_card(
                                 }
                             }
 
-                            if dark_pill_button(ui, "Open", None).clicked() {
+                            if feishin_secondary_pill(ui, "Open", None).clicked() {
                                 *on_navigate = Some(NavTab::NowPlaying);
                             }
                         });
@@ -455,16 +569,16 @@ fn render_pick_up_card(
                         ui.label(
                             RichText::new("Your library is empty")
                                 .size(16.0)
-                                .color(Color32::from_rgb(244, 244, 245))
+                                .color(TEXT_PRIMARY)
                                 .strong(),
                         );
                         ui.label(
                             RichText::new("Scan a local music folder to get started.")
                                 .size(12.0)
-                                .color(theme.text_muted),
+                                .color(TEXT_MUTED),
                         );
                         ui.add_space(12.0);
-                        if white_pill_button(ui, "Scan Folder", Some(Icon::Refresh)).clicked() {
+                        if feishin_primary_pill(ui, "Scan Folder", Some(Icon::Refresh)).clicked() {
                             *on_trigger_scan = true;
                         }
                     }
@@ -478,7 +592,7 @@ fn render_pick_up_card(
         ui.painter().rect_filled(
             line_rect,
             Rounding::same(1.5),
-            Color32::from_rgba_premultiplied(255, 255, 255, 14),
+            SEAM_DARK,
         );
 
         if let Some(track) = active_track {
@@ -493,7 +607,7 @@ fn render_pick_up_card(
             if progress > 0.0 {
                 let fill_w = (line_rect.width() * progress).max(3.0);
                 let filled_rect = Rect::from_min_size(line_rect.min, vec2(fill_w, 3.0));
-                ui.painter().rect_filled(filled_rect, Rounding::same(1.5), Color32::WHITE);
+                ui.painter().rect_filled(filled_rect, Rounding::same(1.5), ACCENT_PRIMARY);
             }
         }
     });
@@ -560,25 +674,25 @@ fn render_stats_2x2_bento(
                     ui.label(
                         RichText::new("LIBRARY")
                             .size(10.0)
-                            .color(theme.text_muted)
+                            .color(TEXT_MUTED)
                             .strong(),
                     );
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         let (icon_rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                        paint_icon(ui.painter(), Icon::Music, icon_rect, theme.text_muted);
+                        paint_icon(ui.painter(), Icon::Music, icon_rect, TEXT_MUTED);
                     });
                 });
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!("{} tracks", total_tracks))
                         .size(16.0)
-                        .color(Color32::from_rgb(244, 244, 245))
+                        .color(TEXT_PRIMARY)
                         .strong(),
                 );
                 ui.label(
                     RichText::new(format!("{} albums · {} artists", total_albums, total_artists))
                         .size(11.0)
-                        .color(theme.text_muted),
+                        .color(TEXT_MUTED),
                 );
             },
             || {
@@ -597,25 +711,25 @@ fn render_stats_2x2_bento(
                     ui.label(
                         RichText::new("LISTENING TIME")
                             .size(10.0)
-                            .color(theme.text_muted)
+                            .color(TEXT_MUTED)
                             .strong(),
                     );
                     ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                         let (icon_rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                        paint_icon(ui.painter(), Icon::Clock, icon_rect, theme.text_muted);
+                        paint_icon(ui.painter(), Icon::Clock, icon_rect, TEXT_MUTED);
                     });
                 });
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new(format!("{:.1} h", total_hours))
                         .size(16.0)
-                        .color(Color32::from_rgb(244, 244, 245))
+                        .color(TEXT_PRIMARY)
                         .strong(),
                 );
                 ui.label(
                     RichText::new(format!("{:.0}% lossless · {} plays", lossless_pct, total_plays))
                         .size(11.0)
-                        .color(theme.text_muted),
+                        .color(TEXT_MUTED),
                 );
             },
             || {
@@ -657,7 +771,7 @@ fn render_stats_2x2_bento(
             sub_w,
             sub_h,
             Icon::Dices,
-            theme.accent,
+            ACCENT_PRIMARY,
             "Random Discovery",
             &format!("{} TRACKS", tracks.len().min(50)),
             theme,
@@ -683,36 +797,31 @@ fn render_bento_subcard<F, C>(
     ui: &mut Ui,
     w: f32,
     h: f32,
-    theme: &Theme,
+    _theme: &Theme,
     content: F,
     on_click: C,
 ) where
     F: FnOnce(&mut Ui),
     C: FnOnce(),
 {
-    let mut frame = theme.card_frame(12.0);
-    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
-    frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
-    frame.inner_margin = egui::Margin::symmetric(14.0, 10.0);
-
-    let resp = frame.show(ui, |ui| {
-        ui.allocate_ui_with_layout(
-            vec2(w - 28.0, h - 20.0),
-            Layout::top_down(egui::Align::Min),
-            content,
-        );
-    });
-
-    let interact = resp.response.interact(Sense::click());
-    if interact.hovered() {
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
+    let is_hovered = resp.hovered();
+    if is_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_stroke(
-            resp.response.rect,
-            Rounding::same(12.0),
-            Stroke::new(1.0_f32, theme.border_accent),
-        );
     }
-    if interact.clicked() {
+
+    let bg_fill = if is_hovered { BG_CARD_HOVER } else { BG_CARD };
+    ui.painter().rect_filled(rect, Rounding::same(10.0), bg_fill);
+
+    let inner_rect = rect.shrink2(vec2(14.0, 10.0));
+    let mut child_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner_rect)
+            .layout(Layout::top_down(egui::Align::Min)),
+    );
+    content(&mut child_ui);
+
+    if resp.clicked() {
         on_click();
     }
 }
@@ -726,100 +835,85 @@ fn render_action_subcard<P, C>(
     icon_color: Color32,
     title: &str,
     subtitle: &str,
-    theme: &Theme,
+    _theme: &Theme,
     on_play: P,
     on_click_card: C,
 ) where
     P: FnOnce(),
     C: FnOnce(),
 {
-    let mut frame = theme.card_frame(12.0);
-    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
-    frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
-    frame.inner_margin = egui::Margin::symmetric(14.0, 10.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
+    let is_hovered = resp.hovered();
+    if is_hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let bg_fill = if is_hovered { BG_CARD_HOVER } else { BG_CARD };
+    ui.painter().rect_filled(rect, Rounding::same(10.0), bg_fill);
+
+    let inner_rect = rect.shrink2(vec2(14.0, 10.0));
+    let mut child_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner_rect)
+            .layout(Layout::left_to_right(egui::Align::Center)),
+    );
 
     let mut play_clicked = false;
 
-    let resp = frame.show(ui, |ui| {
-        ui.allocate_ui_with_layout(
-            vec2(w - 28.0, h - 20.0),
-            Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                // Left text stack
-                let left_w = (w - 28.0 - 32.0).max(60.0);
-                ui.allocate_ui_with_layout(
-                    vec2(left_w, h - 20.0),
-                    Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        // Top icon
-                        let (icon_box, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                        paint_icon(ui.painter(), icon, icon_box, icon_color);
+    // Left text stack
+    let left_w = (inner_rect.width() - 32.0).max(60.0);
+    child_ui.allocate_ui_with_layout(
+        vec2(left_w, inner_rect.height()),
+        Layout::top_down(egui::Align::Min),
+        |ui| {
+            let (icon_box, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            paint_icon(ui.painter(), icon, icon_box, icon_color);
 
-                        ui.add_space(3.0);
-                        ui.label(
-                            RichText::new(title)
-                                .size(13.5)
-                                .color(Color32::from_rgb(244, 244, 245))
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(subtitle)
-                                .size(10.0)
-                                .color(theme.text_muted)
-                                .strong(),
-                        );
-                    },
-                );
+            ui.add_space(3.0);
+            ui.label(
+                RichText::new(title)
+                    .size(13.5)
+                    .color(TEXT_PRIMARY)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new(subtitle)
+                    .size(10.0)
+                    .color(TEXT_MUTED)
+                    .strong(),
+            );
+        },
+    );
 
-                // Bottom-right dark circular button with Icon::Play
-                ui.with_layout(Layout::right_to_left(egui::Align::BOTTOM), |ui| {
-                    let btn_size = 28.0_f32;
-                    let (btn_rect, btn_resp) = ui.allocate_exact_size(vec2(btn_size, btn_size), Sense::click());
-                    if btn_resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    let bg_color = if btn_resp.is_pointer_button_down_on() {
-                        Color32::from_rgb(22, 22, 26)
-                    } else if btn_resp.hovered() {
-                        Color32::from_rgb(44, 44, 50)
-                    } else {
-                        Color32::from_rgb(34, 34, 38)
-                    };
-                    ui.painter().circle_filled(btn_rect.center(), btn_size / 2.0, bg_color);
-                    ui.painter().circle_stroke(
-                        btn_rect.center(),
-                        btn_size / 2.0,
-                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 20)),
-                    );
-                    let play_icon_rect = Rect::from_center_size(
-                        pos2(btn_rect.center().x + 1.0, btn_rect.center().y),
-                        vec2(12.0, 12.0),
-                    );
-                    paint_icon(ui.painter(), Icon::Play, play_icon_rect, Color32::WHITE);
-
-                    if btn_resp.clicked() {
-                        play_clicked = true;
-                    }
-                });
-            },
+    // Bottom-right circular button with Icon::Play (Stroke::NONE)
+    child_ui.with_layout(Layout::right_to_left(egui::Align::BOTTOM), |ui| {
+        let btn_size = 28.0_f32;
+        let (btn_rect, btn_resp) = ui.allocate_exact_size(vec2(btn_size, btn_size), Sense::click());
+        if btn_resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let bg_color = if btn_resp.is_pointer_button_down_on() {
+            Color32::from_rgb(30, 34, 43)
+        } else if btn_resp.hovered() {
+            Color32::from_rgb(55, 62, 78)
+        } else {
+            Color32::from_rgb(42, 48, 60)
+        };
+        ui.painter().circle_filled(btn_rect.center(), btn_size / 2.0, bg_color);
+        let play_icon_rect = Rect::from_center_size(
+            pos2(btn_rect.center().x + 1.0, btn_rect.center().y),
+            vec2(12.0, 12.0),
         );
+        paint_icon(ui.painter(), Icon::Play, play_icon_rect, TEXT_PRIMARY);
+
+        if btn_resp.clicked() {
+            play_clicked = true;
+        }
     });
 
     if play_clicked {
         on_play();
-        return;
-    }
-
-    let interact = resp.response.interact(Sense::click());
-    if interact.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_stroke(
-            resp.response.rect,
-            Rounding::same(12.0),
-            Stroke::new(1.0_f32, theme.border_accent),
-        );
-    }
-    if interact.clicked() {
+    } else if resp.clicked() {
         on_click_card();
     }
 }
@@ -879,13 +973,14 @@ fn render_on_repeat_card(
     col_w: f32,
     card_h: f32,
     tracks: &[Track],
-    theme: &Theme,
+    _theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_play_track: &mut Option<Track>,
 ) {
-    let mut frame = theme.card_frame(14.0);
-    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
-    frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    let mut frame = egui::Frame::none();
+    frame.fill = BG_CARD;
+    frame.rounding = Rounding::same(10.0);
+    frame.stroke = Stroke::NONE;
     frame.inner_margin = egui::Margin::symmetric(16.0, 14.0);
 
     frame.show(ui, |ui| {
@@ -896,7 +991,7 @@ fn render_on_repeat_card(
         ui.label(
             RichText::new("ON REPEAT")
                 .size(11.0)
-                .color(theme.text_muted)
+                .color(TEXT_MUTED)
                 .strong(),
         );
         ui.add_space(8.0);
@@ -911,7 +1006,7 @@ fn render_on_repeat_card(
             ui.label(
                 RichText::new("No played tracks yet.")
                     .size(12.0)
-                    .color(theme.text_muted),
+                    .color(TEXT_MUTED),
             );
         } else {
             for (idx, track) in top_4.iter().enumerate() {
@@ -920,7 +1015,7 @@ fn render_on_repeat_card(
 
                 if row_resp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    ui.painter().rect_filled(row_rect, Rounding::same(6.0), Color32::from_rgb(28, 28, 32));
+                    ui.painter().rect_filled(row_rect, Rounding::same(6.0), BG_CARD_HOVER);
                 }
 
                 if row_resp.clicked() {
@@ -934,7 +1029,7 @@ fn render_on_repeat_card(
                     egui::Align2::LEFT_CENTER,
                     idx_str,
                     egui::FontId::proportional(12.0),
-                    theme.text_muted,
+                    TEXT_MUTED,
                 );
 
                 // 34x34px square Album Cover (border: none)
@@ -945,19 +1040,15 @@ fn render_on_repeat_card(
 
                 let mut painted = false;
                 if let Some(tex) = art_manager.get_or_load(ui.ctx(), &track.path) {
-                    ui.painter().image(
-                        tex.id(),
-                        art_rect,
-                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
+                    let img = egui::Image::new(tex).rounding(Rounding::same(6.0));
+                    img.paint_at(ui, art_rect);
                     painted = true;
                 }
 
                 if !painted {
-                    ui.painter().rect_filled(art_rect, Rounding::same(6.0), Color32::from_rgb(28, 28, 32));
+                    ui.painter().rect_filled(art_rect, Rounding::same(6.0), BG_CARD_HOVER);
                     let icon_box = Rect::from_center_size(art_rect.center(), vec2(16.0, 16.0));
-                    paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
+                    paint_icon(ui.painter(), Icon::Disc, icon_box, TEXT_MUTED);
                 }
 
                 // Right-aligned Artist · Nx plays
@@ -969,13 +1060,13 @@ fn render_on_repeat_card(
                 let right_galley = ui.painter().layout_no_wrap(
                     play_badge,
                     egui::FontId::proportional(11.5),
-                    Color32::from_rgb(113, 113, 122),
+                    TEXT_MUTED,
                 );
                 let right_pos = pos2(
                     row_rect.max.x - 8.0 - right_galley.rect.width(),
                     row_rect.center().y - right_galley.rect.height() / 2.0,
                 );
-                ui.painter().galley(right_pos, right_galley, Color32::from_rgb(113, 113, 122));
+                ui.painter().galley(right_pos, right_galley, TEXT_MUTED);
 
                 // Bold track title
                 let title_start_x = art_rect.max.x + 10.0;
@@ -985,12 +1076,12 @@ fn render_on_repeat_card(
                 let title_galley = ui.painter().layout_no_wrap(
                     title_str,
                     egui::FontId::proportional(12.5),
-                    Color32::from_rgb(244, 244, 245),
+                    TEXT_PRIMARY,
                 );
                 ui.painter().galley(
                     pos2(title_start_x, row_rect.center().y - title_galley.rect.height() / 2.0),
                     title_galley,
-                    Color32::from_rgb(244, 244, 245),
+                    TEXT_PRIMARY,
                 );
 
                 ui.add_space(2.0);
@@ -1005,14 +1096,15 @@ fn render_recently_added_card(
     col_w: f32,
     card_h: f32,
     tracks: &[Track],
-    theme: &Theme,
+    _theme: &Theme,
     art_manager: &mut AlbumArtManager,
     on_play_track: &mut Option<Track>,
     on_navigate: &mut Option<NavTab>,
 ) {
-    let mut frame = theme.card_frame(14.0);
-    frame.fill = Color32::from_rgb(20, 20, 23); // #141417
-    frame.stroke = Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 15));
+    let mut frame = egui::Frame::none();
+    frame.fill = BG_CARD;
+    frame.rounding = Rounding::same(10.0);
+    frame.stroke = Stroke::NONE;
     frame.inner_margin = egui::Margin::symmetric(16.0, 14.0);
 
     frame.show(ui, |ui| {
@@ -1024,7 +1116,7 @@ fn render_recently_added_card(
             ui.label(
                 RichText::new("RECENTLY ADDED")
                     .size(11.0)
-                    .color(theme.text_muted)
+                    .color(TEXT_MUTED)
                     .strong(),
             );
             ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1032,7 +1124,7 @@ fn render_recently_added_card(
                     egui::Label::new(
                         RichText::new("See all")
                             .size(11.0)
-                            .color(theme.text_muted),
+                            .color(TEXT_MUTED),
                     )
                     .sense(Sense::click()),
                 );
@@ -1055,7 +1147,7 @@ fn render_recently_added_card(
             ui.label(
                 RichText::new("No tracks added yet.")
                     .size(12.0)
-                    .color(theme.text_muted),
+                    .color(TEXT_MUTED),
             );
         } else {
             let inner_w = col_w - 32.0;
@@ -1079,24 +1171,20 @@ fn render_recently_added_card(
 
                             let mut painted = false;
                             if let Some(tex) = art_manager.get_or_load(ui.ctx(), &track.path) {
-                                ui.painter().image(
-                                    tex.id(),
-                                    art_box,
-                                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                    Color32::WHITE,
-                                );
+                                let img = egui::Image::new(tex).rounding(Rounding::same(8.0));
+                                img.paint_at(ui, art_box);
                                 painted = true;
                             }
 
                             if !painted {
-                                ui.painter().rect_filled(art_box, Rounding::same(8.0), Color32::from_rgb(26, 26, 30));
+                                ui.painter().rect_filled(art_box, Rounding::same(8.0), BG_CARD_HOVER);
                                 let icon_box = Rect::from_center_size(art_box.center(), vec2(22.0, 22.0));
-                                paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
+                                paint_icon(ui.painter(), Icon::Disc, icon_box, TEXT_MUTED);
                             }
 
                             ui.add_space(6.0);
 
-                            // Bold truncated track title directly underneath: 12px #e4e4e7
+                            // Bold truncated track title directly underneath: 12px TEXT_PRIMARY
                             let title_chars = (col_item_w / 7.0).max(5.0) as usize;
                             let title_str = truncate_str(track.display_title(), title_chars);
                             let title_lbl = ui.add(
@@ -1106,7 +1194,7 @@ fn render_recently_added_card(
                                         .color(if art_resp.hovered() {
                                             Color32::WHITE
                                         } else {
-                                            Color32::from_rgb(228, 228, 231)
+                                            TEXT_PRIMARY
                                         })
                                         .strong(),
                                 )
@@ -1119,7 +1207,7 @@ fn render_recently_added_card(
                             ui.label(
                                 RichText::new(artist_str)
                                     .size(10.0)
-                                    .color(Color32::from_rgb(113, 113, 122)),
+                                    .color(TEXT_MUTED),
                             );
 
                             if art_resp.clicked() || title_lbl.clicked() {
@@ -1141,7 +1229,7 @@ fn render_row3_jump_back_in(
     ui: &mut Ui,
     tracks: &[Track],
     recent_history: &[Track],
-    theme: &Theme,
+    _theme: &Theme,
     art_manager: &mut AlbumArtManager,
     player: &mut PlayerController,
     on_play_track: &mut Option<Track>,
@@ -1151,12 +1239,12 @@ fn render_row3_jump_back_in(
         ui.label(
             RichText::new("JUMP BACK IN")
                 .size(13.0)
-                .color(theme.text_secondary)
+                .color(TEXT_SECONDARY)
                 .strong(),
         );
 
         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-            if dark_pill_button(ui, "Show all", None).clicked() {
+            if feishin_secondary_pill(ui, "Show all", None).clicked() {
                 *on_navigate = Some(NavTab::Albums);
             }
         });
@@ -1215,18 +1303,20 @@ fn render_row3_jump_back_in(
     }
 
     if jump_albums.is_empty() {
-        let mut empty_frame = theme.card_frame(10.0);
-        empty_frame.fill = Color32::from_rgb(20, 20, 23);
+        let mut empty_frame = egui::Frame::none();
+        empty_frame.fill = BG_CARD;
+        empty_frame.rounding = Rounding::same(10.0);
+        empty_frame.stroke = Stroke::NONE;
         empty_frame.inner_margin = egui::Margin::symmetric(20.0, 16.0);
         empty_frame.show(ui, |ui| {
             ui.horizontal(|ui| {
                 let (icon_box, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-                paint_icon(ui.painter(), Icon::Disc, icon_box, theme.text_muted);
+                paint_icon(ui.painter(), Icon::Disc, icon_box, TEXT_MUTED);
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new("No albums to resume yet. Add songs to your library to populate Jump Back In.")
                         .size(12.5)
-                        .color(theme.text_muted),
+                        .color(TEXT_MUTED),
                 );
             });
         });
@@ -1244,7 +1334,7 @@ fn render_row3_jump_back_in(
                             vec2(card_w, card_w + 50.0),
                             Layout::top_down(egui::Align::Min),
                             |ui| {
-                                // 140x140px square Album Cover
+                                // 140x140px square Album Cover (border-radius: 8px, Stroke::NONE)
                                 let (art_box, art_resp) =
                                     ui.allocate_exact_size(vec2(card_w, card_w), Sense::click());
                                 if art_resp.hovered() {
@@ -1253,22 +1343,8 @@ fn render_row3_jump_back_in(
 
                                 let mut painted = false;
                                 if let Some(tex) = art_manager.get_or_load(ui.ctx(), &album.sample_track.path) {
-                                    ui.painter().image(
-                                        tex.id(),
-                                        art_box,
-                                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                        Color32::WHITE,
-                                    );
-                                    let border_color = if art_resp.hovered() {
-                                        theme.border_accent
-                                    } else {
-                                        Color32::from_rgba_premultiplied(255, 255, 255, 15)
-                                    };
-                                    ui.painter().rect_stroke(
-                                        art_box,
-                                        Rounding::same(8.0),
-                                        Stroke::new(1.0_f32, border_color),
-                                    );
+                                    let img = egui::Image::new(tex).rounding(Rounding::same(8.0));
+                                    img.paint_at(ui, art_box);
                                     painted = true;
                                 }
 
@@ -1276,14 +1352,14 @@ fn render_row3_jump_back_in(
                                     ui.painter().rect_filled(
                                         art_box,
                                         Rounding::same(8.0),
-                                        Color32::from_rgb(26, 26, 30),
+                                        BG_CARD,
                                     );
                                     let icon_box =
                                         Rect::from_center_size(art_box.center(), vec2(40.0, 40.0));
-                                    paint_icon(ui.painter(), Icon::Disc, icon_box, Color32::from_rgb(113, 113, 122));
+                                    paint_icon(ui.painter(), Icon::Disc, icon_box, TEXT_MUTED);
                                 }
 
-                                // Subtle play button overlay on hover
+                                // Subtle play button overlay on hover (Stroke::NONE)
                                 if art_resp.hovered() {
                                     let overlay_center =
                                         pos2(art_box.max.x - 24.0, art_box.max.y - 24.0);
@@ -1291,11 +1367,6 @@ fn render_row3_jump_back_in(
                                         overlay_center,
                                         16.0,
                                         Color32::from_rgba_premultiplied(14, 14, 18, 220),
-                                    );
-                                    ui.painter().circle_stroke(
-                                        overlay_center,
-                                        16.0,
-                                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(255, 255, 255, 40)),
                                     );
                                     let play_icon_rect = Rect::from_center_size(
                                         pos2(overlay_center.x + 1.0, overlay_center.y),
@@ -1315,7 +1386,7 @@ fn render_row3_jump_back_in(
                                             .color(if art_resp.hovered() {
                                                 Color32::WHITE
                                             } else {
-                                                Color32::from_rgb(244, 244, 245)
+                                                TEXT_PRIMARY
                                             })
                                             .strong(),
                                     )
@@ -1330,7 +1401,7 @@ fn render_row3_jump_back_in(
                                 ui.label(
                                     RichText::new(sub_str)
                                         .size(11.5)
-                                        .color(Color32::from_rgb(113, 113, 122)),
+                                        .color(TEXT_MUTED),
                                 );
 
                                 if art_resp.clicked() || title_lbl.clicked() {
