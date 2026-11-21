@@ -1,7 +1,183 @@
 use egui::{Color32, FontId, Frame, Margin, Response, Rounding, Sense, Stroke, Ui, Vec2};
+use crate::ui::theme::Theme;
 
 // ============================================================================
-// 1. Feishin Matte-Slate Surface Ramp & Design Tokens
+// 1. Dynamic BentoPalette Engine (Settings Theme & Accent Driven)
+// ============================================================================
+
+/// Dynamic Feishin matte-slate design palette driven by Settings Theme & Accent color.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BentoPalette {
+    /// Top chrome bar & bottom player dock surface
+    pub bg_bar: Color32,
+    /// Left navigation rail & right inspector surface
+    pub bg_sidebar: Color32,
+    /// Main center viewport surface
+    pub bg_center: Color32,
+    /// Borderless elevated cards, search inputs, secondary buttons
+    pub bg_card: Color32,
+    /// Hover highlight for elevated cards and buttons
+    pub bg_card_hover: Color32,
+    /// Ultra-subtle dark pane divider - NEVER white
+    pub seam: Color32,
+    /// Soft low-alpha atmospheric gradient glow matching active theme/accent
+    pub header_glow: Color32,
+    /// Primary brand accent (play button, seek fill, active indicators)
+    pub accent: Color32,
+    /// Soft accent tint for active pills, list selections, and lyric highlight (~34 alpha)
+    pub accent_soft: Color32,
+    /// Strong accent tint for borders and audio analyzer meters (~85 alpha)
+    pub accent_strong: Color32,
+    /// High-contrast text for titles and active lyrics
+    pub text_primary: Color32,
+    /// Secondary text for artists, album names, subheadings
+    pub text_secondary: Color32,
+    /// Muted secondary text for metadata and section headers
+    pub text_muted: Color32,
+}
+
+impl BentoPalette {
+    /// Constructs a dynamic palette from theme name and optional custom accent RGB.
+    /// Supports all 6 themes: Eclipse, Obsidian, Ember, Verdant, Nebula, Glacier.
+    pub fn from_settings(theme_name: &str, custom_accent: Option<[u8; 3]>) -> Self {
+        let accent = match custom_accent {
+            Some([r, g, b]) => Color32::from_rgb(r, g, b),
+            None => match theme_name {
+                "Glacier" => Color32::from_rgb(100, 181, 246),
+                "Nebula" => Color32::from_rgb(179, 136, 255),
+                "Verdant" => Color32::from_rgb(105, 240, 174),
+                "Ember" => Color32::from_rgb(255, 82, 82),
+                _ => Color32::from_rgb(156, 108, 255), // Eclipse / Obsidian purple
+            },
+        };
+
+        let accent_soft = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 34);
+        let accent_strong = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 85);
+        let header_glow = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 22);
+
+        let text_primary = Color32::from_rgb(240, 242, 246);
+        let text_secondary = Color32::from_rgb(168, 174, 188);
+        let text_muted = Color32::from_rgb(118, 124, 138);
+
+        let (bg_bar, bg_sidebar, bg_center, bg_card, bg_card_hover, seam) = match theme_name {
+            "Obsidian" => (
+                Color32::from_rgb(10, 11, 14),   // #0A0B0E
+                Color32::from_rgb(16, 18, 23),   // #101217
+                Color32::from_rgb(21, 24, 31),   // #15181F
+                Color32::from_rgb(30, 34, 43),   // #1E222B
+                Color32::from_rgb(40, 45, 56),   // hover
+                Color32::from_rgb(28, 32, 40),   // seam
+            ),
+            "Ember" => (
+                Color32::from_rgb(26, 19, 19),   // #1A1313
+                Color32::from_rgb(33, 24, 24),   // #211818
+                Color32::from_rgb(41, 30, 30),   // #291E1E
+                Color32::from_rgb(53, 39, 39),   // #352727
+                Color32::from_rgb(66, 50, 50),   // hover
+                Color32::from_rgb(51, 37, 37),   // seam
+            ),
+            "Verdant" => (
+                Color32::from_rgb(16, 25, 22),   // #101916
+                Color32::from_rgb(21, 33, 29),   // #15211D
+                Color32::from_rgb(27, 42, 37),   // #1B2A25
+                Color32::from_rgb(36, 55, 49),   // #243731
+                Color32::from_rgb(46, 69, 62),   // hover
+                Color32::from_rgb(35, 53, 47),   // seam
+            ),
+            "Nebula" => (
+                Color32::from_rgb(19, 18, 32),   // #131220
+                Color32::from_rgb(25, 24, 41),   // #191829
+                Color32::from_rgb(33, 32, 54),   // #212036
+                Color32::from_rgb(43, 42, 69),   // #2B2A45
+                Color32::from_rgb(54, 53, 86),   // hover
+                Color32::from_rgb(41, 40, 66),   // seam
+            ),
+            "Glacier" => (
+                Color32::from_rgb(16, 23, 32),   // #101720
+                Color32::from_rgb(22, 31, 43),   // #161F2B
+                Color32::from_rgb(29, 40, 54),   // #1D2836
+                Color32::from_rgb(38, 52, 70),   // #263446
+                Color32::from_rgb(49, 66, 88),   // hover
+                Color32::from_rgb(37, 51, 68),   // seam
+            ),
+            _ => (
+                // Eclipse (default neutral cool slate)
+                Color32::from_rgb(18, 21, 26),   // #12151A
+                Color32::from_rgb(22, 26, 32),   // #161A20
+                Color32::from_rgb(29, 33, 41),   // #1D2129
+                Color32::from_rgb(37, 42, 52),   // #252A34
+                Color32::from_rgb(47, 53, 66),   // hover
+                Color32::from_rgb(36, 41, 50),   // seam
+            ),
+        };
+
+        Self {
+            bg_bar,
+            bg_sidebar,
+            bg_center,
+            bg_card,
+            bg_card_hover,
+            seam,
+            header_glow,
+            accent,
+            accent_soft,
+            accent_strong,
+            text_primary,
+            text_secondary,
+            text_muted,
+        }
+    }
+
+    /// Derives BentoPalette directly from an active Theme reference.
+    pub fn from_theme(theme: &Theme) -> Self {
+        Self::from_settings(&theme.name, Some([theme.accent.r(), theme.accent.g(), theme.accent.b()]))
+    }
+
+    /// Center stage panel frame with flat matte fill and Stroke::NONE.
+    pub fn panel_frame(&self) -> Frame {
+        Frame::none()
+            .fill(self.bg_center)
+            .rounding(Rounding::ZERO)
+            .stroke(Stroke::NONE)
+            .inner_margin(Margin::same(10.0_f32))
+    }
+
+    /// Sidebar rail and right inspector frame with flat matte fill and Stroke::NONE.
+    pub fn sidebar_frame(&self) -> Frame {
+        Frame::none()
+            .fill(self.bg_sidebar)
+            .rounding(Rounding::ZERO)
+            .stroke(Stroke::NONE)
+            .inner_margin(Margin::ZERO)
+    }
+
+    /// Floating bottom player bar frame with flat matte fill and Stroke::NONE.
+    pub fn dock_frame(&self) -> Frame {
+        Frame::none()
+            .fill(self.bg_bar)
+            .rounding(Rounding::ZERO)
+            .stroke(Stroke::NONE)
+            .inner_margin(Margin::symmetric(14.0_f32, 8.0_f32))
+    }
+
+    /// Borderless elevated card frame with fill and Stroke::NONE.
+    pub fn card_frame(&self) -> Frame {
+        Frame::none()
+            .fill(self.bg_card)
+            .rounding(Rounding::same(CARD_RADIUS))
+            .stroke(Stroke::NONE)
+            .inner_margin(Margin::same(8.0_f32))
+    }
+}
+
+impl Default for BentoPalette {
+    fn default() -> Self {
+        Self::from_settings("Eclipse", None)
+    }
+}
+
+// ============================================================================
+// Legacy Static Constants (Backward Compatibility)
 // ============================================================================
 
 /// Top chrome bar & bottom player bar surface (#12151A)
@@ -20,13 +196,12 @@ pub const BG_CARD: Color32 = Color32::from_rgb(37, 42, 52);
 pub const BG_CARD_HOVER: Color32 = Color32::from_rgb(47, 53, 66);
 
 /// Ultra-subtle dark pane divider - NEVER white (#262B35)
-pub const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
+pub const SEAM_DARK: Color32 = Color32::from_rgb(36, 41, 50);
 
 /// Primary vibrant brand accent (play button, seek fill, active dot) (#9C6CFF)
 pub const ACCENT_PRIMARY: Color32 = Color32::from_rgb(156, 108, 255);
 
 /// Soft pill fill for active navigation items and active tabs
-/// Matches Color32::from_rgba_unmultiplied(156, 108, 255, 34)
 pub const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(59, 39, 102, 34);
 
 /// High-contrast crisp text for track titles and active lyrics (#F0F2F6)
@@ -50,18 +225,12 @@ pub const ACCENT_PURPLE: Color32 = ACCENT_PRIMARY;
 pub const ACCENT_PURPLE_SOFT: Color32 = ACCENT_SOFT;
 
 // Quality Badge Tokens (Hi-Res: Amber-Gold Glass, Lossless: Purple Glass)
-/// Matches Color32::from_rgba_unmultiplied(245, 194, 66, 32)
 pub const BADGE_HIRES_BG: Color32 = Color32::from_rgba_premultiplied(95, 74, 20, 32);
-/// Matches Color32::from_rgba_unmultiplied(245, 194, 66, 90)
 pub const BADGE_HIRES_BORDER: Color32 = Color32::from_rgba_premultiplied(154, 121, 38, 90);
-/// Text: rgb(255, 224, 130) (#FFE082)
 pub const BADGE_HIRES_TEXT: Color32 = Color32::from_rgb(255, 224, 130);
 
-/// Matches Color32::from_rgba_unmultiplied(156, 108, 255, 36)
 pub const BADGE_LOSSLESS_BG: Color32 = Color32::from_rgba_premultiplied(61, 40, 105, 36);
-/// Transparent border for lossless (zero border)
 pub const BADGE_LOSSLESS_BORDER: Color32 = Color32::TRANSPARENT;
-/// Text: rgb(212, 194, 255) (#D4C2FF)
 pub const BADGE_LOSSLESS_TEXT: Color32 = Color32::from_rgb(212, 194, 255);
 
 // Spacing & Corner Radii
@@ -122,54 +291,54 @@ pub fn bento_card_frame() -> Frame {
 // 3. Reusable Widgets & Theming
 // ============================================================================
 
-/// Configures ctx.set_visuals(...) with Feishin matte-slate theme, eliminating default
-/// bright white outlines and setting slim floating dark scrollbars, dark panel fills,
-/// and muted selection colors.
-pub fn apply_bento_visuals(ctx: &egui::Context) {
+/// Configures ctx.set_visuals(...) with dynamic Feishin matte-slate theme driven by BentoPalette,
+/// eliminating default bright white outlines and setting slim floating dark scrollbars,
+/// dark panel fills, and muted selection colors.
+pub fn apply_bento_visuals(ctx: &egui::Context, palette: &BentoPalette) {
     let mut visuals = egui::Visuals::dark();
 
     // Matte-slate fills matching the surface ramp
-    visuals.panel_fill = BG_CENTER;
-    visuals.window_fill = BG_SIDEBAR;
-    visuals.extreme_bg_color = BG_BAR;
-    visuals.faint_bg_color = BG_CARD;
-    visuals.code_bg_color = BG_CARD;
+    visuals.panel_fill = palette.bg_center;
+    visuals.window_fill = palette.bg_sidebar;
+    visuals.extreme_bg_color = palette.bg_bar;
+    visuals.faint_bg_color = palette.bg_card;
+    visuals.code_bg_color = palette.bg_card;
     visuals.window_stroke = Stroke::NONE;
     visuals.window_rounding = Rounding::same(BENTO_RADIUS);
     visuals.menu_rounding = Rounding::same(CARD_RADIUS);
 
     // Eliminate default bright white outlines on widgets
-    visuals.widgets.noninteractive.bg_fill = BG_CARD;
-    visuals.widgets.noninteractive.weak_bg_fill = BG_CENTER;
+    visuals.widgets.noninteractive.bg_fill = palette.bg_card;
+    visuals.widgets.noninteractive.weak_bg_fill = palette.bg_center;
     visuals.widgets.noninteractive.bg_stroke = Stroke::NONE;
     visuals.widgets.noninteractive.rounding = Rounding::same(CARD_RADIUS);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, palette.text_primary);
 
-    visuals.widgets.inactive.bg_fill = BG_CARD;
-    visuals.widgets.inactive.weak_bg_fill = BG_CARD;
+    visuals.widgets.inactive.bg_fill = palette.bg_card;
+    visuals.widgets.inactive.weak_bg_fill = palette.bg_card;
     visuals.widgets.inactive.bg_stroke = Stroke::NONE;
     visuals.widgets.inactive.rounding = Rounding::same(CARD_RADIUS);
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT_MUTED);
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, palette.text_muted);
 
-    visuals.widgets.hovered.bg_fill = BG_CARD_HOVER;
-    visuals.widgets.hovered.weak_bg_fill = BG_CARD_HOVER;
+    visuals.widgets.hovered.bg_fill = palette.bg_card_hover;
+    visuals.widgets.hovered.weak_bg_fill = palette.bg_card_hover;
     visuals.widgets.hovered.bg_stroke = Stroke::NONE;
     visuals.widgets.hovered.rounding = Rounding::same(CARD_RADIUS);
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, palette.text_primary);
 
-    visuals.widgets.active.bg_fill = ACCENT_SOFT;
-    visuals.widgets.active.weak_bg_fill = ACCENT_SOFT;
+    visuals.widgets.active.bg_fill = palette.accent_soft;
+    visuals.widgets.active.weak_bg_fill = palette.accent_soft;
     visuals.widgets.active.bg_stroke = Stroke::NONE;
     visuals.widgets.active.rounding = Rounding::same(CARD_RADIUS);
-    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, TEXT_PRIMARY);
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0_f32, palette.text_primary);
 
-    visuals.widgets.open.bg_fill = BG_CARD;
-    visuals.widgets.open.weak_bg_fill = BG_CARD;
+    visuals.widgets.open.bg_fill = palette.bg_card;
+    visuals.widgets.open.weak_bg_fill = palette.bg_card;
     visuals.widgets.open.bg_stroke = Stroke::NONE;
     visuals.widgets.open.rounding = Rounding::same(CARD_RADIUS);
 
     // Muted brand selection colors
-    visuals.selection.bg_fill = ACCENT_SOFT;
+    visuals.selection.bg_fill = palette.accent_soft;
     visuals.selection.stroke = Stroke::NONE;
 
     ctx.set_visuals(visuals);
@@ -189,11 +358,16 @@ pub fn apply_bento_visuals(ctx: &egui::Context) {
     });
 }
 
+/// Convenience overload using default Eclipse palette.
+pub fn apply_bento_visuals_default(ctx: &egui::Context) {
+    apply_bento_visuals(ctx, &BentoPalette::default());
+}
+
 /// Draws a clean quality badge pill:
-/// - If `is_hires`: dark amber-gold glass (fill: rgba(245, 194, 66, 32), stroke: 1.0, rgba(245, 194, 66, 90), text rgb(255, 224, 130)).
-/// - Else (standard lossless / format): purple glass (fill: rgba(156, 108, 255, 36), stroke: Stroke::NONE, text rgb(212, 194, 255)).
+/// - If `is_hires`: dark amber-gold glass.
+/// - Else (standard lossless / format): accent-tinted soft glass with Stroke::NONE.
 /// - Text font: proportional 9.5px bold, rounding 5.0px.
-pub fn quality_badge_pill(ui: &mut Ui, label: &str, is_hires: bool) -> Response {
+pub fn quality_badge_pill(ui: &mut Ui, label: &str, is_hires: bool, palette: &BentoPalette) -> Response {
     let (bg, border_stroke, text_col) = if is_hires {
         (
             BADGE_HIRES_BG,
@@ -202,9 +376,9 @@ pub fn quality_badge_pill(ui: &mut Ui, label: &str, is_hires: bool) -> Response 
         )
     } else {
         (
-            BADGE_LOSSLESS_BG,
+            palette.accent_soft,
             Stroke::NONE,
-            BADGE_LOSSLESS_TEXT,
+            Color32::from_rgb(220, 200, 255),
         )
     };
 
@@ -239,15 +413,15 @@ pub fn quality_badge_pill(ui: &mut Ui, label: &str, is_hires: bool) -> Response 
 }
 
 /// Interactive pill tab switcher:
-/// - If `is_active`: background `ACCENT_SOFT`, text `TEXT_PRIMARY` (bold, 12.0px), rounding `Rounding::same(6.0)`.
-/// - Else: transparent background, text `TEXT_MUTED` (12.0px), with subtle `BG_CARD_HOVER` on hover.
-pub fn segmented_tab_button(ui: &mut Ui, text: &str, is_active: bool) -> Response {
+/// - If `is_active`: background `palette.accent_soft`, text `palette.text_primary` (bold, 12.0px), rounding `Rounding::same(6.0)`.
+/// - Else: transparent background, text `palette.text_muted` (12.0px), with subtle `palette.bg_card_hover` on hover.
+pub fn segmented_tab_button(ui: &mut Ui, text: &str, is_active: bool, palette: &BentoPalette) -> Response {
     let font_id = FontId::new(12.0_f32, egui::FontFamily::Proportional);
 
     let default_text_color = if is_active {
-        TEXT_PRIMARY
+        palette.text_primary
     } else {
-        TEXT_MUTED
+        palette.text_muted
     };
 
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font_id.clone(), default_text_color);
@@ -268,20 +442,20 @@ pub fn segmented_tab_button(ui: &mut Ui, text: &str, is_active: bool) -> Respons
 
         let (bg_fill, text_color, border_stroke) = if is_active {
             (
-                ACCENT_SOFT,
-                TEXT_PRIMARY,
+                palette.accent_soft,
+                palette.text_primary,
                 Stroke::NONE,
             )
         } else if hovered {
             (
-                BG_CARD_HOVER,
-                TEXT_PRIMARY,
+                palette.bg_card_hover,
+                palette.text_primary,
                 Stroke::NONE,
             )
         } else {
             (
                 Color32::TRANSPARENT,
-                TEXT_MUTED,
+                palette.text_muted,
                 Stroke::NONE,
             )
         };
@@ -318,13 +492,100 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_bento_palette_themes() {
+        let themes = ["Eclipse", "Obsidian", "Ember", "Verdant", "Nebula", "Glacier"];
+        for name in &themes {
+            let pal = BentoPalette::from_settings(name, None);
+            // Verify surfaces exist and are non-transparent
+            assert_eq!(pal.bg_bar.a(), 255);
+            assert_eq!(pal.bg_sidebar.a(), 255);
+            assert_eq!(pal.bg_center.a(), 255);
+            assert_eq!(pal.bg_card.a(), 255);
+            assert_eq!(pal.bg_card_hover.a(), 255);
+            assert_eq!(pal.seam.a(), 255);
+            assert_eq!(pal.text_primary.a(), 255);
+            assert!(pal.accent_soft.a() > 0 && pal.accent_soft.a() < 100);
+            assert!(pal.header_glow.a() > 0 && pal.header_glow.a() < 60);
+
+            // Verify frame constructors
+            let panel_frame = pal.panel_frame();
+            assert_eq!(panel_frame.fill, pal.bg_center);
+            assert_eq!(panel_frame.stroke, Stroke::NONE);
+
+            let card_frame = pal.card_frame();
+            assert_eq!(card_frame.fill, pal.bg_card);
+            assert_eq!(card_frame.stroke, Stroke::NONE);
+        }
+
+        // Test custom accent propagation
+        let custom_accent = Some([255, 82, 82]); // Coral red
+        let pal_custom = BentoPalette::from_settings("Eclipse", custom_accent);
+        assert_eq!(pal_custom.accent, Color32::from_rgb(255, 82, 82));
+
+        // Test from_theme constructor
+        let theme = Theme::from_name("Glacier", None);
+        let pal_theme = BentoPalette::from_theme(&theme);
+        assert_eq!(pal_theme.bg_bar, Color32::from_rgb(16, 23, 32));
+        assert_eq!(pal_theme.accent, theme.accent);
+
+        // Verify specific color ramp mappings for all 6 themes
+        let eclipse = BentoPalette::from_settings("Eclipse", None);
+        assert_eq!(eclipse.bg_bar, Color32::from_rgb(18, 21, 26));
+        assert_eq!(eclipse.bg_sidebar, Color32::from_rgb(22, 26, 32));
+        assert_eq!(eclipse.bg_center, Color32::from_rgb(29, 33, 41));
+        assert_eq!(eclipse.bg_card, Color32::from_rgb(37, 42, 52));
+        assert_eq!(eclipse.bg_card_hover, Color32::from_rgb(47, 53, 66));
+        assert_eq!(eclipse.seam, Color32::from_rgb(36, 41, 50));
+
+        let obsidian = BentoPalette::from_settings("Obsidian", None);
+        assert_eq!(obsidian.bg_bar, Color32::from_rgb(10, 11, 14));
+        assert_eq!(obsidian.bg_sidebar, Color32::from_rgb(16, 18, 23));
+        assert_eq!(obsidian.bg_center, Color32::from_rgb(21, 24, 31));
+        assert_eq!(obsidian.bg_card, Color32::from_rgb(30, 34, 43));
+        assert_eq!(obsidian.bg_card_hover, Color32::from_rgb(40, 45, 56));
+        assert_eq!(obsidian.seam, Color32::from_rgb(28, 32, 40));
+
+        let ember = BentoPalette::from_settings("Ember", None);
+        assert_eq!(ember.bg_bar, Color32::from_rgb(26, 19, 19));
+        assert_eq!(ember.bg_sidebar, Color32::from_rgb(33, 24, 24));
+        assert_eq!(ember.bg_center, Color32::from_rgb(41, 30, 30));
+        assert_eq!(ember.bg_card, Color32::from_rgb(53, 39, 39));
+        assert_eq!(ember.bg_card_hover, Color32::from_rgb(66, 50, 50));
+        assert_eq!(ember.seam, Color32::from_rgb(51, 37, 37));
+
+        let verdant = BentoPalette::from_settings("Verdant", None);
+        assert_eq!(verdant.bg_bar, Color32::from_rgb(16, 25, 22));
+        assert_eq!(verdant.bg_sidebar, Color32::from_rgb(21, 33, 29));
+        assert_eq!(verdant.bg_center, Color32::from_rgb(27, 42, 37));
+        assert_eq!(verdant.bg_card, Color32::from_rgb(36, 55, 49));
+        assert_eq!(verdant.bg_card_hover, Color32::from_rgb(46, 69, 62));
+        assert_eq!(verdant.seam, Color32::from_rgb(35, 53, 47));
+
+        let nebula = BentoPalette::from_settings("Nebula", None);
+        assert_eq!(nebula.bg_bar, Color32::from_rgb(19, 18, 32));
+        assert_eq!(nebula.bg_sidebar, Color32::from_rgb(25, 24, 41));
+        assert_eq!(nebula.bg_center, Color32::from_rgb(33, 32, 54));
+        assert_eq!(nebula.bg_card, Color32::from_rgb(43, 42, 69));
+        assert_eq!(nebula.bg_card_hover, Color32::from_rgb(54, 53, 86));
+        assert_eq!(nebula.seam, Color32::from_rgb(41, 40, 66));
+
+        let glacier = BentoPalette::from_settings("Glacier", None);
+        assert_eq!(glacier.bg_bar, Color32::from_rgb(16, 23, 32));
+        assert_eq!(glacier.bg_sidebar, Color32::from_rgb(22, 31, 43));
+        assert_eq!(glacier.bg_center, Color32::from_rgb(29, 40, 54));
+        assert_eq!(glacier.bg_card, Color32::from_rgb(38, 52, 70));
+        assert_eq!(glacier.bg_card_hover, Color32::from_rgb(49, 66, 88));
+        assert_eq!(glacier.seam, Color32::from_rgb(37, 51, 68));
+    }
+
+    #[test]
     fn test_color_tokens() {
         assert_eq!(BG_BAR, Color32::from_rgb(18, 21, 26));
         assert_eq!(BG_SIDEBAR, Color32::from_rgb(22, 26, 32));
         assert_eq!(BG_CENTER, Color32::from_rgb(29, 33, 41));
         assert_eq!(BG_CARD, Color32::from_rgb(37, 42, 52));
         assert_eq!(BG_CARD_HOVER, Color32::from_rgb(47, 53, 66));
-        assert_eq!(SEAM_DARK, Color32::from_rgb(38, 43, 53));
+        assert_eq!(SEAM_DARK, Color32::from_rgb(36, 41, 50));
         assert_eq!(ACCENT_PRIMARY, Color32::from_rgb(156, 108, 255));
         assert_eq!(ACCENT_SOFT, Color32::from_rgba_unmultiplied(156, 108, 255, 34));
         assert_eq!(TEXT_PRIMARY, Color32::from_rgb(240, 242, 246));
@@ -396,13 +657,14 @@ mod tests {
     #[test]
     fn test_apply_bento_visuals() {
         let ctx = egui::Context::default();
-        apply_bento_visuals(&ctx);
+        let palette = BentoPalette::default();
+        apply_bento_visuals(&ctx, &palette);
 
         let visuals = ctx.style().visuals.clone();
         assert!(visuals.dark_mode);
-        assert_eq!(visuals.panel_fill, BG_CENTER);
-        assert_eq!(visuals.window_fill, BG_SIDEBAR);
-        assert_eq!(visuals.extreme_bg_color, BG_BAR);
+        assert_eq!(visuals.panel_fill, palette.bg_center);
+        assert_eq!(visuals.window_fill, palette.bg_sidebar);
+        assert_eq!(visuals.extreme_bg_color, palette.bg_bar);
         assert_eq!(visuals.window_stroke, Stroke::NONE);
         assert_eq!(visuals.window_rounding, Rounding::same(BENTO_RADIUS));
         assert_eq!(visuals.menu_rounding, Rounding::same(CARD_RADIUS));
@@ -411,10 +673,10 @@ mod tests {
         assert_eq!(visuals.widgets.hovered.bg_stroke, Stroke::NONE);
         assert_eq!(visuals.widgets.active.bg_stroke, Stroke::NONE);
         assert_eq!(visuals.widgets.open.bg_stroke, Stroke::NONE);
-        assert_eq!(visuals.widgets.inactive.weak_bg_fill, BG_CARD);
-        assert_eq!(visuals.widgets.hovered.weak_bg_fill, BG_CARD_HOVER);
-        assert_eq!(visuals.widgets.hovered.bg_fill, BG_CARD_HOVER);
-        assert_eq!(visuals.selection.bg_fill, ACCENT_SOFT);
+        assert_eq!(visuals.widgets.inactive.weak_bg_fill, palette.bg_card);
+        assert_eq!(visuals.widgets.hovered.weak_bg_fill, palette.bg_card_hover);
+        assert_eq!(visuals.widgets.hovered.bg_fill, palette.bg_card_hover);
+        assert_eq!(visuals.selection.bg_fill, palette.accent_soft);
         assert_eq!(visuals.selection.stroke, Stroke::NONE);
 
         let spacing = ctx.style().spacing.clone();
@@ -428,25 +690,26 @@ mod tests {
     #[test]
     fn test_widgets_rendering() {
         let ctx = egui::Context::default();
+        let palette = BentoPalette::default();
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 // Hi-Res pill
-                let res_hires = quality_badge_pill(ui, "FLAC 24-bit/96kHz", true);
+                let res_hires = quality_badge_pill(ui, "FLAC 24-bit/96kHz", true, &palette);
                 assert!(res_hires.rect.width() > 0.0);
                 assert!(res_hires.rect.height() >= 16.0);
 
                 // Lossless pill
-                let res_lossless = quality_badge_pill(ui, "LOSSLESS", false);
+                let res_lossless = quality_badge_pill(ui, "LOSSLESS", false, &palette);
                 assert!(res_lossless.rect.width() > 0.0);
                 assert!(res_lossless.rect.height() >= 16.0);
 
                 // Active segmented tab button
-                let res_active = segmented_tab_button(ui, "Queue", true);
+                let res_active = segmented_tab_button(ui, "Queue", true, &palette);
                 assert!(res_active.rect.width() > 0.0);
                 assert!(res_active.rect.height() >= 26.0);
 
                 // Inactive segmented tab button
-                let res_inactive = segmented_tab_button(ui, "Lyrics", false);
+                let res_inactive = segmented_tab_button(ui, "Lyrics", false, &palette);
                 assert!(res_inactive.rect.width() > 0.0);
                 assert!(res_inactive.rect.height() >= 26.0);
             });

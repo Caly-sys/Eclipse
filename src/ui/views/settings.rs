@@ -70,11 +70,12 @@ pub fn render_micro_label(ui: &mut Ui, text: &str, color: Color32) {
 }
 
 pub fn section_header(ui: &mut Ui, label: &str, theme: &Theme) {
+    let palette = theme.bento_palette();
     ui.add_space(10.0);
     ui.label(
         RichText::new(label)
             .size(11.0)
-            .color(theme.text_muted)
+            .color(palette.text_muted)
             .strong(),
     );
     ui.add_space(4.0);
@@ -88,23 +89,20 @@ pub fn pill_toggle_switch(ui: &mut Ui, value: &mut bool, theme: &Theme) -> egui:
         response.mark_changed();
     }
     if ui.is_rect_visible(rect) {
+        let palette = theme.bento_palette();
         let how_on = ui.ctx().animate_bool_responsive(response.id, *value);
         let radius = rect.height() / 2.0;
 
-        // Smooth background interpolation
-        let bg_off = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
-        let bg_on = theme.accent;
+        // Smooth background interpolation between card surface and vibrant accent
+        let bg_off = palette.bg_card;
+        let bg_on = palette.accent;
         let r = egui::lerp(bg_off.r() as f32..=bg_on.r() as f32, how_on) as u8;
         let g = egui::lerp(bg_off.g() as f32..=bg_on.g() as f32, how_on) as u8;
         let b = egui::lerp(bg_off.b() as f32..=bg_on.b() as f32, how_on) as u8;
         let a = egui::lerp(bg_off.a() as f32..=bg_on.a() as f32, how_on) as u8;
         let bg = Color32::from_rgba_premultiplied(r, g, b, a);
 
-        let stroke_a = egui::lerp(25.0..=55.0, how_on) as u8;
-        let stroke_color = Color32::from_rgba_unmultiplied(255, 255, 255, stroke_a);
-
         ui.painter().rect_filled(rect, Rounding::same(radius), bg);
-        ui.painter().rect_stroke(rect, Rounding::same(radius), Stroke::new(1.0_f32, stroke_color));
 
         // Knob circle
         let knob_radius = radius - 3.0;
@@ -113,7 +111,7 @@ pub fn pill_toggle_switch(ui: &mut Ui, value: &mut bool, theme: &Theme) -> egui:
         let knob_color = if *value {
             Color32::WHITE
         } else {
-            Color32::from_rgb(180, 180, 200)
+            palette.text_secondary
         };
 
         ui.painter().circle_filled(knob_center, knob_radius, knob_color);
@@ -132,12 +130,11 @@ pub fn setting_row_card<R>(
     subtitle: &str,
     content_fn: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    let card_bg = Color32::from_rgba_unmultiplied(255, 255, 255, 6); // rgba(255, 255, 255, 0.025)
-    let card_border = Color32::from_rgba_unmultiplied(255, 255, 255, 18); // rgba(255, 255, 255, 0.07)
+    let palette = theme.bento_palette();
     let frame = Frame::none()
-        .fill(card_bg)
-        .stroke(Stroke::new(1.0_f32, card_border))
-        .rounding(Rounding::same(10.0))
+        .fill(palette.bg_card)
+        .stroke(Stroke::NONE)
+        .rounding(Rounding::same(8.0))
         .inner_margin(Margin {
             left: 18.0,
             right: 18.0,
@@ -160,7 +157,7 @@ pub fn setting_row_card<R>(
                             RichText::new(title)
                                 .size(13.5)
                                 .strong()
-                                .color(theme.text_primary),
+                                .color(palette.text_primary),
                         );
                         if !subtitle.is_empty() {
                             ui.add_space(2.0);
@@ -168,7 +165,7 @@ pub fn setting_row_card<R>(
                                 egui::Label::new(
                                     RichText::new(subtitle)
                                         .size(11.5)
-                                        .color(theme.text_secondary),
+                                        .color(palette.text_secondary),
                                 )
                                 .wrap(),
                             );
@@ -193,12 +190,11 @@ pub fn segmented_pill_group(
     theme: &Theme,
 ) -> bool {
     let mut changed = false;
-    let frame_bg = Color32::from_rgba_unmultiplied(255, 255, 255, 10);
-    let frame_stroke = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 20));
+    let palette = theme.bento_palette();
 
     Frame::none()
-        .fill(frame_bg)
-        .stroke(frame_stroke)
+        .fill(palette.bg_sidebar)
+        .stroke(Stroke::NONE)
         .rounding(Rounding::same(999.0))
         .inner_margin(Margin::same(2.0))
         .show(ui, |ui| {
@@ -206,14 +202,13 @@ pub fn segmented_pill_group(
             ui.horizontal(|ui| {
                 for (val, label) in options {
                     let is_selected = current.as_str() == *val;
-                    let (bg, text_color, stroke) = if is_selected {
+                    let (bg, text_color) = if is_selected {
                         (
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 38),
-                            Color32::WHITE,
-                            Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 50)),
+                            palette.accent,
+                            Color32::from_rgb(16, 18, 22),
                         )
                     } else {
-                        (Color32::TRANSPARENT, theme.text_secondary, Stroke::NONE)
+                        (Color32::TRANSPARENT, palette.text_secondary)
                     };
 
                     let btn_padding = vec2(11.0, 5.0);
@@ -232,13 +227,12 @@ pub fn segmented_pill_group(
                         let fill = if is_selected {
                             bg
                         } else if resp.hovered() {
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 14)
+                            palette.bg_card_hover
                         } else {
                             Color32::TRANSPARENT
                         };
-                        ui.painter().rect_filled(rect, Rounding::same(999.0), fill);
-                        if is_selected {
-                            ui.painter().rect_stroke(rect, Rounding::same(999.0), stroke);
+                        if fill != Color32::TRANSPARENT {
+                            ui.painter().rect_filled(rect, Rounding::same(999.0), fill);
                         }
                         let text_pos = egui::pos2(
                             rect.min.x + btn_padding.x,
@@ -258,24 +252,22 @@ pub fn segmented_pill_group(
 }
 
 pub fn kbd_badge(ui: &mut Ui, key: &str, theme: &Theme) {
+    let palette = theme.bento_palette();
     let parts: Vec<&str> = key.split('+').map(|s| s.trim()).collect();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         for (i, part) in parts.iter().enumerate() {
             if i > 0 {
-                ui.label(RichText::new("+").size(11.0).color(theme.text_muted));
+                ui.label(RichText::new("+").size(11.0).color(palette.text_muted));
             }
             let font_id = egui::FontId::monospace(11.5);
-            let text_color = Color32::WHITE;
+            let text_color = palette.text_primary;
             let galley = ui.painter().layout_no_wrap(part.to_string(), font_id, text_color);
             let pad = vec2(8.0, 4.0);
             let size = vec2((galley.size().x + pad.x * 2.0).max(24.0), 22.0);
             let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
             if ui.is_rect_visible(rect) {
-                let bg = Color32::from_rgba_unmultiplied(255, 255, 255, 20);
-                let stroke = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 45));
-                ui.painter().rect_filled(rect, Rounding::same(5.0), bg);
-                ui.painter().rect_stroke(rect, Rounding::same(5.0), stroke);
+                ui.painter().rect_filled(rect, Rounding::same(5.0), palette.bg_sidebar);
                 let text_pos = egui::pos2(
                     rect.center().x - galley.size().x / 2.0,
                     rect.center().y - galley.size().y / 2.0,
@@ -298,6 +290,7 @@ pub fn render_settings(
     on_refresh_library: Option<&mut bool>,
 ) {
     let old_cfg = cfg.clone();
+    let palette = theme.bento_palette();
 
     ScrollArea::vertical()
         .id_salt("settings_view_scroll")
@@ -306,15 +299,15 @@ pub fn render_settings(
             ui.spacing_mut().item_spacing = vec2(0.0, 10.0);
 
             // 1. Header Layout
-            // Top micro-label PREFERENCES (11px, uppercase, letter-spacing 0.12em, theme.text_muted)
-            render_micro_label(ui, "PREFERENCES", theme.text_muted);
+            // Top micro-label PREFERENCES (11px, uppercase, letter-spacing 0.12em, palette.text_muted)
+            render_micro_label(ui, "PREFERENCES", palette.text_muted);
             ui.add_space(1.0);
 
-            // Large Settings heading (28px, bold, theme.text_primary)
+            // Large Settings heading (28px, bold, palette.text_primary)
             ui.label(
                 RichText::new("Settings")
                     .size(28.0)
-                    .color(theme.text_primary)
+                    .color(palette.text_primary)
                     .strong(),
             );
             ui.add_space(12.0);
@@ -330,9 +323,9 @@ pub fn render_settings(
                 for tab in SettingsTab::ALL {
                     let is_active = current_tab == tab;
                     let text_color = if is_active {
-                        Color32::WHITE
+                        palette.text_primary
                     } else {
-                        theme.text_secondary
+                        palette.text_secondary
                     };
 
                     let font_id = egui::FontId::proportional(12.5);
@@ -348,15 +341,9 @@ pub fn render_settings(
 
                     if ui.is_rect_visible(rect) {
                         if is_active {
-                            // Active tab style: rounded translucent pill
-                            // background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 999px; color: #fff; font-weight: 600;
-                            let bg = Color32::from_rgba_unmultiplied(255, 255, 255, 31);
-                            let border = Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 46));
-                            ui.painter().rect_filled(rect, Rounding::same(999.0), bg);
-                            ui.painter().rect_stroke(rect, Rounding::same(999.0), border);
+                            ui.painter().rect_filled(rect, Rounding::same(999.0), palette.accent_soft);
                         } else if resp.hovered() {
-                            let hover_bg = Color32::from_rgba_unmultiplied(255, 255, 255, 14);
-                            ui.painter().rect_filled(rect, Rounding::same(999.0), hover_bg);
+                            ui.painter().rect_filled(rect, Rounding::same(999.0), palette.bg_card_hover);
                         }
 
                         let text_pos = egui::pos2(
@@ -464,18 +451,19 @@ fn render_appearance_tab(
                         *on_theme_changed = true;
                     }
                     if ui.is_rect_visible(rect) {
+                        let palette = theme.bento_palette();
                         ui.painter().rect_filled(rect, Rounding::same(12.0), c);
                         if cfg.accent_color == *rgb {
                             ui.painter().rect_stroke(
                                 rect.expand(2.0),
                                 Rounding::same(14.0),
-                                Stroke::new(2.0_f32, Color32::WHITE),
+                                Stroke::new(2.0_f32, palette.text_primary),
                             );
                         } else if resp.hovered() {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(13.0),
-                                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 120)),
+                                Stroke::new(1.0_f32, palette.accent_soft),
                             );
                         }
                     }
@@ -560,13 +548,14 @@ fn render_appearance_tab(
         "Quit Application",
         "Completely close Eclipse and stop background playback (or press Ctrl+Q).",
         |ui| {
+            let palette = theme.bento_palette();
             let btn = egui::Button::new(
                 RichText::new("Exit Eclipse")
                     .color(Color32::from_rgb(239, 68, 68))
                     .size(12.0),
             )
-            .fill(theme.surface)
-            .stroke(Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(239, 68, 68, 80)))
+            .fill(palette.bg_sidebar)
+            .stroke(Stroke::NONE)
             .rounding(Rounding::same(6.0));
             if ui.add(btn).clicked() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -812,12 +801,11 @@ fn render_equalizer_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
     section_header(ui, "FREQUENCY BANDS", theme);
 
     // 4. 10-Band Graphic Rack Card
-    let card_bg = Color32::from_rgba_unmultiplied(255, 255, 255, 6);
-    let card_border = Color32::from_rgba_unmultiplied(255, 255, 255, 18);
+    let palette = theme.bento_palette();
     Frame::none()
-        .fill(card_bg)
-        .stroke(Stroke::new(1.0_f32, card_border))
-        .rounding(Rounding::same(10.0))
+        .fill(palette.bg_card)
+        .stroke(Stroke::NONE)
+        .rounding(Rounding::same(8.0))
         .inner_margin(Margin {
             left: 18.0,
             right: 18.0,
@@ -830,7 +818,7 @@ fn render_equalizer_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
                     RichText::new("10-Band Graphic Equalizer")
                         .size(13.5)
                         .strong()
-                        .color(theme.text_primary),
+                        .color(palette.text_primary),
                 );
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Reset to Flat").clicked() {
@@ -842,7 +830,7 @@ fn render_equalizer_tab(ui: &mut Ui, cfg: &mut AppConfig, theme: &Theme) {
             ui.label(
                 RichText::new("Adjust discrete frequency bands from -12.0 dB to +12.0 dB.")
                     .size(11.5)
-                    .color(theme.text_secondary),
+                    .color(palette.text_secondary),
             );
             ui.add_space(14.0);
 
@@ -903,12 +891,11 @@ fn render_library_tab(
     section_header(ui, "MONITORED FOLDERS", theme);
 
     // 1. Monitored Folders Card
-    let card_bg = Color32::from_rgba_unmultiplied(255, 255, 255, 6);
-    let card_border = Color32::from_rgba_unmultiplied(255, 255, 255, 18);
+    let palette = theme.bento_palette();
     Frame::none()
-        .fill(card_bg)
-        .stroke(Stroke::new(1.0_f32, card_border))
-        .rounding(Rounding::same(10.0))
+        .fill(palette.bg_card)
+        .stroke(Stroke::NONE)
+        .rounding(Rounding::same(8.0))
         .inner_margin(Margin {
             left: 18.0,
             right: 18.0,
@@ -922,7 +909,7 @@ fn render_library_tab(
                         RichText::new("Music folders")
                             .size(13.5)
                             .strong()
-                            .color(theme.text_primary),
+                            .color(palette.text_primary),
                     );
                     ui.add_space(2.0);
                     ui.label(
@@ -930,7 +917,7 @@ fn render_library_tab(
                             "Eclipse scans these directories for lossless and compressed audio.",
                         )
                         .size(11.5)
-                        .color(theme.text_secondary),
+                        .color(palette.text_secondary),
                     );
                 });
 
@@ -938,29 +925,22 @@ fn render_library_tab(
                     let (add_rect, add_resp) =
                         ui.allocate_exact_size(vec2(110.0, 28.0), egui::Sense::click());
                     let add_bg = if add_resp.hovered() {
-                        theme.surface_hover
+                        palette.bg_card_hover
                     } else {
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 16)
-                    };
-                    let add_stroke = if add_resp.hovered() {
-                        Stroke::new(1.0_f32, theme.accent)
-                    } else {
-                        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 30))
+                        palette.bg_sidebar
                     };
                     ui.painter().rect_filled(add_rect, Rounding::same(6.0), add_bg);
-                    ui.painter()
-                        .rect_stroke(add_rect, Rounding::same(6.0), add_stroke);
                     let icon_r = Rect::from_center_size(
                         egui::pos2(add_rect.min.x + 14.0, add_rect.center().y),
                         vec2(11.0, 11.0),
                     );
-                    paint_icon(ui.painter(), Icon::Plus, icon_r, theme.accent);
+                    paint_icon(ui.painter(), Icon::Plus, icon_r, palette.accent);
                     ui.painter().text(
                         egui::pos2(add_rect.min.x + 26.0, add_rect.center().y),
                         egui::Align2::LEFT_CENTER,
                         "Add Folder",
                         egui::FontId::proportional(11.5),
-                        theme.accent,
+                        palette.accent,
                     );
                     if add_resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -978,18 +958,18 @@ fn render_library_tab(
                 ui.label(
                     RichText::new("No monitored folders configured.")
                         .size(12.0)
-                        .color(theme.text_muted)
+                        .color(palette.text_muted)
                         .italics(),
                 );
             } else {
                 for (i, folder) in cfg.music_folders.iter().enumerate() {
                     ui.horizontal(|ui| {
-                        render_icon(ui, Icon::Folder, 14.0, theme.accent);
+                        render_icon(ui, Icon::Folder, 14.0, palette.accent);
                         ui.add_space(4.0);
-                        ui.label(RichText::new(folder).size(12.5).color(theme.text_primary));
+                        ui.label(RichText::new(folder).size(12.5).color(palette.text_primary));
 
                         ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            if icon_button(ui, Icon::Close, 11.0, theme.text_muted)
+                            if icon_button(ui, Icon::Close, 11.0, palette.text_muted)
                                 .on_hover_text("Remove Folder")
                                 .clicked()
                             {
@@ -1013,30 +993,23 @@ fn render_library_tab(
             let (scan_rect, scan_resp) =
                 ui.allocate_exact_size(vec2(190.0, 30.0), egui::Sense::click());
             let scan_bg = if scan_resp.hovered() {
-                theme.surface_hover
+                palette.bg_card_hover
             } else {
-                Color32::from_rgba_unmultiplied(255, 255, 255, 12)
-            };
-            let scan_stroke = if scan_resp.hovered() {
-                Stroke::new(1.0_f32, theme.accent)
-            } else {
-                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 26))
+                palette.bg_sidebar
             };
             ui.painter()
                 .rect_filled(scan_rect, Rounding::same(6.0), scan_bg);
-            ui.painter()
-                .rect_stroke(scan_rect, Rounding::same(6.0), scan_stroke);
             let scan_icon_r = Rect::from_center_size(
                 egui::pos2(scan_rect.min.x + 16.0, scan_rect.center().y),
                 vec2(12.0, 12.0),
             );
-            paint_icon(ui.painter(), Icon::Refresh, scan_icon_r, theme.accent);
+            paint_icon(ui.painter(), Icon::Refresh, scan_icon_r, palette.accent);
             ui.painter().text(
                 egui::pos2(scan_rect.min.x + 30.0, scan_rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 "Rescan Library Now",
                 egui::FontId::proportional(12.0),
-                theme.accent,
+                palette.accent,
             );
             if scan_resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1569,6 +1542,27 @@ mod tests {
                 let mut cfg = AppConfig::default();
                 let theme = Theme::from_name("Eclipse", None);
                 render_streaming_tab(ui, &mut cfg, &theme, Some(&db), Some(&mut refreshed));
+            });
+        });
+    }
+
+    #[test]
+    fn test_setting_row_card_and_segmented_pill_group_styling() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let palette = theme.bento_palette();
+
+                let val = setting_row_card(ui, &theme, "Title", "Subtitle", |_ui| 42);
+                assert_eq!(val, 42);
+
+                let options = [("a", "Alpha"), ("b", "Beta")];
+                let mut current = "a".to_string();
+                let changed = segmented_pill_group(ui, &options, &mut current, &theme);
+                assert!(!changed);
+                assert_eq!(current, "a");
+                assert_eq!(palette.bg_card, Color32::from_rgb(37, 42, 52));
             });
         });
     }

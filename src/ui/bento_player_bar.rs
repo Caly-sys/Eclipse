@@ -12,22 +12,33 @@ use crate::config::RepeatMode;
 use crate::library::model::format_time_secs;
 use crate::streams::controller::StreamController;
 use crate::ui::art::AlbumArtManager;
+use crate::ui::bento_theme::{quality_badge_pill, BentoPalette};
 use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::playerbar::{current_playback_time, seek_to, SeekbarDragState};
 use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, FontId, Layout, Rect, RichText, Rounding, Stroke, Ui};
 use std::time::Duration;
 
-/// Design tokens matching Feishin matte-slate aesthetic
+/// Design tokens matching Feishin matte-slate aesthetic (legacy constants preserved for tests/callers)
+#[allow(dead_code)]
 const ACCENT_PURPLE: Color32 = Color32::from_rgb(156, 108, 255); // #9C6CFF
+#[allow(dead_code)]
 const ACCENT_PURPLE_HOVER: Color32 = Color32::from_rgb(175, 132, 255);
+#[allow(dead_code)]
 const ACCENT_PURPLE_DOWN: Color32 = Color32::from_rgb(138, 90, 240);
+#[allow(dead_code)]
 const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
+#[allow(dead_code)]
 const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
+#[allow(dead_code)]
 const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
+#[allow(dead_code)]
 const BG_BAR: Color32 = Color32::from_rgb(18, 21, 26);
+#[allow(dead_code)]
 const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
+#[allow(dead_code)]
 const RAIL_BG: Color32 = Color32::from_rgb(39, 39, 42);
+#[allow(dead_code)]
 const BG_BUTTON_HOVER: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 12);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -50,6 +61,7 @@ pub fn render_bento_player_dock(
     theme: &Theme,
     is_inspector_open: bool,
 ) -> BentoPlayerDockAction {
+    let palette = theme.bento_palette();
     let mut action = BentoPlayerDockAction::None;
 
     let dock_h = 75.0;
@@ -58,7 +70,7 @@ pub fn render_bento_player_dock(
     ui.set_min_width(full_w);
 
     let dock_frame = egui::Frame::none()
-        .fill(BG_BAR)
+        .fill(palette.bg_bar)
         .rounding(Rounding::ZERO)
         .stroke(Stroke::NONE)
         .inner_margin(egui::Margin::symmetric(16.0, 5.0));
@@ -81,7 +93,7 @@ pub fn render_bento_player_dock(
                 vec2(left_w, dock_h - 10.0),
                 Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    render_zone1_metadata(ui, player, art_manager, theme, left_w, &mut action);
+                    render_zone1_metadata(ui, player, art_manager, &palette, left_w, &mut action);
                 },
             );
 
@@ -90,7 +102,7 @@ pub fn render_bento_player_dock(
                 vec2(center_w, dock_h - 10.0),
                 Layout::top_down(egui::Align::Center),
                 |ui| {
-                    render_zone2_transport(ui, player, stream_controller, center_w);
+                    render_zone2_transport(ui, player, stream_controller, &palette, center_w);
                 },
             );
 
@@ -104,7 +116,7 @@ pub fn render_bento_player_dock(
                         vec2(right_w, 36.0),
                         Layout::right_to_left(egui::Align::Center),
                         |ui| {
-                            render_zone3_controls(ui, player, stream_controller, is_inspector_open, &mut action);
+                            render_zone3_controls(ui, player, stream_controller, &palette, is_inspector_open, &mut action);
                         },
                     );
                 },
@@ -112,12 +124,12 @@ pub fn render_bento_player_dock(
         });
     });
 
-    // 1.0px SEAM_DARK top divider line across the top edge
+    // 1.0px seam top divider line across the top edge
     let top_line_rect = Rect::from_min_max(
         pos2(frame_resp.response.rect.min.x, frame_resp.response.rect.min.y),
         pos2(frame_resp.response.rect.max.x, frame_resp.response.rect.min.y + 1.0),
     );
-    ui.painter().rect_filled(top_line_rect, Rounding::ZERO, SEAM_DARK);
+    ui.painter().rect_filled(top_line_rect, Rounding::ZERO, palette.seam);
 
     action
 }
@@ -130,7 +142,7 @@ fn render_zone1_metadata(
     ui: &mut Ui,
     player: &PlayerController,
     art_manager: &mut AlbumArtManager,
-    theme: &Theme,
+    palette: &BentoPalette,
     left_w: f32,
     action: &mut BentoPlayerDockAction,
 ) {
@@ -142,12 +154,12 @@ fn render_zone1_metadata(
             let (prov_icon, prov_color) = match prov_id {
                 "spotify" => (Icon::Spotify, Color32::from_rgb(30, 215, 96)),
                 "youtube" => (Icon::YouTube, Color32::from_rgb(255, 60, 60)),
-                _ => (Icon::Disc, ACCENT_PURPLE),
+                _ => (Icon::Disc, palette.accent),
             };
 
             // 46x46 Album Art / Stream Badge with Rounding::same(8.0) (borderless)
             let (art_rect, _) = ui.allocate_exact_size(vec2(46.0, 46.0), egui::Sense::hover());
-            ui.painter().rect_filled(art_rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 25));
+            ui.painter().rect_filled(art_rect, Rounding::same(8.0), palette.bg_card);
             let icon_rect = Rect::from_center_size(art_rect.center(), vec2(20.0, 20.0));
             paint_icon(ui.painter(), prov_icon, icon_rect, prov_color);
 
@@ -155,9 +167,9 @@ fn render_zone1_metadata(
 
             // Title and Artist column
             let text_w = (left_w - 46.0 - 16.0).max(60.0);
-            render_title_artist_column(ui, track.display_title(), track.display_artist(), "STREAM", false, text_w);
+            render_title_artist_column(ui, track.display_title(), track.display_artist(), "STREAM", false, palette, text_w);
         } else {
-            render_empty_track_zone(ui, theme);
+            render_empty_track_zone(ui, palette);
         }
     } else if let Some(track) = player.current_track() {
         let track_id = track.id;
@@ -175,9 +187,9 @@ fn render_zone1_metadata(
         }
 
         if !painted_cover {
-            ui.painter().rect_filled(art_rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 25));
+            ui.painter().rect_filled(art_rect, Rounding::same(8.0), palette.bg_card);
             let icon_rect = Rect::from_center_size(art_rect.center(), vec2(20.0, 20.0));
-            paint_icon(ui.painter(), Icon::Disc, icon_rect, TEXT_MUTED);
+            paint_icon(ui.painter(), Icon::Disc, icon_rect, palette.text_muted);
         }
 
         ui.add_space(8.0);
@@ -202,7 +214,7 @@ fn render_zone1_metadata(
         };
 
         let text_w = (left_w - 46.0 - 32.0 - 18.0).max(60.0);
-        render_title_artist_column(ui, track.display_title(), track.display_artist(), &format_badge_text, is_hires, text_w);
+        render_title_artist_column(ui, track.display_title(), track.display_artist(), &format_badge_text, is_hires, palette, text_w);
 
         ui.add_space(4.0);
 
@@ -212,11 +224,11 @@ fn render_zone1_metadata(
 
         if is_hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            ui.painter().rect_filled(heart_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+            ui.painter().rect_filled(heart_rect, Rounding::same(6.0), palette.bg_card_hover);
         }
 
         let heart_icon = if is_fav { Icon::Heart } else { Icon::HeartOutline };
-        let heart_color = if is_fav { ACCENT_PURPLE } else { TEXT_MUTED };
+        let heart_color = if is_fav { palette.accent } else { palette.text_muted };
         let icon_box = Rect::from_center_size(heart_rect.center(), vec2(15.0, 15.0));
         paint_icon(ui.painter(), heart_icon, icon_box, heart_color);
 
@@ -225,7 +237,7 @@ fn render_zone1_metadata(
             *action = BentoPlayerDockAction::ToggleFavorite(track_id);
         }
     } else {
-        render_empty_track_zone(ui, theme);
+        render_empty_track_zone(ui, palette);
     }
 }
 
@@ -236,6 +248,7 @@ fn render_title_artist_column(
     artist: &str,
     badge: &str,
     is_hires: bool,
+    palette: &BentoPalette,
     max_w: f32,
 ) {
     ui.allocate_ui_with_layout(
@@ -246,43 +259,43 @@ fn render_title_artist_column(
 
             // Title
             let title_font = FontId::proportional(12.5);
-            let truncated_title = truncate_string(ui, title, title_font.clone(), TEXT_PRIMARY, max_w);
-            ui.label(RichText::new(truncated_title).size(12.5).strong().color(TEXT_PRIMARY));
+            let truncated_title = truncate_string(ui, title, title_font.clone(), palette.text_primary, max_w);
+            ui.label(RichText::new(truncated_title).size(12.5).strong().color(palette.text_primary));
 
             // Artist and Quality Badge row
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
                 let artist_max_w = (max_w - 60.0).max(30.0);
                 let artist_font = FontId::proportional(11.0);
-                let truncated_artist = truncate_string(ui, artist, artist_font, TEXT_SECONDARY, artist_max_w);
-                ui.label(RichText::new(truncated_artist).size(11.0).color(TEXT_SECONDARY));
+                let truncated_artist = truncate_string(ui, artist, artist_font, palette.text_secondary, artist_max_w);
+                ui.label(RichText::new(truncated_artist).size(11.0).color(palette.text_secondary));
 
                 // Quality format pill badge via quality_badge_pill
-                crate::ui::bento_theme::quality_badge_pill(ui, badge, is_hires);
+                quality_badge_pill(ui, badge, is_hires, palette);
             });
         },
     );
 }
 
 /// Fallback placeholder when no track is currently playing.
-fn render_empty_track_zone(ui: &mut Ui, _theme: &Theme) {
+fn render_empty_track_zone(ui: &mut Ui, palette: &BentoPalette) {
     let (art_rect, _) = ui.allocate_exact_size(vec2(46.0, 46.0), egui::Sense::hover());
-    ui.painter().rect_filled(art_rect, Rounding::same(8.0), Color32::from_rgb(22, 22, 25));
+    ui.painter().rect_filled(art_rect, Rounding::same(8.0), palette.bg_card);
     let icon_rect = Rect::from_center_size(art_rect.center(), vec2(20.0, 20.0));
-    paint_icon(ui.painter(), Icon::Music, icon_rect, TEXT_MUTED);
+    paint_icon(ui.painter(), Icon::Music, icon_rect, palette.text_muted);
 
     ui.add_space(8.0);
     ui.vertical(|ui| {
-        ui.label(RichText::new("Not Playing").color(TEXT_MUTED).size(12.5));
-        ui.label(RichText::new("Select a track to start").color(TEXT_MUTED).size(10.5));
+        ui.label(RichText::new("Not Playing").color(palette.text_muted).size(12.5));
+        ui.label(RichText::new("Select a track to start").color(palette.text_muted).size(10.5));
     });
 }
 
 /// Renders a crisp format pill badge (e.g. FLAC 24/48, MP3 320k, STREAM).
 #[allow(dead_code)]
-fn render_dock_format_badge(ui: &mut Ui, text: &str) {
+fn render_dock_format_badge(ui: &mut Ui, text: &str, palette: &BentoPalette) {
     let is_hires = text.contains("24/") || text.contains("96") || text.contains("192");
-    crate::ui::bento_theme::quality_badge_pill(ui, text, is_hires);
+    quality_badge_pill(ui, text, is_hires, palette);
 }
 
 // =============================================================================
@@ -293,6 +306,7 @@ fn render_zone2_transport(
     ui: &mut Ui,
     player: &mut PlayerController,
     stream_controller: Option<&StreamController>,
+    palette: &BentoPalette,
     center_w: f32,
 ) {
     ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
@@ -330,9 +344,9 @@ fn render_zone2_transport(
     let shuffle_resp = ui.interact(shuffle_rect, ui.id().with("bento_dock_shuffle"), egui::Sense::click());
     if shuffle_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(shuffle_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(shuffle_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
-    let shuffle_color = if !is_stream && player.shuffle { ACCENT_PURPLE } else { TEXT_MUTED };
+    let shuffle_color = if !is_stream && player.shuffle { palette.accent } else { palette.text_muted };
     paint_icon(ui.painter(), Icon::Shuffle, Rect::from_center_size(shuffle_rect.center(), vec2(14.0, 14.0)), shuffle_color);
     let shuffle_resp = shuffle_resp.on_hover_text("Shuffle (S)");
     if shuffle_resp.clicked() && !is_stream {
@@ -343,27 +357,20 @@ fn render_zone2_transport(
     let prev_resp = ui.interact(prev_rect, ui.id().with("bento_dock_prev"), egui::Sense::click());
     if prev_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(prev_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(prev_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
-    paint_icon(ui.painter(), Icon::SkipBack, Rect::from_center_size(prev_rect.center(), vec2(15.0, 15.0)), Color32::from_rgb(228, 228, 231));
+    paint_icon(ui.painter(), Icon::SkipBack, Rect::from_center_size(prev_rect.center(), vec2(15.0, 15.0)), palette.text_primary);
     let prev_resp = prev_resp.on_hover_text("Previous (B)");
     if prev_resp.clicked() {
         player.prev();
     }
 
-    // 3. Play / Pause Button (32px diameter circular purple badge #9C6CFF with white vector icon)
+    // 3. Play / Pause Button (32px diameter circular accent badge with white vector icon)
     let play_resp = ui.interact(play_rect, ui.id().with("bento_dock_play"), egui::Sense::click());
     if play_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    let play_fill = if play_resp.is_pointer_button_down_on() {
-        ACCENT_PURPLE_DOWN
-    } else if play_resp.hovered() {
-        ACCENT_PURPLE_HOVER
-    } else {
-        ACCENT_PURPLE
-    };
-    ui.painter().circle_filled(play_rect.center(), 16.0, play_fill);
+    ui.painter().circle_filled(play_rect.center(), 16.0, palette.accent);
 
     let play_icon = if is_playing { Icon::Pause } else { Icon::Play };
     let play_icon_rect = Rect::from_center_size(play_rect.center(), vec2(14.0, 14.0));
@@ -393,9 +400,9 @@ fn render_zone2_transport(
     let next_resp = ui.interact(next_rect, ui.id().with("bento_dock_next"), egui::Sense::click());
     if next_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(next_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(next_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
-    paint_icon(ui.painter(), Icon::SkipForward, Rect::from_center_size(next_rect.center(), vec2(15.0, 15.0)), Color32::from_rgb(228, 228, 231));
+    paint_icon(ui.painter(), Icon::SkipForward, Rect::from_center_size(next_rect.center(), vec2(15.0, 15.0)), palette.text_primary);
     let next_resp = next_resp.on_hover_text("Next (N)");
     if next_resp.clicked() {
         player.next();
@@ -405,16 +412,16 @@ fn render_zone2_transport(
     let repeat_resp = ui.interact(repeat_rect, ui.id().with("bento_dock_repeat"), egui::Sense::click());
     if repeat_resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(repeat_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(repeat_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
     let (rep_icon, rep_color) = if !is_stream {
         match player.repeat {
-            RepeatMode::Off => (Icon::Repeat, TEXT_MUTED),
-            RepeatMode::All => (Icon::Repeat, ACCENT_PURPLE),
-            RepeatMode::One => (Icon::RepeatOne, ACCENT_PURPLE),
+            RepeatMode::Off => (Icon::Repeat, palette.text_muted),
+            RepeatMode::All => (Icon::Repeat, palette.accent),
+            RepeatMode::One => (Icon::RepeatOne, palette.accent),
         }
     } else {
-        (Icon::Repeat, TEXT_MUTED)
+        (Icon::Repeat, palette.text_muted)
     };
     paint_icon(ui.painter(), rep_icon, Rect::from_center_size(repeat_rect.center(), vec2(14.0, 14.0)), rep_color);
     let repeat_resp = repeat_resp.on_hover_text("Repeat (R)");
@@ -457,7 +464,7 @@ fn render_zone2_transport(
         // Elapsed timestamp
         ui.label(
             RichText::new(format_time_secs(display_pos))
-                .color(TEXT_MUTED)
+                .color(palette.text_muted)
                 .size(11.0),
         );
 
@@ -470,6 +477,7 @@ fn render_zone2_transport(
             seekbar_w,
             player,
             stream_controller,
+            palette,
             seekbar_id,
             &mut drag_state,
         );
@@ -477,7 +485,7 @@ fn render_zone2_transport(
         // Total duration timestamp
         ui.label(
             RichText::new(format_time_secs(dur))
-                .color(TEXT_MUTED)
+                .color(palette.text_muted)
                 .size(11.0),
         );
     });
@@ -494,6 +502,7 @@ fn render_dock_seekbar(
     width: f32,
     player: &mut PlayerController,
     stream_controller: Option<&StreamController>,
+    palette: &BentoPalette,
     seekbar_id: egui::Id,
     drag_state: &mut SeekbarDragState,
 ) {
@@ -552,13 +561,25 @@ fn render_dock_seekbar(
     let progress = (active_pos / max_dur).clamp(0.0, 1.0) as f32;
 
     // Background track rail
-    ui.painter().rect_filled(bar_rect, rounding, RAIL_BG);
+    ui.painter().rect_filled(bar_rect, rounding, palette.bg_card);
 
-    // Active purple fill #9C6CFF
+    // Buffer / hover preview fill: palette.accent_soft
+    if is_hovered || is_dragged {
+        if let Some(pointer) = resp.interact_pointer_pos() {
+            let hover_ratio = ((pointer.x - bar_rect.min.x) / bar_rect.width()).clamp(0.0, 1.0);
+            let hover_w = bar_rect.width() * hover_ratio;
+            if hover_w > 0.0 {
+                let hover_rect = Rect::from_min_size(bar_rect.min, vec2(hover_w, bar_h));
+                ui.painter().rect_filled(hover_rect, rounding, palette.accent_soft);
+            }
+        }
+    }
+
+    // Active progress fill: palette.accent
     let fill_w = bar_rect.width() * progress;
     if fill_w > 0.0 {
         let fill_rect = Rect::from_min_size(bar_rect.min, vec2(fill_w, bar_h));
-        ui.painter().rect_filled(fill_rect, rounding, ACCENT_PURPLE);
+        ui.painter().rect_filled(fill_rect, rounding, palette.accent);
     }
 
     // Scrubber knob on hover/drag
@@ -573,7 +594,7 @@ fn render_dock_seekbar(
             ui.label(
                 RichText::new(format_time_secs(active_pos))
                     .size(11.0)
-                    .color(TEXT_PRIMARY),
+                    .color(palette.text_primary),
             );
         });
     }
@@ -587,6 +608,7 @@ fn render_zone3_controls(
     ui: &mut Ui,
     player: &mut PlayerController,
     stream_controller: Option<&StreamController>,
+    palette: &BentoPalette,
     is_inspector_open: bool,
     action: &mut BentoPlayerDockAction,
 ) {
@@ -598,15 +620,15 @@ fn render_zone3_controls(
 
     if is_insp_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(insp_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(insp_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
 
     let insp_color = if is_inspector_open {
-        ACCENT_PURPLE
+        palette.accent
     } else if is_insp_hovered {
-        TEXT_PRIMARY
+        palette.text_primary
     } else {
-        TEXT_SECONDARY
+        palette.text_secondary
     };
     paint_panel_right(ui.painter(), Rect::from_center_size(insp_rect.center(), vec2(16.0, 16.0)), insp_color);
     let insp_resp = insp_resp.on_hover_text("Toggle Inspector");
@@ -620,9 +642,9 @@ fn render_zone3_controls(
 
     if is_fs_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(fs_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(fs_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
-    let fs_color = if is_fs_hovered { TEXT_PRIMARY } else { TEXT_SECONDARY };
+    let fs_color = if is_fs_hovered { palette.text_primary } else { palette.text_secondary };
     paint_icon(ui.painter(), Icon::Maximize, Rect::from_center_size(fs_rect.center(), vec2(15.0, 15.0)), fs_color);
     let fs_resp = fs_resp.on_hover_text("Cinematic Fullscreen (F11)");
     if fs_resp.clicked() {
@@ -635,9 +657,9 @@ fn render_zone3_controls(
 
     if is_pip_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(pip_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(pip_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
-    let pip_color = if is_pip_hovered { TEXT_PRIMARY } else { TEXT_SECONDARY };
+    let pip_color = if is_pip_hovered { palette.text_primary } else { palette.text_secondary };
     paint_icon(ui.painter(), Icon::PictureInPicture, Rect::from_center_size(pip_rect.center(), vec2(15.0, 15.0)), pip_color);
     let pip_resp = pip_resp.on_hover_text("Mini Player & Pop-out (P)");
     if pip_resp.clicked() {
@@ -650,9 +672,9 @@ fn render_zone3_controls(
 
     if is_lyr_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(lyr_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(lyr_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
-    let lyr_color = if is_lyr_hovered { TEXT_PRIMARY } else { TEXT_SECONDARY };
+    let lyr_color = if is_lyr_hovered { palette.text_primary } else { palette.text_secondary };
     paint_file_text(ui.painter(), Rect::from_center_size(lyr_rect.center(), vec2(16.0, 16.0)), lyr_color);
     let lyr_resp = lyr_resp.on_hover_text("Synced Lyrics (L)");
     if lyr_resp.clicked() {
@@ -661,7 +683,7 @@ fn render_zone3_controls(
 
     // 5. Slim Volume Slider
     let vol = player.engine.volume();
-    render_dock_volume_slider(ui, vol, player, stream_controller);
+    render_dock_volume_slider(ui, vol, player, stream_controller, palette);
 
     // 6. Volume Mute Icon Button
     let is_muted = player.engine.is_muted();
@@ -680,14 +702,14 @@ fn render_zone3_controls(
 
     if is_mute_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        ui.painter().rect_filled(mute_rect, Rounding::same(6.0), BG_BUTTON_HOVER);
+        ui.painter().rect_filled(mute_rect, Rounding::same(6.0), palette.bg_card_hover);
     }
     let vol_btn_color = if is_muted {
         Color32::from_rgb(220, 38, 38)
     } else if is_mute_hovered {
-        TEXT_PRIMARY
+        palette.text_primary
     } else {
-        TEXT_SECONDARY
+        palette.text_secondary
     };
     paint_icon(ui.painter(), vol_icon, Rect::from_center_size(mute_rect.center(), vec2(15.0, 15.0)), vol_btn_color);
     let mute_resp = mute_resp.on_hover_text("Mute / Unmute (M)");
@@ -713,6 +735,7 @@ fn render_dock_volume_slider(
     vol: f32,
     player: &mut PlayerController,
     stream_controller: Option<&StreamController>,
+    palette: &BentoPalette,
 ) {
     let desired_w = 64.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(desired_w, 16.0), egui::Sense::click_and_drag());
@@ -770,13 +793,13 @@ fn render_dock_volume_slider(
     };
 
     // Dark track rail
-    ui.painter().rect_filled(bar_rect, rounding, RAIL_BG);
+    ui.painter().rect_filled(bar_rect, rounding, palette.bg_card);
 
-    // Active volume fill in purple #9C6CFF
+    // Active volume fill in palette.accent
     let fill_w = bar_rect.width() * effective_vol;
     if fill_w > 0.0 {
         let fill_rect = Rect::from_min_size(bar_rect.min, vec2(fill_w, bar_h));
-        ui.painter().rect_filled(fill_rect, rounding, ACCENT_PURPLE);
+        ui.painter().rect_filled(fill_rect, rounding, palette.accent);
     }
 
     // Scrubber knob on hover/drag
@@ -790,7 +813,7 @@ fn render_dock_volume_slider(
             ui.label(
                 RichText::new(format!("{}%", (effective_vol * 100.0).round() as u32))
                     .size(11.0)
-                    .color(TEXT_PRIMARY),
+                    .color(palette.text_primary),
             );
         });
     }

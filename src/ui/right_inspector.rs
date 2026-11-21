@@ -12,6 +12,7 @@ use crate::audio::PlayerController;
 use crate::library::format_time_secs;
 use crate::streams::controller::StreamController;
 use crate::ui::art::AlbumArtManager;
+use crate::ui::bento_theme::BentoPalette;
 use crate::ui::fullscreen_lyrics::FullscreenLyrics;
 use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::playerbar::current_playback_time;
@@ -107,6 +108,7 @@ pub enum InspectorAction {
     PlayUpcomingIndex(usize),
     ToggleFavorite(i64),
     OpenFullscreen,
+    SearchLyricsOnline,
 }
 
 /// Context borrowing necessary player, streaming, artwork, and theme subsystems.
@@ -152,6 +154,7 @@ fn format_file_size(bytes: u64) -> String {
 }
 
 /// Render a compact audio quality badge (Amber-Gold for Hi-Res, Soft Purple for Lossless, dark for Lossy).
+#[allow(dead_code)]
 fn render_quality_badge(
     ui: &mut egui::Ui,
     label: &str,
@@ -186,7 +189,7 @@ fn render_quality_badge(
 }
 
 /// Render a single scannable key-value row in the details view.
-fn render_details_row(ui: &mut egui::Ui, key: &str, val: &str, bg_tint: bool) {
+fn render_details_row(ui: &mut egui::Ui, key: &str, val: &str, bg_tint: bool, palette: &BentoPalette) {
     let row_height = 24.0_f32;
     let avail_w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(avail_w, row_height), egui::Sense::hover());
@@ -195,38 +198,38 @@ fn render_details_row(ui: &mut egui::Ui, key: &str, val: &str, bg_tint: bool) {
         ui.painter().rect_filled(
             rect,
             Rounding::same(4.0_f32),
-            Color32::from_rgba_unmultiplied(37, 42, 52, 90),
+            Color32::from_rgba_unmultiplied(palette.bg_card.r(), palette.bg_card.g(), palette.bg_card.b(), 90),
         );
     }
     if resp.hovered() {
         ui.painter().rect_filled(
             rect,
             Rounding::same(4.0_f32),
-            BG_CARD_HOVER,
+            palette.bg_card_hover,
         );
     }
 
     let key_w = 90.0_f32;
     let text_pad_y = (row_height - 14.0_f32) * 0.5_f32;
 
-    // Key label (TEXT_MUTED, 11.5px)
+    // Key label (palette.text_muted, 11.5px)
     let key_galley = ui.painter().layout_no_wrap(
         key.to_string(),
         egui::FontId::proportional(11.5_f32),
-        TEXT_MUTED,
+        palette.text_muted,
     );
-    ui.painter().galley(pos2(rect.min.x + 6.0_f32, rect.min.y + text_pad_y), key_galley, TEXT_MUTED);
+    ui.painter().galley(pos2(rect.min.x + 6.0_f32, rect.min.y + text_pad_y), key_galley, palette.text_muted);
 
-    // Value label (TEXT_PRIMARY, 12.0px)
+    // Value label (palette.text_primary, 12.0px)
     let val_x = rect.min.x + key_w + 4.0_f32;
     let val_max_w = (rect.max.x - val_x - 6.0_f32).max(10.0_f32);
     let val_truncated = truncate_str(val, (val_max_w / 7.0_f32) as usize + 3);
     let val_galley = ui.painter().layout_no_wrap(
         val_truncated,
         egui::FontId::proportional(12.0_f32),
-        TEXT_PRIMARY,
+        palette.text_primary,
     );
-    ui.painter().galley(pos2(val_x, rect.min.y + text_pad_y), val_galley, TEXT_PRIMARY);
+    ui.painter().galley(pos2(val_x, rect.min.y + text_pad_y), val_galley, palette.text_primary);
 
     if val.len() > 16 {
         resp.on_hover_text(val);
@@ -237,6 +240,7 @@ fn render_details_row(ui: &mut egui::Ui, key: &str, val: &str, bg_tint: bool) {
 fn render_now_playing_card(
     ui: &mut egui::Ui,
     ctx: &mut InspectorContext,
+    palette: &BentoPalette,
 ) -> InspectorAction {
     let mut action = InspectorAction::None;
     let avail_w = ui.available_width();
@@ -277,10 +281,10 @@ fn render_now_playing_card(
         }
 
         if !painted_cover {
-            ui.painter().rect_filled(art_rect, art_rounding, BG_CARD);
+            ui.painter().rect_filled(art_rect, art_rounding, palette.bg_card);
             let disc_size = (art_size * 0.4_f32).max(24.0_f32);
             let disc_rect = Rect::from_center_size(art_rect.center(), vec2(disc_size, disc_size));
-            paint_icon(ui.painter(), Icon::Disc, disc_rect, Color32::from_white_alpha(35));
+            paint_icon(ui.painter(), Icon::Disc, disc_rect, palette.text_muted);
         }
 
         // Hover overlay: darken slightly and show vector Expand icon (Stroke::NONE)
@@ -310,7 +314,7 @@ fn render_now_playing_card(
     ui.add_space(8.0_f32);
 
     // 2. Track Title, Artist, Album, and Quality Details
-    let (title, artist, album, is_hires, is_lossless, badge_label, fav_info) = if let Some(ref track) = current_local {
+    let (title, artist, album, is_hires, _is_lossless, badge_label, fav_info) = if let Some(ref track) = current_local {
         (
             track.display_title().to_string(),
             track.display_artist().to_string(),
@@ -346,7 +350,7 @@ fn render_now_playing_card(
     ui.horizontal(|ui| {
         let max_title_chars = ((avail_w - 40.0_f32) / 8.0_f32) as usize + 2;
         let trunc_title = truncate_str(&title, max_title_chars);
-        let title_label = ui.label(RichText::new(trunc_title).size(14.5_f32).strong().color(TEXT_PRIMARY));
+        let title_label = ui.label(RichText::new(trunc_title).size(14.5_f32).strong().color(palette.text_primary));
         if title.len() > 18 {
             title_label.on_hover_text(&title);
         }
@@ -358,13 +362,13 @@ fn render_now_playing_card(
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 if is_fav {
-                    paint_icon(ui.painter(), Icon::Heart, heart_rect, ACCENT_PRIMARY);
+                    paint_icon(ui.painter(), Icon::Heart, heart_rect, palette.accent);
                 } else {
                     paint_icon(
                         ui.painter(),
                         Icon::HeartOutline,
                         heart_rect,
-                        if heart_resp.hovered() { TEXT_PRIMARY } else { TEXT_MUTED },
+                        if heart_resp.hovered() { palette.text_primary } else { palette.text_muted },
                     );
                 }
                 if heart_resp.clicked() {
@@ -384,7 +388,7 @@ fn render_now_playing_card(
     };
     let max_sub_chars = ((avail_w - 20.0_f32) / 7.0_f32) as usize + 2;
     let trunc_sub = truncate_str(&artist_album, max_sub_chars);
-    let sub_label = ui.label(RichText::new(trunc_sub).size(12.0_f32).color(TEXT_SECONDARY));
+    let sub_label = ui.label(RichText::new(trunc_sub).size(12.0_f32).color(palette.text_secondary));
     if artist_album.len() > 24 {
         sub_label.on_hover_text(&artist_album);
     }
@@ -392,21 +396,21 @@ fn render_now_playing_card(
     ui.add_space(6.0_f32);
 
     // Audio Quality Badge
-    render_quality_badge(ui, &badge_label, is_hires, is_lossless);
+    crate::ui::bento_theme::quality_badge_pill(ui, &badge_label, is_hires, palette);
 
     action
 }
 
 /// Render the Middle Section: Segmented 3-Tab Switcher (Queue, Lyrics, Details).
-fn render_tab_switcher(ui: &mut egui::Ui, active_tab: InspectorTab) -> InspectorTab {
+fn render_tab_switcher(ui: &mut egui::Ui, active_tab: InspectorTab, palette: &BentoPalette) -> InspectorTab {
     let mut selected = active_tab;
     let track_height = 32.0_f32;
     let track_width = ui.available_width();
     let (track_rect, _) = ui.allocate_exact_size(vec2(track_width, track_height), egui::Sense::hover());
 
     let track_rounding = Rounding::same(CARD_RADIUS);
-    // Borderless BG_CARD pill track (Stroke::NONE)
-    ui.painter().rect_filled(track_rect, track_rounding, BG_CARD);
+    // Borderless palette.bg_card pill track (Stroke::NONE)
+    ui.painter().rect_filled(track_rect, track_rounding, palette.bg_card);
 
     let tabs = [
         (InspectorTab::Queue, "Queue"),
@@ -434,18 +438,18 @@ fn render_tab_switcher(ui: &mut egui::Ui, active_tab: InspectorTab) -> Inspector
         let seg_rounding = Rounding::same(6.0_f32);
 
         if is_active {
-            // Active tab: ACCENT_SOFT with Stroke::NONE
-            ui.painter().rect_filled(seg_rect, seg_rounding, ACCENT_SOFT);
+            // Active tab: palette.accent_soft with Stroke::NONE
+            ui.painter().rect_filled(seg_rect, seg_rounding, palette.accent_soft);
         } else if is_hovered {
-            // Hovered tab: BG_CARD_HOVER with Stroke::NONE
-            ui.painter().rect_filled(seg_rect, seg_rounding, BG_CARD_HOVER);
+            // Hovered tab: palette.bg_card_hover with Stroke::NONE
+            ui.painter().rect_filled(seg_rect, seg_rounding, palette.bg_card_hover);
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
 
         let text_color = if is_active || is_hovered {
-            TEXT_PRIMARY
+            palette.text_primary
         } else {
-            TEXT_SECONDARY
+            palette.text_secondary
         };
 
         let font_id = if is_active {
@@ -466,22 +470,22 @@ fn render_tab_switcher(ui: &mut egui::Ui, active_tab: InspectorTab) -> Inspector
 }
 
 /// Render the Queue tab content: "Up Next" header and compact upcoming track rows.
-fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorAction {
+fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &BentoPalette) -> InspectorAction {
     let mut action = InspectorAction::None;
     let upcoming = ctx.player.peek_upcoming_tracks(20);
 
     // Header
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Up Next").size(13.5_f32).strong().color(TEXT_PRIMARY));
+        ui.label(RichText::new("Up Next").size(13.5_f32).strong().color(palette.text_primary));
         ui.add_space(4.0_f32);
 
         let count_str = format!("{}", upcoming.len());
         let font_id = egui::FontId::proportional(10.5_f32);
-        let galley = ui.painter().layout_no_wrap(count_str, font_id, ACCENT_PRIMARY);
+        let galley = ui.painter().layout_no_wrap(count_str, font_id, palette.accent);
         let badge_size = galley.size() + vec2(10.0_f32, 3.0_f32);
         let (b_rect, _) = ui.allocate_exact_size(badge_size, egui::Sense::hover());
-        ui.painter().rect_filled(b_rect, Rounding::same(10.0_f32), ACCENT_SOFT);
-        ui.painter().galley(b_rect.min + vec2(5.0_f32, 1.5_f32), galley, ACCENT_PRIMARY);
+        ui.painter().rect_filled(b_rect, Rounding::same(10.0_f32), palette.accent_soft);
+        ui.painter().galley(b_rect.min + vec2(5.0_f32, 1.5_f32), galley, palette.accent);
     });
 
     ui.add_space(6.0_f32);
@@ -495,7 +499,7 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
             ui.label(
                 RichText::new("Queue is empty. Add songs from your library.")
                     .size(12.5_f32)
-                    .color(TEXT_MUTED),
+                    .color(palette.text_muted),
             );
         });
         return action;
@@ -515,7 +519,7 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
         if is_hovered {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             // Borderless row hover (Stroke::NONE)
-            ui.painter().rect_filled(row_rect, Rounding::same(6.0_f32), BG_CARD_HOVER);
+            ui.painter().rect_filled(row_rect, Rounding::same(6.0_f32), palette.bg_card_hover);
         }
 
         if row_resp.clicked() {
@@ -527,13 +531,13 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
         let idx_galley = ui.painter().layout_no_wrap(
             idx_str,
             egui::FontId::proportional(11.0_f32),
-            TEXT_MUTED,
+            palette.text_muted,
         );
         let idx_pos = pos2(
             row_rect.min.x + 6.0_f32,
             row_rect.min.y + (row_height - idx_galley.size().y) * 0.5_f32,
         );
-        ui.painter().galley(idx_pos, idx_galley, TEXT_MUTED);
+        ui.painter().galley(idx_pos, idx_galley, palette.text_muted);
 
         // 2. Mini Album Art (28x28)
         let mini_x = row_rect.min.x + 24.0_f32;
@@ -550,7 +554,7 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
             painted_mini = true;
         }
         if !painted_mini {
-            ui.painter().rect_filled(mini_art_rect, mini_rounding, BG_CARD);
+            ui.painter().rect_filled(mini_art_rect, mini_rounding, palette.bg_card);
             let disc_r = mini_art_rect.shrink(6.0_f32);
             paint_icon(ui.painter(), Icon::Music, disc_r, Color32::from_white_alpha(40));
         }
@@ -560,14 +564,14 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
         let dur_galley = ui.painter().layout_no_wrap(
             dur_str,
             egui::FontId::proportional(11.0_f32),
-            TEXT_MUTED,
+            palette.text_muted,
         );
         let dur_w = dur_galley.size().x;
         let dur_pos = pos2(
             row_rect.max.x - dur_w - 8.0_f32,
             row_rect.min.y + (row_height - dur_galley.size().y) * 0.5_f32,
         );
-        ui.painter().galley(dur_pos, dur_galley, TEXT_MUTED);
+        ui.painter().galley(dur_pos, dur_galley, palette.text_muted);
 
         // 4. Title and Artist column
         let text_start_x = mini_x + 34.0_f32;
@@ -579,27 +583,79 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorA
         let title_galley = ui.painter().layout_no_wrap(
             title_trunc,
             egui::FontId::proportional(12.0_f32),
-            TEXT_PRIMARY,
+            palette.text_primary,
         );
         let artist_galley = ui.painter().layout_no_wrap(
             artist_trunc,
             egui::FontId::proportional(10.5_f32),
-            TEXT_MUTED,
+            palette.text_muted,
         );
 
         let title_y = row_rect.min.y + 6.0_f32;
         let artist_y = row_rect.min.y + 22.0_f32;
 
-        ui.painter().galley(pos2(text_start_x, title_y), title_galley, TEXT_PRIMARY);
-        ui.painter().galley(pos2(text_start_x, artist_y), artist_galley, TEXT_MUTED);
+        ui.painter().galley(pos2(text_start_x, title_y), title_galley, palette.text_primary);
+        ui.painter().galley(pos2(text_start_x, artist_y), artist_galley, palette.text_muted);
     }
 
     action
 }
 
-/// Render the Lyrics tab content: Synchronized lyrics highlighting and interactive seek-to.
-fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> InspectorAction {
+/// Render the Lyrics tab content: Synchronized lyrics highlighting, Search LRCLIB button, and interactive seek-to.
+fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &BentoPalette) -> InspectorAction {
     let mut action = InspectorAction::None;
+
+    // Header bar with compact Search LRCLIB pill button and optional source badge
+    ui.horizontal(|ui| {
+        // Small source badge if lyrics are present
+        if let Some(ref lrc) = ctx.player.lyrics {
+            let source_text = if !lrc.source.trim().is_empty() {
+                lrc.source.trim()
+            } else if lrc.is_synced {
+                "Synced"
+            } else {
+                "Plain"
+            };
+            let badge_font = egui::FontId::proportional(10.5_f32);
+            let badge_galley = ui.painter().layout_no_wrap(source_text.to_string(), badge_font, palette.text_muted);
+            let badge_size = badge_galley.size() + vec2(10.0_f32, 4.0_f32);
+            let (b_rect, _) = ui.allocate_exact_size(badge_size, egui::Sense::hover());
+            ui.painter().rect_filled(b_rect, Rounding::same(10.0_f32), palette.bg_card);
+            ui.painter().galley(b_rect.min + vec2(5.0_f32, 2.0_f32), badge_galley, palette.text_muted);
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let btn_text = if ctx.player.is_searching_lyrics {
+                "Searching..."
+            } else {
+                "Search LRCLIB"
+            };
+            let font_id = egui::FontId::proportional(11.5_f32);
+            let galley = ui.painter().layout_no_wrap(btn_text.to_string(), font_id, palette.accent);
+            let btn_size = galley.size() + vec2(14.0_f32, 6.0_f32);
+            let (btn_rect, btn_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+            let is_hovered = btn_resp.hovered();
+            if is_hovered {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let fill = if is_hovered {
+                palette.bg_card_hover
+            } else {
+                palette.accent_soft
+            };
+            ui.painter().rect_filled(btn_rect, Rounding::same(10.0_f32), fill);
+            let text_pos = pos2(
+                btn_rect.center().x - galley.size().x * 0.5_f32,
+                btn_rect.center().y - galley.size().y * 0.5_f32,
+            );
+            ui.painter().galley(text_pos, galley, if is_hovered { palette.text_primary } else { palette.accent });
+
+            let btn_resp = btn_resp.on_hover_text("Search LRCLIB online for synchronized lyrics");
+            if btn_resp.clicked() && !ctx.player.is_searching_lyrics {
+                action = InspectorAction::SearchLyricsOnline;
+            }
+        });
+    });
 
     let Some(ref lrc) = ctx.player.lyrics else {
         // Friendly empty state
@@ -608,9 +664,9 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
             let (icon_rect, _) = ui.allocate_exact_size(vec2(36.0_f32, 36.0_f32), egui::Sense::hover());
             paint_icon(ui.painter(), Icon::Mic, icon_rect, Color32::from_white_alpha(35));
             ui.add_space(10.0_f32);
-            ui.label(RichText::new("No synced lyrics available").size(13.0_f32).strong().color(TEXT_MUTED));
+            ui.label(RichText::new("No synced lyrics available").size(13.0_f32).strong().color(palette.text_muted));
             ui.add_space(4.0_f32);
-            ui.label(RichText::new("Play a song with synchronized LRC lyrics").size(11.0_f32).color(TEXT_FAINT));
+            ui.label(RichText::new("Play a song with synchronized LRC lyrics or search LRCLIB").size(11.0_f32).color(palette.text_muted));
         });
         return action;
     };
@@ -622,7 +678,7 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
             let (icon_rect, _) = ui.allocate_exact_size(vec2(36.0_f32, 36.0_f32), egui::Sense::hover());
             paint_icon(ui.painter(), Icon::Mic, icon_rect, Color32::from_white_alpha(35));
             ui.add_space(10.0_f32);
-            ui.label(RichText::new("No synced lyrics available").size(13.0_f32).strong().color(TEXT_MUTED));
+            ui.label(RichText::new("No synced lyrics available").size(13.0_f32).strong().color(palette.text_muted));
         });
         return action;
     }
@@ -658,8 +714,8 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
         let wrap_width = (avail_w - 24.0_f32).max(100.0_f32);
 
         // Active line: Bold pure crisp white (~15.0px) for 100% legibility (English & CJK)
-        // Inactive upcoming lines: #B0B6C4 (LYRIC_UPCOMING)
-        // Inactive past lines: #707684 (LYRIC_PAST)
+        // Inactive upcoming lines: palette.text_secondary
+        // Inactive past lines: palette.text_muted
         let rich = if is_active {
             RichText::new(display_text)
                 .size(15.0_f32)
@@ -668,11 +724,11 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
         } else if is_past {
             RichText::new(display_text)
                 .size(13.0_f32)
-                .color(LYRIC_PAST)
+                .color(palette.text_muted)
         } else {
             RichText::new(display_text)
                 .size(13.0_f32)
-                .color(LYRIC_UPCOMING)
+                .color(palette.text_secondary)
         };
 
         let widget_text: egui::WidgetText = rich.into();
@@ -698,18 +754,18 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
 
         if is_active {
             // Subtle low-opacity background tint (rounded 6.0px, Stroke::NONE)
-            ui.painter().rect_filled(row_rect, rounding, LYRIC_ACTIVE_BG);
+            ui.painter().rect_filled(row_rect, rounding, palette.accent_soft);
 
-            // Crisp 3.0px vertical ACCENT_PRIMARY indicator bar on the left edge
+            // Crisp 3.0px vertical accent indicator bar on the left edge
             let bar_h = (row_rect.height() - 6.0_f32).max(14.0_f32);
             let bar_rect = Rect::from_min_size(
                 pos2(row_rect.min.x + 2.0_f32, row_rect.min.y + (row_rect.height() - bar_h) * 0.5_f32),
                 vec2(3.0_f32, bar_h),
             );
-            ui.painter().rect_filled(bar_rect, Rounding::same(1.5_f32), ACCENT_PRIMARY);
+            ui.painter().rect_filled(bar_rect, Rounding::same(1.5_f32), palette.accent);
         } else if is_hovered {
             // Inactive row hover background (Stroke::NONE)
-            ui.painter().rect_filled(row_rect, rounding, BG_CARD_HOVER);
+            ui.painter().rect_filled(row_rect, rounding, palette.bg_card_hover);
         }
 
         let text_x = row_rect.min.x + 12.0_f32;
@@ -717,7 +773,7 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
         let text_pos = pos2(text_x, text_y);
 
         if !is_active && is_hovered {
-            let hover_rich = RichText::new(display_text).size(13.0_f32).color(TEXT_PRIMARY);
+            let hover_rich = RichText::new(display_text).size(13.0_f32).color(palette.text_primary);
             let hover_widget: egui::WidgetText = hover_rich.into();
             let hover_galley = hover_widget.into_galley(
                 ui,
@@ -725,14 +781,14 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
                 wrap_width,
                 egui::TextStyle::Body,
             );
-            ui.painter().galley(text_pos, hover_galley, TEXT_PRIMARY);
+            ui.painter().galley(text_pos, hover_galley, palette.text_primary);
         } else {
             let fallback_color = if is_active {
                 Color32::WHITE
             } else if is_past {
-                LYRIC_PAST
+                palette.text_muted
             } else {
-                LYRIC_UPCOMING
+                palette.text_secondary
             };
             ui.painter().galley(text_pos, galley, fallback_color);
         }
@@ -750,7 +806,7 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) -> Inspector
 }
 
 /// Render the Details tab content: Scannable key-value properties table.
-fn render_details_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) {
+fn render_details_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &BentoPalette) {
     let current_local = ctx.player.current_track();
     let current_stream = ctx.player.active_stream_track.as_ref();
 
@@ -760,9 +816,9 @@ fn render_details_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) {
             let (icon_rect, _) = ui.allocate_exact_size(vec2(36.0_f32, 36.0_f32), egui::Sense::hover());
             paint_icon(ui.painter(), Icon::Info, icon_rect, Color32::from_white_alpha(35));
             ui.add_space(10.0_f32);
-            ui.label(RichText::new("No track currently playing").size(13.0_f32).strong().color(TEXT_MUTED));
+            ui.label(RichText::new("No track currently playing").size(13.0_f32).strong().color(palette.text_muted));
             ui.add_space(4.0_f32);
-            ui.label(RichText::new("Track details and technical specs will appear here").size(11.0_f32).color(TEXT_FAINT));
+            ui.label(RichText::new("Track details and technical specs will appear here").size(11.0_f32).color(palette.text_muted));
         });
         return;
     }
@@ -810,7 +866,7 @@ fn render_details_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext) {
 
     ui.add_space(4.0_f32);
     for (i, (key, val)) in items.iter().enumerate() {
-        render_details_row(ui, key, val, i % 2 == 1);
+        render_details_row(ui, key, val, i % 2 == 1, palette);
     }
 }
 
@@ -821,13 +877,15 @@ pub fn render_right_inspector(
     ui: &mut egui::Ui,
     ctx: &mut InspectorContext,
 ) -> (InspectorTab, InspectorAction) {
+    let palette = ctx.theme.bento_palette();
+
     let panel_w = ui.available_width().clamp(300.0_f32, 320.0_f32);
     ui.set_width(panel_w);
 
     let mut action = InspectorAction::None;
 
     let outer_frame = egui::Frame::none()
-        .fill(BG_SIDEBAR)
+        .fill(palette.bg_sidebar)
         .rounding(Rounding::same(BENTO_RADIUS))
         .inner_margin(egui::Margin::same(10.0_f32))
         .stroke(Stroke::NONE);
@@ -835,7 +893,7 @@ pub fn render_right_inspector(
     outer_frame.show(ui, |ui| {
         ui.vertical(|ui| {
             // 1. Top Section - Now Playing Card
-            let np_action = render_now_playing_card(ui, ctx);
+            let np_action = render_now_playing_card(ui, ctx, &palette);
             if np_action != InspectorAction::None {
                 action = np_action;
             }
@@ -843,7 +901,7 @@ pub fn render_right_inspector(
             ui.add_space(10.0_f32);
 
             // 2. Middle Section - Segmented 3-Tab Switcher
-            let new_tab = render_tab_switcher(ui, ctx.active_tab);
+            let new_tab = render_tab_switcher(ui, ctx.active_tab, &palette);
             ctx.active_tab = new_tab;
 
             ui.add_space(10.0_f32);
@@ -855,19 +913,19 @@ pub fn render_right_inspector(
                 .show(ui, |ui| {
                     match ctx.active_tab {
                         InspectorTab::Queue => {
-                            let q_action = render_queue_tab(ui, ctx);
+                            let q_action = render_queue_tab(ui, ctx, &palette);
                             if q_action != InspectorAction::None {
                                 action = q_action;
                             }
                         }
                         InspectorTab::Lyrics => {
-                            let l_action = render_lyrics_tab(ui, ctx);
+                            let l_action = render_lyrics_tab(ui, ctx, &palette);
                             if l_action != InspectorAction::None {
                                 action = l_action;
                             }
                         }
                         InspectorTab::Details => {
-                            render_details_tab(ui, ctx);
+                            render_details_tab(ui, ctx, &palette);
                         }
                     }
                 });
@@ -923,6 +981,8 @@ mod tests {
         assert_ne!(InspectorAction::ToggleFavorite(10), InspectorAction::ToggleFavorite(20));
         assert_eq!(InspectorAction::OpenFullscreen, InspectorAction::OpenFullscreen);
         assert_ne!(InspectorAction::OpenFullscreen, InspectorAction::None);
+        assert_eq!(InspectorAction::SearchLyricsOnline, InspectorAction::SearchLyricsOnline);
+        assert_ne!(InspectorAction::SearchLyricsOnline, InspectorAction::None);
     }
 
     #[test]

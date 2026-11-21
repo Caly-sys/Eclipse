@@ -211,6 +211,11 @@ impl Theme {
             shadow: egui::epaint::Shadow::NONE,
         }
     }
+
+    /// Derives the active dynamic BentoPalette for this theme and its accent.
+    pub fn bento_palette(&self) -> crate::ui::bento_theme::BentoPalette {
+        crate::ui::bento_theme::BentoPalette::from_theme(self)
+    }
 }
 
 #[cfg(test)]
@@ -269,5 +274,13 @@ mod tests {
         let theme = Theme::from_name("Eclipse", Some(custom));
         assert_eq!(theme.accent, Color32::from_rgb(100, 200, 250));
         assert_eq!(theme.accent_glow, Color32::from_rgba_premultiplied(100, 200, 250, 25));
+    }
+
+    #[test]
+    fn test_theme_bento_palette() {
+        let theme = Theme::from_name("Eclipse", None);
+        let palette = theme.bento_palette();
+        assert_eq!(palette.bg_bar, Color32::from_rgb(18, 21, 26));
+        assert_eq!(palette.accent, theme.accent);
     }
 }

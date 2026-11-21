@@ -336,7 +336,8 @@ impl EclipseApp {
 
 impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        apply_bento_visuals(ctx);
+        let palette = self.theme.bento_palette();
+        apply_bento_visuals(ctx, &palette);
 
         #[cfg(windows)]
         {
@@ -796,8 +797,10 @@ impl App for EclipseApp {
                                     }
                                 }
 
-                                // Column 3: Determine Inspector visibility (when open and window width >= 1080.0px)
-                                let show_inspector = self.right_inspector_open && ui.ctx().screen_rect().width() >= 1080.0;
+                                // Column 3: Determine Inspector visibility (when open, not in NowPlaying view, and window width >= 1080.0px)
+                                let show_inspector = self.right_inspector_open
+                                    && self.current_tab != NavTab::NowPlaying
+                                    && ui.ctx().screen_rect().width() >= 1080.0;
                                 let inspector_w = if show_inspector { 310.0 } else { 0.0 };
                                 let center_w = if show_inspector {
                                     (ui.available_width() - inspector_w).max(300.0)
@@ -1153,6 +1156,17 @@ impl App for EclipseApp {
                                 },
                                 InspectorAction::OpenFullscreen => {
                                     on_enter_fullscreen = true;
+                                },
+                                InspectorAction::SearchLyricsOnline => {
+                                    self.navigate_to(NavTab::NowPlaying);
+                                    let search_open_id = egui::Id::new("now_playing_lyrics_search_open");
+                                    let search_query_id = egui::Id::new("now_playing_lyrics_search_query");
+                                    ui.data_mut(|d| {
+                                        d.insert_temp(search_open_id, true);
+                                        if let Some(track) = self.player.current_track() {
+                                            d.insert_temp(search_query_id, format!("{} {}", track.display_title(), track.display_artist()).trim().to_string());
+                                        }
+                                    });
                                 },
                             }
                         });

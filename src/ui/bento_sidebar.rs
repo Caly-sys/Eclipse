@@ -6,23 +6,22 @@
 //! - Zero panics, 100% vector icons, zero Unicode emojis.
 
 use crate::library::model::Playlist;
+use crate::ui::bento_theme::BentoPalette;
 use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::sidebar::NavTab;
 use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, FontId, Layout, Rect, RichText, Rounding, ScrollArea, Stroke, Ui};
 
-/// Feishin Matte-Slate Design Tokens
-const BG_SIDEBAR: Color32 = Color32::from_rgb(22, 26, 32);
-const BG_CARD: Color32 = Color32::from_rgb(37, 42, 52);
-const BG_CARD_HOVER: Color32 = Color32::from_rgb(47, 53, 66);
-const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
-const ACCENT_PRIMARY: Color32 = Color32::from_rgb(156, 108, 255);
-const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(59, 39, 102, 34);
-const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
-const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
-const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
-const TEXT_HOVER: Color32 = Color32::from_rgb(240, 242, 246);
-const DIVIDER_COLOR: Color32 = Color32::from_rgb(38, 43, 53);
+/// Extension trait providing `theme.bento_palette()` dynamically.
+pub trait ThemeBentoExt {
+    fn bento_palette(&self) -> BentoPalette;
+}
+
+impl ThemeBentoExt for Theme {
+    fn bento_palette(&self) -> BentoPalette {
+        BentoPalette::from_theme(self)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BentoSidebarAction {
@@ -43,6 +42,8 @@ pub fn render_bento_sidebar(
     show_spotify: bool,
     show_youtube: bool,
 ) -> BentoSidebarAction {
+    let palette = theme.bento_palette();
+
     let width = if is_collapsed { 64.0 } else { 220.0 };
     ui.set_min_width(width);
     ui.set_max_width(width);
@@ -50,20 +51,15 @@ pub fn render_bento_sidebar(
     let mut action = BentoSidebarAction::default();
 
     let sidebar_frame = egui::Frame::none()
-        .fill(BG_SIDEBAR)
+        .fill(palette.bg_sidebar)
         .rounding(Rounding::ZERO)
         .stroke(Stroke::NONE)
-        .inner_margin(egui::Margin {
-            left: 0.0,
-            right: 0.0,
-            top: 0.0,
-            bottom: 0.0,
-        });
+        .inner_margin(egui::Margin::ZERO);
 
     let frame_resp = sidebar_frame.show(ui, |ui| {
         ui.vertical(|ui| {
             // Top Header Row
-            render_sidebar_header(ui, is_collapsed, theme, &mut action);
+            render_sidebar_header(ui, is_collapsed, &palette, &mut action);
 
             ui.add_space(4.0);
 
@@ -76,48 +72,49 @@ pub fn render_bento_sidebar(
 
                     // Section 1: LIBRARY
                     if !is_collapsed {
-                        section_header(ui, "LIBRARY", Some(total_tracks));
+                        section_header(ui, "LIBRARY", Some(total_tracks), &palette);
                     } else {
-                        collapsed_divider(ui);
+                        collapsed_divider(ui, &palette);
                     }
 
-                    render_nav_item(ui, current_tab, NavTab::Home, Icon::Home, "Home", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::Songs, Icon::Music, "Songs", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::Artists, Icon::Mic, "Artists", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::Albums, Icon::Disc, "Albums", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::Genres, Icon::Tag, "Genres", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::Folders, Icon::Folder, "Folders", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Home, Icon::Home, "Home", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::NowPlaying, Icon::Disc, "Now Playing", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Songs, Icon::Music, "Songs", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Artists, Icon::Mic, "Artists", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Albums, Icon::Disc, "Albums", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Genres, Icon::Tag, "Genres", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Folders, Icon::Folder, "Folders", is_collapsed, None, &palette, &mut action);
 
                     ui.add_space(6.0);
 
                     // Section 2: SMART PLAYLISTS
                     if !is_collapsed {
-                        section_header(ui, "SMART", None);
+                        section_header(ui, "SMART", None, &palette);
                     } else {
-                        collapsed_divider(ui);
+                        collapsed_divider(ui, &palette);
                     }
 
-                    render_nav_item(ui, current_tab, NavTab::RecentlyPlayed, Icon::Clock, "Recently Played", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::MostPlayed, Icon::Fire, "Most Played", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::RecentlyAdded, Icon::Sparkle, "Recently Added", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::Favorites, Icon::Heart, "Favorites", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::NeverPlayed, Icon::Hourglass, "Never Played", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::RandomDiscovery, Icon::Dices, "Random Discovery", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::RecentlyPlayed, Icon::Clock, "Recently Played", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::MostPlayed, Icon::Fire, "Most Played", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::RecentlyAdded, Icon::Sparkle, "Recently Added", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Favorites, Icon::Heart, "Favorites", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::NeverPlayed, Icon::Hourglass, "Never Played", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::RandomDiscovery, Icon::Dices, "Random Discovery", is_collapsed, None, &palette, &mut action);
 
                     // Section 3: STREAM
                     if show_spotify || show_youtube {
                         ui.add_space(6.0);
                         if !is_collapsed {
-                            section_header(ui, "STREAM", None);
+                            section_header(ui, "STREAM", None, &palette);
                         } else {
-                            collapsed_divider(ui);
+                            collapsed_divider(ui, &palette);
                         }
 
                         if show_spotify {
-                            render_nav_item(ui, current_tab, NavTab::Spotify, Icon::Spotify, "Spotify", is_collapsed, None, &mut action);
+                            render_nav_item(ui, current_tab, NavTab::Spotify, Icon::Spotify, "Spotify", is_collapsed, None, &palette, &mut action);
                         }
                         if show_youtube {
-                            render_nav_item(ui, current_tab, NavTab::YouTubeMusic, Icon::YouTube, "YouTube Music", is_collapsed, None, &mut action);
+                            render_nav_item(ui, current_tab, NavTab::YouTubeMusic, Icon::YouTube, "YouTube Music", is_collapsed, None, &palette, &mut action);
                         }
                     }
 
@@ -125,13 +122,13 @@ pub fn render_bento_sidebar(
 
                     // Section 4: PLAYLISTS
                     if !is_collapsed {
-                        render_playlists_header(ui, total_playlists, &mut action);
+                        render_playlists_header(ui, total_playlists, &palette, &mut action);
                     } else {
-                        collapsed_divider(ui);
-                        render_collapsed_create_playlist(ui, &mut action);
+                        collapsed_divider(ui, &palette);
+                        render_collapsed_create_playlist(ui, &palette, &mut action);
                     }
 
-                    render_nav_item(ui, current_tab, NavTab::Playlists, Icon::Playlist, "All Playlists", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Playlists, Icon::Playlist, "All Playlists", is_collapsed, None, &palette, &mut action);
 
                     for pl in user_playlists {
                         let target = NavTab::Playlist(pl.id);
@@ -143,6 +140,7 @@ pub fn render_bento_sidebar(
                             &pl.name,
                             is_collapsed,
                             Some(pl.track_count),
+                            &palette,
                             &mut action,
                         );
                     }
@@ -151,31 +149,31 @@ pub fn render_bento_sidebar(
 
                     // Section 5: PREFERENCES & INFO
                     if !is_collapsed {
-                        section_header(ui, "PREFERENCES", None);
+                        section_header(ui, "PREFERENCES", None, &palette);
                     } else {
-                        collapsed_divider(ui);
+                        collapsed_divider(ui, &palette);
                     }
 
-                    render_nav_item(ui, current_tab, NavTab::Settings, Icon::Settings, "Settings", is_collapsed, None, &mut action);
-                    render_nav_item(ui, current_tab, NavTab::About, Icon::Info, "About", is_collapsed, None, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::Settings, Icon::Settings, "Settings", is_collapsed, None, &palette, &mut action);
+                    render_nav_item(ui, current_tab, NavTab::About, Icon::Info, "About", is_collapsed, None, &palette, &mut action);
 
                     // Expanded stats card at bottom
                     if !is_collapsed {
                         ui.add_space(10.0);
-                        render_stats_card(ui, theme, total_tracks, total_playlists);
+                        render_stats_card(ui, total_tracks, total_playlists, &palette);
                         ui.add_space(8.0);
                     }
                 });
         });
     });
 
-    // Single 1.0px SEAM_DARK right border seam
+    // Single 1.0px right border seam matching palette
     let r = frame_resp.response.rect;
     let right_seam = Rect::from_min_max(
         pos2(r.max.x - 1.0, r.min.y),
         pos2(r.max.x, r.max.y),
     );
-    ui.painter().rect_filled(right_seam, Rounding::ZERO, SEAM_DARK);
+    ui.painter().rect_filled(right_seam, Rounding::ZERO, palette.seam);
 
     action
 }
@@ -184,7 +182,7 @@ pub fn render_bento_sidebar(
 fn render_sidebar_header(
     ui: &mut Ui,
     is_collapsed: bool,
-    _theme: &Theme,
+    palette: &BentoPalette,
     action: &mut BentoSidebarAction,
 ) {
     let header_h = 38.0;
@@ -208,10 +206,10 @@ fn render_sidebar_header(
         let is_hovered = resp.hovered();
         if is_hovered {
             header_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            header_ui.painter().rect_filled(btn_rect, Rounding::same(8.0), BG_CARD_HOVER);
+            header_ui.painter().rect_filled(btn_rect, Rounding::same(8.0), palette.bg_card_hover);
         }
 
-        let icon_color = if is_hovered { TEXT_HOVER } else { TEXT_SECONDARY };
+        let icon_color = if is_hovered { palette.text_primary } else { palette.text_secondary };
         let icon_rect = Rect::from_center_size(btn_rect.center(), vec2(16.0, 16.0));
         paint_icon(header_ui.painter(), Icon::ChevronRight, icon_rect, icon_color);
 
@@ -226,7 +224,7 @@ fn render_sidebar_header(
             RichText::new("ECLIPSE")
                 .size(13.0)
                 .strong()
-                .color(TEXT_PRIMARY),
+                .color(palette.text_primary),
         );
 
         // Right: Collapse toggle icon
@@ -237,10 +235,10 @@ fn render_sidebar_header(
 
             if is_hovered {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                ui.painter().rect_filled(btn_rect, Rounding::same(6.0), BG_CARD_HOVER);
+                ui.painter().rect_filled(btn_rect, Rounding::same(6.0), palette.bg_card_hover);
             }
 
-            let icon_color = if is_hovered { TEXT_HOVER } else { TEXT_MUTED };
+            let icon_color = if is_hovered { palette.text_primary } else { palette.text_muted };
             let icon_rect = Rect::from_center_size(btn_rect.center(), vec2(15.0, 15.0));
             paint_icon(ui.painter(), Icon::ChevronLeft, icon_rect, icon_color);
 
@@ -253,7 +251,7 @@ fn render_sidebar_header(
 }
 
 /// Upper-case muted section title with optional right-aligned count.
-fn section_header(ui: &mut Ui, label: &str, count: Option<usize>) {
+fn section_header(ui: &mut Ui, label: &str, count: Option<usize>, palette: &BentoPalette) {
     ui.add_space(4.0);
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, 16.0), egui::Sense::hover());
@@ -264,7 +262,7 @@ fn section_header(ui: &mut Ui, label: &str, count: Option<usize>) {
         egui::Align2::LEFT_CENTER,
         label,
         font.clone(),
-        TEXT_MUTED,
+        palette.text_muted,
     );
 
     if let Some(c) = count {
@@ -273,19 +271,19 @@ fn section_header(ui: &mut Ui, label: &str, count: Option<usize>) {
             egui::Align2::RIGHT_CENTER,
             c.to_string(),
             font,
-            TEXT_MUTED,
+            palette.text_muted,
         );
     }
     ui.add_space(2.0);
 }
 
 /// Subtle horizontal separator in collapsed rail.
-fn collapsed_divider(ui: &mut Ui) {
+fn collapsed_divider(ui: &mut Ui, palette: &BentoPalette) {
     ui.add_space(3.0);
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(vec2(width, 1.0), egui::Sense::hover());
     let line_rect = Rect::from_center_size(rect.center(), vec2(28.0, 1.0));
-    ui.painter().rect_filled(line_rect, Rounding::ZERO, DIVIDER_COLOR);
+    ui.painter().rect_filled(line_rect, Rounding::ZERO, palette.seam);
     ui.add_space(3.0);
 }
 
@@ -299,18 +297,20 @@ fn render_nav_item(
     label: &str,
     is_collapsed: bool,
     count: Option<usize>,
+    palette: &BentoPalette,
     action: &mut BentoSidebarAction,
 ) {
     let is_selected = current_tab == target;
 
     if is_collapsed {
-        render_nav_item_collapsed(ui, is_selected, target, icon, label, count, action);
+        render_nav_item_collapsed(ui, is_selected, target, icon, label, count, palette, action);
     } else {
-        render_nav_item_expanded(ui, is_selected, target, icon, label, count, action);
+        render_nav_item_expanded(ui, is_selected, target, icon, label, count, palette, action);
     }
 }
 
-/// Expanded navigation row with purple pill, indicator bar, vector icon, label, and count badge.
+/// Expanded navigation row with dynamic palette pill, indicator bar, vector icon, label, and count badge.
+#[allow(clippy::too_many_arguments)]
 fn render_nav_item_expanded(
     ui: &mut Ui,
     is_selected: bool,
@@ -318,6 +318,7 @@ fn render_nav_item_expanded(
     icon: Icon,
     label: &str,
     count: Option<usize>,
+    palette: &BentoPalette,
     action: &mut BentoSidebarAction,
 ) {
     let width = ui.available_width();
@@ -329,24 +330,24 @@ fn render_nav_item_expanded(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    // Active / Hover styling
+    // Active / Hover styling with Stroke::NONE
     let (bg_fill, text_color, icon_color) = if is_selected {
-        (ACCENT_SOFT, TEXT_PRIMARY, ACCENT_PRIMARY)
+        (palette.accent_soft, palette.text_primary, palette.accent)
     } else if is_hovered {
-        (BG_CARD_HOVER, TEXT_HOVER, TEXT_HOVER)
+        (palette.bg_card_hover, palette.text_primary, palette.text_primary)
     } else {
-        (Color32::TRANSPARENT, TEXT_SECONDARY, TEXT_SECONDARY)
+        (Color32::TRANSPARENT, palette.text_secondary, palette.text_secondary)
     };
 
     ui.painter().rect_filled(rect, Rounding::same(8.0), bg_fill);
 
-    // Left vertical thin 3.0px ACCENT_PRIMARY indicator bar when active
+    // Left vertical thin 3.0px palette.accent indicator bar when active (Stroke::NONE)
     if is_selected {
         let bar_rect = Rect::from_min_size(
             pos2(rect.min.x + 2.0, rect.center().y - 8.0),
             vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), ACCENT_PRIMARY);
+        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), palette.accent);
     }
 
     // Icon (16x16)
@@ -360,13 +361,13 @@ fn render_nav_item_expanded(
     let count_w = if let Some(c) = count {
         let c_str = c.to_string();
         let c_font = FontId::proportional(10.5);
-        let w = ui.painter().layout_no_wrap(c_str.clone(), c_font.clone(), TEXT_MUTED).rect.width();
+        let w = ui.painter().layout_no_wrap(c_str.clone(), c_font.clone(), palette.text_muted).rect.width();
         ui.painter().text(
             pos2(rect.max.x - 10.0, rect.center().y),
             egui::Align2::RIGHT_CENTER,
             c_str,
             c_font,
-            TEXT_MUTED,
+            palette.text_muted,
         );
         w + 14.0
     } else {
@@ -393,7 +394,7 @@ fn render_nav_item_expanded(
             RichText::new(display_label)
                 .size(12.5)
                 .strong()
-                .color(TEXT_PRIMARY),
+                .color(palette.text_primary),
         );
     } else {
         label_ui.label(
@@ -409,6 +410,7 @@ fn render_nav_item_expanded(
 }
 
 /// Collapsed rail navigation item with centered 16px icon and tooltip.
+#[allow(clippy::too_many_arguments)]
 fn render_nav_item_collapsed(
     ui: &mut Ui,
     is_selected: bool,
@@ -416,6 +418,7 @@ fn render_nav_item_collapsed(
     icon: Icon,
     label: &str,
     count: Option<usize>,
+    palette: &BentoPalette,
     action: &mut BentoSidebarAction,
 ) {
     let width = ui.available_width();
@@ -430,11 +433,11 @@ fn render_nav_item_collapsed(
     let pill_rect = rect.shrink2(vec2(8.0, 2.0));
 
     let (bg_fill, icon_color) = if is_selected {
-        (ACCENT_SOFT, ACCENT_PRIMARY)
+        (palette.accent_soft, palette.accent)
     } else if is_hovered {
-        (BG_CARD_HOVER, TEXT_HOVER)
+        (palette.bg_card_hover, palette.text_primary)
     } else {
-        (Color32::TRANSPARENT, TEXT_SECONDARY)
+        (Color32::TRANSPARENT, palette.text_secondary)
     };
 
     ui.painter().rect_filled(pill_rect, Rounding::same(8.0), bg_fill);
@@ -445,7 +448,7 @@ fn render_nav_item_collapsed(
             pos2(pill_rect.min.x + 2.0, pill_rect.center().y - 8.0),
             vec2(3.0, 16.0),
         );
-        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), ACCENT_PRIMARY);
+        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), palette.accent);
     }
 
     // Centered 16px icon
@@ -469,6 +472,7 @@ fn render_nav_item_collapsed(
 fn render_playlists_header(
     ui: &mut Ui,
     total_playlists: usize,
+    palette: &BentoPalette,
     action: &mut BentoSidebarAction,
 ) {
     ui.horizontal(|ui| {
@@ -476,7 +480,7 @@ fn render_playlists_header(
         ui.label(
             RichText::new("PLAYLISTS")
                 .size(10.5)
-                .color(TEXT_MUTED)
+                .color(palette.text_muted)
                 .strong(),
         );
 
@@ -485,10 +489,10 @@ fn render_playlists_header(
             let (plus_rect, plus_resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
             let is_hovered = plus_resp.hovered();
 
-            let plus_bg = if is_hovered { BG_CARD_HOVER } else { Color32::TRANSPARENT };
+            let plus_bg = if is_hovered { palette.bg_card_hover } else { Color32::TRANSPARENT };
             ui.painter().rect_filled(plus_rect, Rounding::same(4.0), plus_bg);
 
-            let icon_color = if is_hovered { TEXT_PRIMARY } else { TEXT_MUTED };
+            let icon_color = if is_hovered { palette.text_primary } else { palette.text_muted };
             let icon_rect = Rect::from_center_size(plus_rect.center(), vec2(11.0, 11.0));
             paint_icon(ui.painter(), Icon::Plus, icon_rect, icon_color);
 
@@ -504,23 +508,23 @@ fn render_playlists_header(
             ui.label(
                 RichText::new(total_playlists.to_string())
                     .size(10.5)
-                    .color(TEXT_MUTED),
+                    .color(palette.text_muted),
             );
         });
     });
 }
 
 /// Centered '+' create playlist icon button in collapsed rail.
-fn render_collapsed_create_playlist(ui: &mut Ui, action: &mut BentoSidebarAction) {
+fn render_collapsed_create_playlist(ui: &mut Ui, palette: &BentoPalette, action: &mut BentoSidebarAction) {
     let width = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::click());
     let is_hovered = resp.hovered();
 
     let pill_rect = Rect::from_center_size(rect.center(), vec2(28.0, 24.0));
-    let bg = if is_hovered { BG_CARD_HOVER } else { Color32::TRANSPARENT };
+    let bg = if is_hovered { palette.bg_card_hover } else { Color32::TRANSPARENT };
     ui.painter().rect_filled(pill_rect, Rounding::same(6.0), bg);
 
-    let icon_color = if is_hovered { TEXT_PRIMARY } else { TEXT_MUTED };
+    let icon_color = if is_hovered { palette.text_primary } else { palette.text_muted };
     let icon_rect = Rect::from_center_size(pill_rect.center(), vec2(12.0, 12.0));
     paint_icon(ui.painter(), Icon::Plus, icon_rect, icon_color);
 
@@ -536,12 +540,12 @@ fn render_collapsed_create_playlist(ui: &mut Ui, action: &mut BentoSidebarAction
 /// Library overview stats card at the bottom of the expanded sidebar.
 fn render_stats_card(
     ui: &mut Ui,
-    _theme: &Theme,
     total_tracks: usize,
     total_playlists: usize,
+    palette: &BentoPalette,
 ) {
     let mut stats_frame = egui::Frame::none();
-    stats_frame.fill = BG_CARD;
+    stats_frame.fill = palette.bg_card;
     stats_frame.rounding = Rounding::same(8.0);
     stats_frame.stroke = Stroke::NONE;
     stats_frame.inner_margin = egui::Margin::same(8.0);
@@ -550,19 +554,19 @@ fn render_stats_card(
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
             let (icon_rect, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
-            paint_icon(ui.painter(), Icon::Library, icon_rect, TEXT_MUTED);
+            paint_icon(ui.painter(), Icon::Library, icon_rect, palette.text_muted);
 
             ui.vertical(|ui| {
                 ui.label(
                     RichText::new(format!("{} Tracks", total_tracks))
                         .size(11.5)
-                        .color(TEXT_PRIMARY)
+                        .color(palette.text_primary)
                         .strong(),
                 );
                 ui.label(
                     RichText::new(format!("{} Playlists", total_playlists))
                         .size(10.0)
-                        .color(TEXT_MUTED),
+                        .color(palette.text_muted),
                 );
             });
         });
@@ -620,6 +624,16 @@ mod tests {
     }
 
     #[test]
+    fn test_bento_sidebar_now_playing_nav() {
+        let action = BentoSidebarAction {
+            new_tab: Some(NavTab::NowPlaying),
+            toggle_collapse: false,
+            create_playlist: false,
+        };
+        assert_eq!(action.new_tab, Some(NavTab::NowPlaying));
+    }
+
+    #[test]
     fn test_bento_sidebar_render_expanded_smoke() {
         let ctx = egui::Context::default();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
@@ -662,7 +676,7 @@ mod tests {
 
                 let action = render_bento_sidebar(
                     ui,
-                    NavTab::Songs,
+                    NavTab::NowPlaying,
                     true, // collapsed
                     &playlists,
                     &theme,
