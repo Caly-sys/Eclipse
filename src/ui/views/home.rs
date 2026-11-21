@@ -8,28 +8,6 @@ use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, Layout, Rect, RichText, Rounding, ScrollArea, Sense, Stroke, Ui};
 use std::collections::HashSet;
 
-// Feishin Matte-Slate Palette Tokens
-#[allow(dead_code)]
-const BG_CENTER: Color32 = Color32::from_rgb(29, 33, 41);
-#[allow(dead_code)]
-const BG_CARD: Color32 = Color32::from_rgb(37, 42, 52);
-#[allow(dead_code)]
-const BG_CARD_HOVER: Color32 = Color32::from_rgb(47, 53, 66);
-#[allow(dead_code)]
-const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
-#[allow(dead_code)]
-const ACCENT_PRIMARY: Color32 = Color32::from_rgb(156, 108, 255);
-#[allow(dead_code)]
-const ACCENT_SOFT: Color32 = Color32::from_rgba_premultiplied(59, 39, 102, 34);
-#[allow(dead_code)]
-const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
-#[allow(dead_code)]
-const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
-#[allow(dead_code)]
-const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
-#[allow(dead_code)]
-const TEXT_FAINT: Color32 = Color32::from_rgb(86, 92, 105);
-
 #[cfg(windows)]
 fn get_local_date_and_greeting() -> (String, String) {
     #[allow(clippy::upper_case_acronyms)]
@@ -180,6 +158,13 @@ fn feishin_secondary_pill(ui: &mut Ui, label: &str, icon: Option<Icon>, palette:
     resp
 }
 
+#[inline]
+fn lerp_channel(bg: u8, target: u8, factor: f32) -> u8 {
+    let b = bg as f32;
+    let tgt = target as f32;
+    ((b + (tgt - b) * factor).round() as i32).clamp(0, 255) as u8
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_home(
     ui: &mut Ui,
@@ -194,90 +179,112 @@ pub fn render_home(
 ) {
     let palette = theme.bento_palette();
 
+    // 1. Full-Bleed Edge-to-Edge Top Ambient Gradient (Zero Dark Gutters)
+    // Painted FIRST on the background layer across the entire width of the center pane.
+    let full_rect = ui.max_rect();
+    let gradient_h = 300.0_f32.min(full_rect.height());
+    let gradient_rect = Rect::from_min_max(
+        pos2(full_rect.left(), full_rect.top()),
+        pos2(full_rect.right(), full_rect.top() + gradient_h),
+    );
+
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=9 {
+        let t = i as f32 / 9.0;
+        let strength = (1.0 - t).powf(2.4) * 0.16;
+        let r = lerp_channel(palette.bg_center.r(), palette.accent.r(), strength);
+        let g = lerp_channel(palette.bg_center.g(), palette.accent.g(), strength);
+        let b = lerp_channel(palette.bg_center.b(), palette.accent.b(), strength);
+        let color = Color32::from_rgb(r, g, b);
+
+        let y = gradient_rect.top() + gradient_h * t;
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: pos2(gradient_rect.left(), y),
+            uv: egui::epaint::WHITE_UV,
+            color,
+        });
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: pos2(gradient_rect.right(), y),
+            uv: egui::epaint::WHITE_UV,
+            color,
+        });
+    }
+
+    for i in 0..9 {
+        let tl = (i * 2) as u32;
+        let tr = (i * 2 + 1) as u32;
+        let bl = ((i + 1) * 2) as u32;
+        let br = ((i + 1) * 2 + 1) as u32;
+        mesh.add_triangle(tl, tr, bl);
+        mesh.add_triangle(tr, br, bl);
+    }
+
+    ui.painter().with_clip_rect(full_rect).add(egui::Shape::mesh(mesh));
+
+    // 2. ScrollArea with clean internal content padding (24.0px horizontal, 20.0px top)
     ScrollArea::vertical()
         .id_salt("home_view_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            // Atmospheric Feishin Top Glow in Center Header:
-            // Soft vertical gradient fading from theme header_glow wash down to transparent bg_center over top 220px
-            let glow_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 220.0));
-            let mut glow_mesh = egui::Mesh::default();
-            glow_mesh.add_triangle(0, 1, 2);
-            glow_mesh.add_triangle(0, 2, 3);
-            let top_glow = palette.header_glow;
-            let bot_glow = Color32::from_rgba_unmultiplied(palette.bg_center.r(), palette.bg_center.g(), palette.bg_center.b(), 0);
-            glow_mesh.vertices.push(egui::epaint::Vertex {
-                pos: glow_rect.left_top(),
-                uv: egui::epaint::WHITE_UV,
-                color: top_glow,
-            });
-            glow_mesh.vertices.push(egui::epaint::Vertex {
-                pos: glow_rect.right_top(),
-                uv: egui::epaint::WHITE_UV,
-                color: top_glow,
-            });
-            glow_mesh.vertices.push(egui::epaint::Vertex {
-                pos: glow_rect.right_bottom(),
-                uv: egui::epaint::WHITE_UV,
-                color: bot_glow,
-            });
-            glow_mesh.vertices.push(egui::epaint::Vertex {
-                pos: glow_rect.left_bottom(),
-                uv: egui::epaint::WHITE_UV,
-                color: bot_glow,
-            });
-            ui.painter().add(egui::Shape::mesh(glow_mesh));
+            egui::Frame::none()
+                .inner_margin(egui::Margin {
+                    left: 24.0,
+                    right: 24.0,
+                    top: 20.0,
+                    bottom: 24.0,
+                })
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 16.0);
 
-            ui.spacing_mut().item_spacing = vec2(0.0, 16.0);
+                    // =================================================================
+                    // 1. GREETING HEADER
+                    // =================================================================
+                    render_greeting_header(ui, &palette);
 
-            // =================================================================
-            // 1. GREETING HEADER
-            // =================================================================
-            render_greeting_header(ui, &palette);
+                    // =================================================================
+                    // 2. ROW 1 — MAIN BENTO GRID (2-COLUMN ASYMMETRIC SPLIT)
+                    // =================================================================
+                    render_row1_bento(
+                        ui,
+                        tracks,
+                        recent_history,
+                        player,
+                        theme,
+                        &palette,
+                        art_manager,
+                        on_play_track,
+                        on_navigate,
+                        on_trigger_scan,
+                    );
 
-            // =================================================================
-            // 2. ROW 1 — MAIN BENTO GRID (2-COLUMN ASYMMETRIC SPLIT)
-            // =================================================================
-            render_row1_bento(
-                ui,
-                tracks,
-                recent_history,
-                player,
-                theme,
-                &palette,
-                art_manager,
-                on_play_track,
-                on_navigate,
-                on_trigger_scan,
-            );
+                    // =================================================================
+                    // 3. ROW 2 — ON REPEAT & RECENTLY ADDED SPLIT GRID
+                    // =================================================================
+                    render_row2_split_grid(
+                        ui,
+                        tracks,
+                        theme,
+                        &palette,
+                        art_manager,
+                        on_play_track,
+                        on_navigate,
+                    );
 
-            // =================================================================
-            // 3. ROW 2 — ON REPEAT & RECENTLY ADDED SPLIT GRID
-            // =================================================================
-            render_row2_split_grid(
-                ui,
-                tracks,
-                theme,
-                &palette,
-                art_manager,
-                on_play_track,
-                on_navigate,
-            );
-
-            // =================================================================
-            // 4. ROW 3 — JUMP BACK IN
-            // =================================================================
-            render_row3_jump_back_in(
-                ui,
-                tracks,
-                recent_history,
-                theme,
-                &palette,
-                art_manager,
-                player,
-                on_play_track,
-                on_navigate,
-            );
+                    // =================================================================
+                    // 4. ROW 3 — JUMP BACK IN
+                    // =================================================================
+                    render_row3_jump_back_in(
+                        ui,
+                        tracks,
+                        recent_history,
+                        theme,
+                        &palette,
+                        art_manager,
+                        player,
+                        on_play_track,
+                        on_navigate,
+                    );
+                });
         });
 }
 
@@ -1524,5 +1531,18 @@ mod tests {
                 || greeting == "Good afternoon."
                 || greeting == "Good evening."
         );
+    }
+
+    #[test]
+    fn test_home_ambient_gradient_and_lerp() {
+        assert_eq!(lerp_channel(20, 155, 0.0), 20);
+        assert_eq!(lerp_channel(20, 155, 1.0), 155);
+        let mid = lerp_channel(0, 100, 0.5);
+        assert_eq!(mid, 50);
+
+        let t0_strength = (1.0_f32 - 0.0).powf(2.4) * 0.16;
+        assert!((t0_strength - 0.16).abs() < 1e-4);
+        let t1_strength = (1.0_f32 - 1.0).powf(2.4) * 0.16;
+        assert_eq!(t1_strength, 0.0);
     }
 }

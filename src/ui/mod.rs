@@ -816,7 +816,16 @@ impl App for EclipseApp {
                                         vec2(center_w, workspace_height),
                                         Layout::top_down(egui::Align::Min),
                                         |ui| {
-                                        bento_panel_frame().show(ui, |ui| {
+                                        let center_frame = if self.current_tab == NavTab::Home {
+                                            egui::Frame::none()
+                                                .fill(palette.bg_center)
+                                                .rounding(Rounding::ZERO)
+                                                .stroke(Stroke::NONE)
+                                                .inner_margin(egui::Margin::ZERO)
+                                        } else {
+                                            bento_panel_frame()
+                                        };
+                                        center_frame.show(ui, |ui| {
                                             match self.current_tab {
                                 NavTab::Home => {
                                     render_home(

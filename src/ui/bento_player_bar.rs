@@ -19,28 +19,6 @@ use crate::ui::theme::Theme;
 use egui::{pos2, vec2, Color32, FontId, Layout, Rect, RichText, Rounding, Stroke, Ui};
 use std::time::Duration;
 
-/// Design tokens matching Feishin matte-slate aesthetic (legacy constants preserved for tests/callers)
-#[allow(dead_code)]
-const ACCENT_PURPLE: Color32 = Color32::from_rgb(156, 108, 255); // #9C6CFF
-#[allow(dead_code)]
-const ACCENT_PURPLE_HOVER: Color32 = Color32::from_rgb(175, 132, 255);
-#[allow(dead_code)]
-const ACCENT_PURPLE_DOWN: Color32 = Color32::from_rgb(138, 90, 240);
-#[allow(dead_code)]
-const TEXT_PRIMARY: Color32 = Color32::from_rgb(240, 242, 246);
-#[allow(dead_code)]
-const TEXT_SECONDARY: Color32 = Color32::from_rgb(168, 174, 188);
-#[allow(dead_code)]
-const TEXT_MUTED: Color32 = Color32::from_rgb(118, 124, 138);
-#[allow(dead_code)]
-const BG_BAR: Color32 = Color32::from_rgb(18, 21, 26);
-#[allow(dead_code)]
-const SEAM_DARK: Color32 = Color32::from_rgb(38, 43, 53);
-#[allow(dead_code)]
-const RAIL_BG: Color32 = Color32::from_rgb(39, 39, 42);
-#[allow(dead_code)]
-const BG_BUTTON_HOVER: Color32 = Color32::from_rgba_premultiplied(255, 255, 255, 12);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BentoPlayerDockAction {
     #[default]
