@@ -29,7 +29,8 @@ fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Eclipse — music, in the dark")
         .with_inner_size(vec2(1150.0, 720.0))
-        .with_min_inner_size(vec2(950.0, 600.0))
+        .with_min_inner_size(vec2(760.0, 500.0))
+        .with_resizable(true)
         .with_decorations(false) // Frameless dark glass window
         .with_transparent(true);
 
