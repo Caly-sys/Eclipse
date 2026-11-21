@@ -1,13 +1,13 @@
 # Eclipse — music, in the dark.
 
-[![Release](https://img.shields.io/badge/release-v1.2.5-7c3aed?style=flat-square)](https://github.com/Caly-sys/Eclipse/releases/tag/v1.2.5)
+[![Release](https://img.shields.io/badge/release-v1.2.6-7c3aed?style=flat-square)](https://github.com/Caly-sys/Eclipse/releases/tag/v1.2.6)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-3b82f6?style=flat-square)](https://github.com/Caly-sys/Eclipse/releases)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-ea580c?style=flat-square)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-10b981?style=flat-square)](LICENSE)
 
 A high-performance music player for Windows written in Rust with a calm, dark purple glass aesthetic.
 
-> **Project Status**: **v1.2.5 Active Release** — High-performance local-first audio player, YouTube Music streaming, Spotify public link importing, multi-format audio downloading, and cinematic fullscreen mode.
+> **Project Status**: **v1.2.6 Active Release — The UI Rework** — Feishin-style matte-slate 3-column bento layout, dynamic palette theming, real-time PCM analyzer, LRCLIB cloud lyrics modal, native Win32 mini-player rounding, and hardened streaming backend.
 
 ---
 
@@ -66,6 +66,32 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 
 ---
 
+## ✦ What's New in v1.2.6 — The UI Rework
+
+### 🍱 Feishin-Style Matte-Slate Bento 3-Column Architecture
+- **Layered Matte Charcoal Surfaces**: Completely overhauled visual architecture replacing wireframe borders with a refined matte surface hierarchy (`#12151A` bar surfaces, `#161A20` sidebars & inspector, `#1D2129` center viewport, and `#252A34` elevated cards).
+- **Subtle 1px Structural Pane Seams**: Replaced harsh high-contrast white strokes with quiet, dark 1px pane dividers (`Color32::from_rgb(36, 41, 50)`) for crisp architectural separation.
+- **Dynamic Bento Palette & Settings Theming**: Dynamic palette generator powered by active Settings Themes (`Ember`, `Verdant`, `Nebula`, `Glacier`, `Obsidian`, `Eclipse`) and Accent Colors.
+
+### 🌌 Edge-to-Edge Home Ambient Gradient
+- **Full-Bleed Center Glow**: Edge-to-edge 10-row multi-stop `egui::Mesh` blending from center slate into active theme accent color across the entire top header width with zero dark gutters.
+- **Ease-Out Color Mathematics**: Calibrated lerp curve maintains pure RGB color vibrancy without dark grey muddying.
+
+### 🎵 Restored Now Playing View & Enhanced Right Inspector
+- **Real-Time PCM Spectrum Analyzer**: Restored dedicated Now Playing view with logarithmic FFT frequency visualizer and stereo peak meters.
+- **LRCLIB Cloud Lyrics & Manual Search**: Interactive `Search Online (LRCLIB)` modal to query, preview, and apply synced lyrics on the fly.
+- **High-Contrast Active Lyric Lines**: Enhanced readability across dark matte surfaces with crisp translucent highlight pill and gold badges.
+
+### 🪟 Native Windows Pop-Out Mini-Player Rounding
+- **DWM Native Window Rounding**: Native Win32 `DwmSetWindowAttribute` / `CreateRoundRectRgn` rounded corners on the borderless mini-player viewport (`HWND`), eliminating dark rectangular corner artifacts on Windows 10/11.
+
+### 🛡️ Backend Reliability & Race Condition Fixes
+- **Track Skipping Lyrics Race Elimination**: Generational request ID tracking on async LRCLIB requests ensures late-arriving lyrics from skipped tracks never overwrite the active track.
+- **Downloader Mutex Poisoning Recovery**: All download worker queues safely recover from poisoned mutex state instead of crashing the process on panic.
+- **Safe HTML Entity Decoding**: Hardened entity parsing for YouTube metadata strings.
+
+---
+
 ## ✦ What's New in v1.2.5
 
 ### 🎧 Multi-Format Audio Downloader
@@ -111,15 +137,15 @@ Eclipse is portable and self-contained. It requires no administrative installers
 
 ### Option 1: Standalone Portable Executable (Recommended)
 
-1. Download the latest release package (`eclipse.exe` or `eclipse-v1.2.5-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
+1. Download the latest release package (`eclipse.exe` or `eclipse-v1.2.6-windows-x64.zip`) from [GitHub Releases](https://github.com/Caly-sys/Eclipse/releases).
 2. Move `eclipse.exe` into any preferred directory (such as `%LOCALAPPDATA%\Programs\Eclipse`).
 3. Double-click `eclipse.exe` to launch.
 
-#### Release SHA-256 Checksums (v1.2.5)
+#### Release SHA-256 Checksums (v1.2.6)
 | File | SHA-256 Checksum |
 |---|---|
-| `eclipse.exe` (x64 MSVC) | `42986037A378769478CD39A4921761DBF738BD3DFE54EAE77C1804B7DBD5B197` |
-| `eclipse-v1.2.5-windows-x64.zip` | *Published with GitHub release assets* |
+| `eclipse.exe` (x64 MSVC) | `33F1A3DA522BC529917FB0D22A846A1D1F21FF5D1CE97C2EAC5877D1618F5DB3` |
+| `eclipse-v1.2.6-windows-x64.zip` | `D3AA9578E2462957EE742DFAE624BE48D00385989CD53583CA95382B93BE2A1E` |
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**
