@@ -605,23 +605,68 @@ fn render_queue_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &Ben
 fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &BentoPalette) -> InspectorAction {
     let mut action = InspectorAction::None;
 
-    // Header bar with compact Search LRCLIB pill button and optional source badge
+    // Zero per-frame conversions: Cache FullscreenLyrics in ui.data
+    let fs_lyrics: Option<std::sync::Arc<FullscreenLyrics>> =
+        if let Some(ref lyrics) = ctx.player.lyrics {
+            if !lyrics.lines.is_empty() && lyrics.is_synced {
+                let cache_id = egui::Id::new("right_inspector_cached_fs_lyrics");
+                let cache_hash_id = egui::Id::new("right_inspector_cached_fs_lyrics_hash");
+                let hash = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    lyrics.lines.len().hash(&mut hasher);
+                    if let Some(first) = lyrics.lines.first() {
+                        first.timestamp_ms.hash(&mut hasher);
+                        first.text.hash(&mut hasher);
+                    }
+                    hasher.finish()
+                };
+                let last_hash: Option<u64> = ui.data(|d| d.get_temp(cache_hash_id));
+                if last_hash == Some(hash) {
+                    if let Some(cached) = ui.data(|d| d.get_temp::<std::sync::Arc<FullscreenLyrics>>(cache_id)) {
+                        Some(cached)
+                    } else {
+                        let parsed = std::sync::Arc::new(FullscreenLyrics::from_lyrics(lyrics));
+                        ui.data_mut(|d| {
+                            d.insert_temp(cache_id, parsed.clone());
+                            d.insert_temp(cache_hash_id, hash);
+                        });
+                        Some(parsed)
+                    }
+                } else {
+                    let parsed = std::sync::Arc::new(FullscreenLyrics::from_lyrics(lyrics));
+                    ui.data_mut(|d| {
+                        d.insert_temp(cache_id, parsed.clone());
+                        d.insert_temp(cache_hash_id, hash);
+                    });
+                    Some(parsed)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    let has_romaji = fs_lyrics.as_ref().map(|l| l.has_romaji()).unwrap_or(false);
+
+    // Header bar with compact Search LRCLIB pill button and optional quiet Feishin matte source badge
     ui.horizontal(|ui| {
-        // Small source badge if lyrics are present
+        // Small Feishin matte source badge if lyrics are present
         if let Some(ref lrc) = ctx.player.lyrics {
             let source_text = if !lrc.source.trim().is_empty() {
                 lrc.source.trim()
             } else if lrc.is_synced {
-                "Synced"
+                "LRCLIB"
             } else {
                 "Plain"
             };
-            let badge_font = egui::FontId::proportional(10.5_f32);
-            let badge_galley = ui.painter().layout_no_wrap(source_text.to_string(), badge_font, palette.text_muted);
+            let badge_font = egui::FontId::proportional(11.0_f32);
+            let badge_galley = ui.painter().layout_no_wrap(source_text.to_string(), badge_font, palette.text_secondary);
             let badge_size = badge_galley.size() + vec2(10.0_f32, 4.0_f32);
             let (b_rect, _) = ui.allocate_exact_size(badge_size, egui::Sense::hover());
-            ui.painter().rect_filled(b_rect, Rounding::same(10.0_f32), palette.bg_card);
-            ui.painter().galley(b_rect.min + vec2(5.0_f32, 2.0_f32), badge_galley, palette.text_muted);
+            ui.painter().rect_filled(b_rect, Rounding::same(6.0_f32), palette.bg_card);
+            ui.painter().rect_stroke(b_rect, Rounding::same(6.0_f32), Stroke::new(1.0_f32, palette.seam));
+            ui.painter().galley(b_rect.min + vec2(5.0_f32, 2.0_f32), badge_galley, palette.text_secondary);
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -654,10 +699,51 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &Be
             if btn_resp.clicked() && !ctx.player.is_searching_lyrics {
                 action = InspectorAction::SearchLyricsOnline;
             }
+
+            // Compact Romaji pill toggle button - ONLY rendered when track has Romaji lines
+            let romaji_id = egui::Id::new("right_inspector_show_romaji");
+            let mut show_romaji: bool = ui.data(|d| d.get_temp(romaji_id)).unwrap_or(true);
+
+            if has_romaji {
+                ui.add_space(4.0_f32);
+                let r_font = egui::FontId::proportional(11.0_f32);
+                let r_text = "Romaji";
+                let r_color = if show_romaji { palette.accent } else { palette.text_muted };
+                let r_galley = ui.painter().layout_no_wrap(r_text.to_string(), r_font, r_color);
+                let r_size = r_galley.size() + vec2(12.0_f32, 6.0_f32);
+                let (r_rect, r_resp) = ui.allocate_exact_size(r_size, egui::Sense::click());
+                let r_hovered = r_resp.hovered();
+                if r_hovered {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                let (r_fill, r_stroke) = if show_romaji {
+                    (
+                        Color32::from_rgba_premultiplied(palette.accent.r(), palette.accent.g(), palette.accent.b(), 35),
+                        Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(palette.accent.r(), palette.accent.g(), palette.accent.b(), 70)),
+                    )
+                } else {
+                    (
+                        if r_hovered { palette.bg_card_hover } else { palette.bg_card },
+                        Stroke::new(1.0_f32, palette.seam),
+                    )
+                };
+                ui.painter().rect_filled(r_rect, Rounding::same(6.0_f32), r_fill);
+                ui.painter().rect_stroke(r_rect, Rounding::same(6.0_f32), r_stroke);
+                let r_pos = pos2(
+                    r_rect.center().x - r_galley.size().x * 0.5_f32,
+                    r_rect.center().y - r_galley.size().y * 0.5_f32,
+                );
+                ui.painter().galley(r_pos, r_galley, r_color);
+                let r_resp = r_resp.on_hover_text(if show_romaji { "Romaji sub-lines: ON (Click to hide)" } else { "Romaji sub-lines: OFF (Click to show)" });
+                if r_resp.clicked() {
+                    show_romaji = !show_romaji;
+                    ui.data_mut(|d| d.insert_temp(romaji_id, show_romaji));
+                }
+            }
         });
     });
 
-    let Some(ref lrc) = ctx.player.lyrics else {
+    let Some(ref fs_lyrics) = fs_lyrics else {
         // Friendly empty state
         ui.add_space(30.0_f32);
         ui.vertical_centered(|ui| {
@@ -671,7 +757,6 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &Be
         return action;
     };
 
-    let fs_lyrics = FullscreenLyrics::from_lyrics(lrc);
     if fs_lyrics.lines.is_empty() {
         ui.add_space(30.0_f32);
         ui.vertical_centered(|ui| {
@@ -713,12 +798,20 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &Be
         let avail_w = ui.available_width();
         let wrap_width = (avail_w - 24.0_f32).max(100.0_f32);
 
-        // Active line: Bold pure crisp white (~15.0px) for 100% legibility (English & CJK)
+        let romaji_id = egui::Id::new("right_inspector_show_romaji");
+        let show_romaji: bool = ui.data(|d| d.get_temp(romaji_id)).unwrap_or(true);
+        let romaji_opt = if show_romaji && !is_instrumental {
+            line.romaji.as_deref()
+        } else {
+            None
+        };
+
+        // Active line: Bold pure crisp white (~14.5px) for 100% legibility (English & CJK)
         // Inactive upcoming lines: palette.text_secondary
         // Inactive past lines: palette.text_muted
         let rich = if is_active {
             RichText::new(display_text)
-                .size(15.0_f32)
+                .size(14.5_f32)
                 .strong()
                 .color(Color32::WHITE)
         } else if is_past {
@@ -739,7 +832,30 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &Be
             egui::TextStyle::Body,
         );
 
-        let row_height = (galley.size().y + 10.0_f32).max(28.0_f32);
+        let romaji_galley = romaji_opt.map(|r_text| {
+            let r_color = if is_active {
+                Color32::from_white_alpha(210)
+            } else {
+                palette.text_muted
+            };
+            let r_size = if is_active { 11.0_f32 } else { 10.5_f32 };
+            let r_rich = RichText::new(r_text).size(r_size).color(r_color);
+            let r_widget: egui::WidgetText = r_rich.into();
+            r_widget.into_galley(
+                ui,
+                Some(egui::TextWrapMode::Wrap),
+                wrap_width,
+                egui::TextStyle::Body,
+            )
+        });
+
+        let content_h = if let Some(ref rg) = romaji_galley {
+            galley.size().y + 2.0_f32 + rg.size().y
+        } else {
+            galley.size().y
+        };
+
+        let row_height = (content_h + 10.0_f32).max(28.0_f32);
         let (row_rect, row_resp) = ui.allocate_exact_size(
             vec2(avail_w, row_height),
             egui::Sense::click(),
@@ -769,7 +885,7 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &Be
         }
 
         let text_x = row_rect.min.x + 12.0_f32;
-        let text_y = row_rect.min.y + (row_height - galley.size().y) * 0.5_f32;
+        let text_y = row_rect.min.y + (row_height - content_h) * 0.5_f32;
         let text_pos = pos2(text_x, text_y);
 
         if !is_active && is_hovered {
@@ -791,6 +907,18 @@ fn render_lyrics_tab(ui: &mut egui::Ui, ctx: &mut InspectorContext, palette: &Be
                 palette.text_secondary
             };
             ui.painter().galley(text_pos, galley, fallback_color);
+        }
+
+        if let Some(ref rg) = romaji_galley {
+            let romaji_y = text_y + content_h - rg.size().y;
+            let romaji_color = if is_active {
+                Color32::from_white_alpha(210)
+            } else if is_hovered {
+                palette.text_secondary
+            } else {
+                palette.text_muted
+            };
+            ui.painter().galley(pos2(text_x, romaji_y), rg.clone(), romaji_color);
         }
 
         if row_resp.clicked() {
@@ -1232,5 +1360,32 @@ mod tests {
             assert_eq!(active, 1, "line 1 should be active");
             assert!(2 > active, "line 2 should be upcoming");
         }
+    }
+
+    #[test]
+    fn test_right_inspector_english_lyrics_no_romaji() {
+        let ctx = egui::Context::default();
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        let mut art_manager = AlbumArtManager::new();
+        let theme = Theme::from_name("Eclipse", None);
+
+        let lrc_en = "[00:01.00] Just a simple English line\n[00:05.00] Another line in English";
+        player.lyrics = Some(crate::lyrics::lrc::Lyrics::parse(lrc_en, "en_test"));
+
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut insp_ctx = InspectorContext {
+                    player: &mut player,
+                    stream_controller: None,
+                    art_manager: &mut art_manager,
+                    theme: &theme,
+                    active_tab: InspectorTab::Lyrics,
+                };
+                let (tab, action) = render_right_inspector(ui, &mut insp_ctx);
+                assert_eq!(tab, InspectorTab::Lyrics);
+                assert_eq!(action, InspectorAction::None);
+            });
+        });
     }
 }

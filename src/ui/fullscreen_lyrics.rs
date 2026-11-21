@@ -10,6 +10,7 @@ pub struct FullscreenLyricLine {
     pub time_secs: f64,
     pub text: String,
     pub is_instrumental: bool,
+    pub romaji: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -35,10 +36,16 @@ impl FullscreenLyrics {
             let time_secs = (line.timestamp_ms as f64) / 1000.0;
             let text = line.text.trim().to_string();
             let is_instrumental = text == "..." || text.is_empty();
+            let romaji = if !is_instrumental {
+                crate::ui::romaji::to_romaji_if_japanese(&text)
+            } else {
+                None
+            };
             lines.push(FullscreenLyricLine {
                 time_secs,
                 text,
                 is_instrumental,
+                romaji,
             });
         }
         Self::new(lines)
@@ -104,6 +111,11 @@ impl FullscreenLyrics {
     pub fn get(&self, index: usize) -> Option<&FullscreenLyricLine> {
         self.lines.get(index)
     }
+
+    /// Returns true if at least one lyric line contains a cached Romaji transliteration.
+    pub fn has_romaji(&self) -> bool {
+        self.lines.iter().any(|line| line.romaji.is_some())
+    }
 }
 
 #[cfg(test)]
@@ -116,21 +128,25 @@ mod tests {
                 time_secs: 10.0,
                 text: "First line of the song".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
             FullscreenLyricLine {
                 time_secs: 15.0,
                 text: "...".to_string(),
                 is_instrumental: true,
+                romaji: None,
             },
             FullscreenLyricLine {
                 time_secs: 20.0,
                 text: "Second line of the song".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
             FullscreenLyricLine {
                 time_secs: 30.0,
                 text: "Third line of the song".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
         ])
     }
@@ -217,6 +233,7 @@ mod tests {
             time_secs: 5.0,
             text: "Only line".to_string(),
             is_instrumental: false,
+            romaji: None,
         }]);
 
         assert_eq!(single.active_line_index(0.0), None);
@@ -233,11 +250,13 @@ mod tests {
                 time_secs: 10.0,
                 text: "Line A".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
             FullscreenLyricLine {
                 time_secs: 20.0,
                 text: "Line B".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
         ]);
 
@@ -266,16 +285,19 @@ mod tests {
                 time_secs: 30.0,
                 text: "Line 3".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
             FullscreenLyricLine {
                 time_secs: 10.0,
                 text: "Line 1".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
             FullscreenLyricLine {
                 time_secs: 20.0,
                 text: "Line 2".to_string(),
                 is_instrumental: false,
+                romaji: None,
             },
         ]);
 
@@ -343,5 +365,32 @@ mod tests {
         assert!(fs.lines[2].is_instrumental);
         assert_eq!(fs.lines[3].time_secs, 6.0);
         assert_eq!(fs.lines[3].text, "Repeated chorus");
+        assert!(!fs.has_romaji());
+    }
+
+    #[test]
+    fn test_has_romaji_detection() {
+        let empty = FullscreenLyrics::default();
+        assert!(!empty.has_romaji());
+
+        let english_raw = crate::lyrics::Lyrics {
+            lines: vec![
+                crate::lyrics::LyricLine { timestamp_ms: 1000, text: "Hello world".to_string() },
+            ],
+            is_synced: true,
+            source: "test".to_string(),
+        };
+        let english_fs = FullscreenLyrics::from_lyrics(&english_raw);
+        assert!(!english_fs.has_romaji());
+
+        let japanese_raw = crate::lyrics::Lyrics {
+            lines: vec![
+                crate::lyrics::LyricLine { timestamp_ms: 1000, text: "君が好きだと叫びたい".to_string() },
+            ],
+            is_synced: true,
+            source: "test".to_string(),
+        };
+        let japanese_fs = FullscreenLyrics::from_lyrics(&japanese_raw);
+        assert!(japanese_fs.has_romaji());
     }
 }

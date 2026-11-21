@@ -186,18 +186,80 @@ pub fn render_cinematic_fullscreen(
         },
     );
 
-    // 6. Render Right Column (Synced / Plain Lyrics Stream)
+    // 6. Cached FullscreenLyrics & Shared Romaji Toggle State
+    let romaji_id = Id::new("now_playing_lyrics_show_romaji");
+    let inspector_romaji_id = Id::new("right_inspector_show_romaji");
+    let mut show_romaji: bool = ui
+        .data(|d| d.get_temp(romaji_id).or_else(|| d.get_temp(inspector_romaji_id)))
+        .unwrap_or(true);
+
+    let fs_lyrics: Option<std::sync::Arc<crate::ui::fullscreen_lyrics::FullscreenLyrics>> =
+        if let Some(ref lyrics) = player.lyrics {
+            if !lyrics.lines.is_empty() && lyrics.is_synced {
+                let fs_lyrics_id = Id::new("fullscreen_cached_fs_lyrics");
+                let fs_lyrics_hash_id = Id::new("fullscreen_cached_fs_lyrics_hash");
+                let last_hash: Option<u64> = ui.data(|d| d.get_temp(fs_lyrics_hash_id));
+
+                if last_hash == Some(track_hash) {
+                    if let Some(cached) = ui.data(|d| d.get_temp::<std::sync::Arc<crate::ui::fullscreen_lyrics::FullscreenLyrics>>(fs_lyrics_id)) {
+                        Some(cached)
+                    } else {
+                        let parsed = std::sync::Arc::new(crate::ui::fullscreen_lyrics::FullscreenLyrics::from_lyrics(lyrics));
+                        ui.data_mut(|d| {
+                            d.insert_temp(fs_lyrics_id, parsed.clone());
+                            d.insert_temp(fs_lyrics_hash_id, track_hash);
+                        });
+                        Some(parsed)
+                    }
+                } else {
+                    let parsed = std::sync::Arc::new(crate::ui::fullscreen_lyrics::FullscreenLyrics::from_lyrics(lyrics));
+                    ui.data_mut(|d| {
+                        d.insert_temp(fs_lyrics_id, parsed.clone());
+                        d.insert_temp(fs_lyrics_hash_id, track_hash);
+                    });
+                    Some(parsed)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+    let has_romaji = fs_lyrics.as_ref().map(|l| l.has_romaji()).unwrap_or(false);
+
+    // 7. Render Right Column (Synced / Plain Lyrics Stream)
     ui.allocate_new_ui(
         UiBuilder::new()
             .max_rect(right_rect)
             .layout(Layout::top_down(egui::Align::Min)),
         |right_ui| {
-            render_right_lyrics_column(right_ui, player, theme, right_rect, track_hash);
+            render_right_lyrics_column(
+                right_ui,
+                player,
+                theme,
+                right_rect,
+                track_hash,
+                fs_lyrics.as_deref(),
+                show_romaji,
+            );
         },
     );
 
-    // 7. Floating Top-Right Overlay (Exit Fullscreen Button)
-    render_floating_exit_button(ui, theme, full_rect, on_exit_fullscreen);
+    // 8. Floating Top-Right Overlay (Exit Fullscreen Button & Romaji Toggle Pill)
+    render_floating_controls(
+        ui,
+        theme,
+        full_rect,
+        has_romaji,
+        &mut show_romaji,
+        on_exit_fullscreen,
+    );
+
+    ui.data_mut(|d| {
+        d.insert_temp(romaji_id, show_romaji);
+        d.insert_temp(inspector_romaji_id, show_romaji);
+    });
 }
 
 /// Renders the vertically centered left column with large cover art, track info, seekbar, and controls.
@@ -881,6 +943,8 @@ fn render_right_lyrics_column(
     theme: &Theme,
     panel_rect: Rect,
     track_hash: u64,
+    fs_lyrics: Option<&crate::ui::fullscreen_lyrics::FullscreenLyrics>,
+    show_romaji: bool,
 ) {
     let current_pos_secs = player.engine.position().as_secs_f64();
 
@@ -889,7 +953,15 @@ fn render_right_lyrics_column(
             render_no_lyrics_card(ui, player.is_loading_lyrics, theme, panel_rect);
             None
         } else if lyrics.is_synced {
-            render_synced_lyrics(ui, lyrics, current_pos_secs, theme, panel_rect, track_hash)
+            render_synced_lyrics(
+                ui,
+                lyrics,
+                current_pos_secs,
+                theme,
+                track_hash,
+                fs_lyrics,
+                show_romaji,
+            )
         } else {
             render_plain_lyrics(ui, lyrics, theme, panel_rect);
             None
@@ -906,13 +978,15 @@ fn render_right_lyrics_column(
 
 /// Renders synchronized .lrc lyrics with content-local auto-centering scroll,
 /// manual wheel scroll respect, and high-contrast visual hierarchy.
+#[allow(clippy::too_many_arguments)]
 fn render_synced_lyrics(
     ui: &mut Ui,
     lyrics: &Lyrics,
     current_pos_secs: f64,
     theme: &Theme,
-    _panel_rect: Rect,
     track_hash: u64,
+    fs_lyrics: Option<&crate::ui::fullscreen_lyrics::FullscreenLyrics>,
+    show_romaji: bool,
 ) -> Option<u64> {
     let viewport_h = ui.available_height().max(1.0);
     let scroll_state_id = Id::new("fullscreen_lyrics_scroll_state");
@@ -948,29 +1022,125 @@ fn render_synced_lyrics(
                 let display_text = format_lyric_line_display(trimmed);
                 let style = compute_line_style(idx, active_line_idx, is_instrumental);
 
-                let mut rich = RichText::new(display_text)
-                    .size(style.font_size)
-                    .color(style.color);
-                if style.is_strong {
-                    rich = rich.strong();
-                }
+                let line_romaji = if show_romaji && !is_instrumental {
+                    fs_lyrics
+                        .and_then(|fl| fl.lines.get(idx))
+                        .and_then(|fl_line| fl_line.romaji.as_deref())
+                } else {
+                    None
+                };
 
-                let line_response = s_ui.horizontal(|h_ui| {
-                    h_ui.add_space(20.0);
-                    h_ui.add(
-                        egui::Button::new(rich)
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE)
-                            .rounding(Rounding::same(8.0)),
-                    )
-                }).inner;
+                let (line_response, line_has_romaji) = if let Some(romaji_str) = line_romaji {
+                    let avail_w = s_ui.available_width().max(120.0);
+                    let wrap_width = (avail_w - 40.0).max(100.0);
+
+                    let mut main_rich = RichText::new(display_text)
+                        .size(style.font_size)
+                        .color(style.color);
+                    if style.is_strong {
+                        main_rich = main_rich.strong();
+                    }
+                    let main_widget: egui::WidgetText = main_rich.into();
+                    let main_galley = main_widget.into_galley(
+                        s_ui,
+                        Some(egui::TextWrapMode::Wrap),
+                        wrap_width,
+                        egui::TextStyle::Body,
+                    );
+
+                    let romaji_color = if is_active {
+                        Color32::from_white_alpha(210)
+                    } else {
+                        match active_line_idx {
+                            Some(active) => {
+                                if idx < active {
+                                    Color32::from_white_alpha(65)
+                                } else if idx == active + 1 {
+                                    Color32::from_white_alpha(115)
+                                } else {
+                                    Color32::from_white_alpha(95)
+                                }
+                            }
+                            None => {
+                                if idx == 0 {
+                                    Color32::from_white_alpha(115)
+                                } else {
+                                    Color32::from_white_alpha(65)
+                                }
+                            }
+                        }
+                    };
+                    let romaji_size = if is_active { 15.0 } else { 12.5 };
+                    let romaji_rich = RichText::new(romaji_str)
+                        .size(romaji_size)
+                        .color(romaji_color);
+                    let romaji_widget: egui::WidgetText = romaji_rich.into();
+                    let romaji_galley = romaji_widget.into_galley(
+                        s_ui,
+                        Some(egui::TextWrapMode::Wrap),
+                        wrap_width,
+                        egui::TextStyle::Body,
+                    );
+
+                    let pad_x = 8.0;
+                    let pad_y = 4.0;
+                    let gap_y = 3.0;
+                    let block_w = main_galley.size().x.max(romaji_galley.size().x);
+                    let block_h = main_galley.size().y + gap_y + romaji_galley.size().y;
+                    let desired_size = vec2(block_w + pad_x * 2.0, block_h + pad_y * 2.0);
+
+                    let resp = s_ui.horizontal(|h_ui| {
+                        h_ui.add_space(20.0);
+                        let (rect, resp) = h_ui.allocate_exact_size(desired_size, Sense::click());
+                        if resp.hovered() && !is_active {
+                            h_ui.painter().rect_filled(
+                                rect,
+                                Rounding::same(6.0),
+                                Color32::from_rgba_premultiplied(255, 255, 255, 14),
+                            );
+                        }
+
+                        let main_pos = pos2(rect.min.x + pad_x, rect.min.y + pad_y);
+                        let romaji_pos = pos2(rect.min.x + pad_x, rect.min.y + pad_y + main_galley.size().y + gap_y);
+
+                        h_ui.painter().galley(main_pos, main_galley, style.color);
+                        h_ui.painter().galley(romaji_pos, romaji_galley, romaji_color);
+
+                        resp
+                    }).inner;
+
+                    (resp, true)
+                } else {
+                    let mut rich = RichText::new(display_text)
+                        .size(style.font_size)
+                        .color(style.color);
+                    if style.is_strong {
+                        rich = rich.strong();
+                    }
+
+                    let resp = s_ui.horizontal(|h_ui| {
+                        h_ui.add_space(20.0);
+                        h_ui.add(
+                            egui::Button::new(rich)
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE)
+                                .rounding(Rounding::same(8.0)),
+                        )
+                    }).inner;
+
+                    (resp, false)
+                };
 
                 if is_active {
                     let local_center_y = line_response.rect.center().y - content_origin_y;
                     detected_target_y = Some(calculate_target_scroll_y(local_center_y, viewport_h));
 
                     // Glowing accent vertical bar next to the active line
-                    let bar_h = (line_response.rect.height() - 8.0).clamp(16.0, 32.0);
+                    let bar_h = if line_has_romaji {
+                        (line_response.rect.height() - 6.0).clamp(24.0, 56.0)
+                    } else {
+                        (line_response.rect.height() - 8.0).clamp(16.0, 32.0)
+                    };
                     let bar_rect = Rect::from_center_size(
                         pos2(line_response.rect.min.x - 14.0, line_response.rect.center().y),
                         vec2(4.0, bar_h),
@@ -992,7 +1162,7 @@ fn render_synced_lyrics(
 
                 if line_response.hovered() {
                     s_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    if !is_active {
+                    if !is_active && !line_has_romaji {
                         s_ui.painter().rect_filled(
                             line_response.rect.expand2(vec2(8.0, 2.0)),
                             Rounding::same(6.0),
@@ -1005,7 +1175,11 @@ fn render_synced_lyrics(
                     seek_target = Some(line.timestamp_ms);
                 }
 
-                s_ui.add_space(8.0);
+                if line_has_romaji {
+                    s_ui.add_space(15.0);
+                } else {
+                    s_ui.add_space(8.0);
+                }
             }
 
             s_ui.add_space(viewport_h * 0.42);
@@ -1119,56 +1293,155 @@ fn render_no_lyrics_card(
     );
 }
 
-/// Renders floating subtle top-right button to exit fullscreen view.
+/// Renders floating subtle top-right controls (Romaji toggle pill and Exit Fullscreen button).
+fn render_floating_controls(
+    ui: &mut Ui,
+    theme: &Theme,
+    full_rect: Rect,
+    has_romaji: bool,
+    show_romaji: &mut bool,
+    on_exit_fullscreen: &mut bool,
+) {
+    let exit_button_size = vec2(178.0, 36.0);
+    let right_pad = 32.0;
+    let top_pad = 24.0;
+    let gap = 8.0;
+
+    let exit_rect = Rect::from_min_size(
+        pos2(full_rect.max.x - exit_button_size.x - right_pad, full_rect.min.y + top_pad),
+        exit_button_size,
+    );
+
+    // 1. Optional Romaji Toggle Pill (Rendered ONLY when track has romaji)
+    if has_romaji {
+        let romaji_button_size = vec2(84.0, 36.0);
+        let romaji_rect = Rect::from_min_size(
+            pos2(exit_rect.min.x - romaji_button_size.x - gap, full_rect.min.y + top_pad),
+            romaji_button_size,
+        );
+
+        let resp = ui.allocate_rect(romaji_rect, Sense::click());
+        let is_hovered = resp.hovered();
+
+        let bg_color = if *show_romaji {
+            if is_hovered {
+                Color32::from_rgba_premultiplied(
+                    (theme.accent.r() as f32 * 0.35) as u8,
+                    (theme.accent.g() as f32 * 0.35) as u8,
+                    (theme.accent.b() as f32 * 0.35) as u8,
+                    220,
+                )
+            } else {
+                Color32::from_rgba_premultiplied(
+                    (theme.accent.r() as f32 * 0.22) as u8,
+                    (theme.accent.g() as f32 * 0.22) as u8,
+                    (theme.accent.b() as f32 * 0.22) as u8,
+                    180,
+                )
+            }
+        } else if is_hovered {
+            Color32::from_rgba_premultiplied(35, 28, 55, 220)
+        } else {
+            Color32::from_rgba_premultiplied(20, 16, 32, 160)
+        };
+
+        let border_color = if *show_romaji {
+            theme.accent
+        } else if is_hovered {
+            theme.border_accent
+        } else {
+            theme.border
+        };
+
+        ui.painter().rect_filled(romaji_rect, Rounding::same(18.0), bg_color);
+        ui.painter().rect_stroke(romaji_rect, Rounding::same(18.0), Stroke::new(1.0_f32, border_color));
+
+        let text_col = if *show_romaji {
+            theme.accent
+        } else if is_hovered {
+            Color32::WHITE
+        } else {
+            theme.text_secondary
+        };
+
+        ui.painter().text(
+            romaji_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "Romaji",
+            FontId::proportional(12.5),
+            text_col,
+        );
+
+        if is_hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        if resp.clicked() {
+            *show_romaji = !*show_romaji;
+        }
+    }
+
+    // 2. Exit Fullscreen Button
+    let exit_resp = ui.allocate_rect(exit_rect, Sense::click());
+    let is_exit_hovered = exit_resp.hovered();
+
+    let exit_bg = if is_exit_hovered {
+        Color32::from_rgba_premultiplied(35, 28, 55, 220)
+    } else {
+        Color32::from_rgba_premultiplied(20, 16, 32, 160)
+    };
+
+    let exit_border = if is_exit_hovered {
+        theme.border_accent
+    } else {
+        theme.border
+    };
+
+    ui.painter().rect_filled(exit_rect, Rounding::same(18.0), exit_bg);
+    ui.painter().rect_stroke(exit_rect, Rounding::same(18.0), Stroke::new(1.0_f32, exit_border));
+
+    let icon_rect = Rect::from_center_size(
+        pos2(exit_rect.min.x + 22.0, exit_rect.center().y),
+        vec2(16.0, 16.0),
+    );
+    let exit_text_col = if is_exit_hovered { Color32::WHITE } else { theme.text_secondary };
+    icons::paint_icon(ui.painter(), Icon::Minimize, icon_rect, exit_text_col);
+
+    let text_pos = pos2(exit_rect.min.x + 40.0, exit_rect.center().y - 1.0);
+    ui.painter().text(
+        text_pos,
+        egui::Align2::LEFT_CENTER,
+        "Exit Fullscreen (Esc)",
+        FontId::proportional(12.5),
+        exit_text_col,
+    );
+
+    if is_exit_hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    if exit_resp.clicked() {
+        *on_exit_fullscreen = true;
+    }
+}
+
+/// Compatibility wrapper for existing callers.
+#[allow(dead_code)]
 fn render_floating_exit_button(
     ui: &mut Ui,
     theme: &Theme,
     full_rect: Rect,
     on_exit_fullscreen: &mut bool,
 ) {
-    let button_size = vec2(178.0, 36.0);
-    let top_rect = Rect::from_min_size(
-        pos2(full_rect.max.x - button_size.x - 32.0, full_rect.min.y + 24.0),
-        button_size,
+    let mut dummy_show_romaji = false;
+    render_floating_controls(
+        ui,
+        theme,
+        full_rect,
+        false,
+        &mut dummy_show_romaji,
+        on_exit_fullscreen,
     );
-
-    let resp = ui.allocate_rect(top_rect, Sense::click());
-    let is_hovered = resp.hovered();
-
-    let bg_color = if is_hovered {
-        Color32::from_rgba_premultiplied(35, 28, 55, 220)
-    } else {
-        Color32::from_rgba_premultiplied(20, 16, 32, 160)
-    };
-
-    let border_color = if is_hovered {
-        theme.border_accent
-    } else {
-        theme.border
-    };
-
-    ui.painter().rect_filled(top_rect, Rounding::same(18.0), bg_color);
-    ui.painter().rect_stroke(top_rect, Rounding::same(18.0), Stroke::new(1.0_f32, border_color));
-
-    let icon_rect = Rect::from_center_size(
-        pos2(top_rect.min.x + 22.0, top_rect.center().y),
-        vec2(16.0, 16.0),
-    );
-    let text_col = if is_hovered { Color32::WHITE } else { theme.text_secondary };
-    icons::paint_icon(ui.painter(), Icon::Minimize, icon_rect, text_col);
-
-    let text_pos = pos2(top_rect.min.x + 40.0, top_rect.center().y - 1.0);
-    ui.painter().text(
-        text_pos,
-        egui::Align2::LEFT_CENTER,
-        "Exit Fullscreen (Esc)",
-        FontId::proportional(12.5),
-        text_col,
-    );
-
-    if resp.clicked() {
-        *on_exit_fullscreen = true;
-    }
 }
 
 #[cfg(test)]
@@ -1535,5 +1808,106 @@ mod tests {
         assert!((1..=12).contains(&hour));
         assert!(min < 60);
         assert!(parts[1] == "AM" || parts[1] == "PM");
+    }
+
+    #[test]
+    fn test_render_fullscreen_japanese_synced_lyrics_with_romaji() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let track = Track {
+                    id: 99,
+                    title: "First Love".to_string(),
+                    artist: "Utada Hikaru".to_string(),
+                    album: "First Love".to_string(),
+                    duration_secs: 260.0,
+                    sample_rate: 44100,
+                    bitrate_kbps: 1411,
+                    format: "FLAC".to_string(),
+                    path: "C:\\music\\utada.flac".to_string(),
+                    ..Default::default()
+                };
+                player.load_queue(vec![track], 0);
+
+                let lyrics = Lyrics {
+                    lines: vec![
+                        LyricLine { timestamp_ms: 0, text: "最後のキスは".to_string() },
+                        LyricLine { timestamp_ms: 3000, text: "タバコのflavorがした".to_string() },
+                        LyricLine { timestamp_ms: 7000, text: "苦くて切ない香り".to_string() },
+                    ],
+                    is_synced: true,
+                    source: "test_japanese".to_string(),
+                };
+                player.lyrics = Some(lyrics);
+
+                let theme = Theme::from_name("Nebula", None);
+                let mut art_manager = AlbumArtManager::new();
+                let mut ambient_cache = AmbientBlurCache::new();
+                let mut on_exit = false;
+
+                render_cinematic_fullscreen(
+                    ui,
+                    &mut player,
+                    &theme,
+                    &mut art_manager,
+                    &mut ambient_cache,
+                    &mut on_exit,
+                );
+
+                assert!(!on_exit);
+            });
+        });
+    }
+
+    #[test]
+    fn test_render_fullscreen_english_synced_lyrics_no_romaji() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let track = Track {
+                    id: 100,
+                    title: "Hello".to_string(),
+                    artist: "Adele".to_string(),
+                    album: "25".to_string(),
+                    duration_secs: 295.0,
+                    sample_rate: 44100,
+                    bitrate_kbps: 1411,
+                    format: "FLAC".to_string(),
+                    path: "C:\\music\\adele.flac".to_string(),
+                    ..Default::default()
+                };
+                player.load_queue(vec![track], 0);
+
+                let lyrics = Lyrics {
+                    lines: vec![
+                        LyricLine { timestamp_ms: 0, text: "Hello, it's me".to_string() },
+                        LyricLine { timestamp_ms: 4000, text: "I was wondering if after all these years".to_string() },
+                    ],
+                    is_synced: true,
+                    source: "test_english".to_string(),
+                };
+                player.lyrics = Some(lyrics);
+
+                let theme = Theme::from_name("Eclipse", None);
+                let mut art_manager = AlbumArtManager::new();
+                let mut ambient_cache = AmbientBlurCache::new();
+                let mut on_exit = false;
+
+                render_cinematic_fullscreen(
+                    ui,
+                    &mut player,
+                    &theme,
+                    &mut art_manager,
+                    &mut ambient_cache,
+                    &mut on_exit,
+                );
+
+                assert!(!on_exit);
+            });
+        });
     }
 }

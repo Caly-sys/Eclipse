@@ -14,6 +14,7 @@ pub mod pip;
 pub mod playerbar;
 pub mod resize;
 pub mod right_inspector;
+pub mod romaji;
 pub mod shortcuts;
 pub mod sidebar;
 pub mod theme;

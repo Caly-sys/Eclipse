@@ -30,6 +30,7 @@ base64 = "0.22"
 wry = "0.47"
 tao = "0.30"
 tray-icon = "0.26.1"
+lindera = { version = "6.2", features = ["embed-ipadic"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }

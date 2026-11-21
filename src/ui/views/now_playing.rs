@@ -32,93 +32,104 @@ pub fn render_now_playing(
 ) {
     let palette = theme.bento_palette();
 
-    if player.playback_source.is_stream() {
-        if let Some(stream_track) = player.active_stream_track.clone() {
-            render_stream_now_playing(ui, &stream_track, player, theme, &palette, stream_controller);
-            return;
-        }
-    }
-    if let Some(track) = player.current_track().cloned() {
-        let pos_secs = player.engine.position().as_secs_f64();
-        let pos_ms = (pos_secs * 1000.0) as u64;
+    let outer_margin = egui::Margin {
+        top: 20.0,
+        bottom: 16.0,
+        left: 24.0,
+        right: 24.0,
+    };
 
-        let total_width = ui.available_width();
+    egui::Frame::none()
+        .inner_margin(outer_margin)
+        .show(ui, |ui| {
+            if player.playback_source.is_stream() {
+                if let Some(stream_track) = player.active_stream_track.clone() {
+                    render_stream_now_playing(ui, &stream_track, player, theme, &palette, stream_controller);
+                    return;
+                }
+            }
+            if let Some(track) = player.current_track().cloned() {
+                let pos_secs = player.engine.position().as_secs_f64();
+                let pos_ms = (pos_secs * 1000.0) as u64;
 
-        // Responsive layout breakpoint: < 860px switches to 2-row layout
-        if total_width < 860.0 {
-            ScrollArea::vertical()
-                .id_salt("now_playing_responsive_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
+                let total_width = ui.available_width();
 
-                    let mut top_rects: [Option<Rect>; 2] = [None, None];
+                // Responsive layout breakpoint: < 860px switches to 2-row layout
+                if total_width < 860.0 {
+                    ScrollArea::vertical()
+                        .id_salt("now_playing_responsive_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
 
-                    // Top row: Cover Art + Synced Lyrics side-by-side (50/50)
-                    ui.columns(2, |cols| {
+                            let mut top_rects: [Option<Rect>; 2] = [None, None];
+
+                            // Top row: Cover Art + Synced Lyrics side-by-side (50/50)
+                            ui.columns(2, |cols| {
+                                cols[0].set_clip_rect(cols[0].clip_rect().intersect(cols[0].max_rect()));
+                                top_rects[0] = render_track_info_card(&mut cols[0], &track, &palette, art_manager);
+
+                                cols[1].set_clip_rect(cols[1].clip_rect().intersect(cols[1].max_rect()));
+                                top_rects[1] = render_synced_lyrics_card(&mut cols[1], player, &track, pos_ms, &palette);
+                            });
+
+                            // Seam divider between the top 2 columns
+                            if let (Some(r0), Some(r1)) = (top_rects[0], top_rects[1]) {
+                                let y_min = r0.min.y.min(r1.min.y);
+                                let y_max = r0.max.y.max(r1.max.y);
+                                let seam_x = (r0.max.x + r1.min.x) * 0.5;
+                                let seam_rect = Rect::from_min_max(pos2(seam_x - 0.5, y_min), pos2(seam_x + 0.5, y_max));
+                                ui.painter().rect_filled(seam_rect, Rounding::ZERO, palette.seam);
+                            }
+
+                            // Bottom row: full-width AUDIO ANALYZER
+                            ui.vertical(|ui| {
+                                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                                render_audio_analyzer_card(ui, player, &track, theme, &palette);
+                            });
+                        });
+                } else {
+                    // Standard 3-column side-by-side layout (>= 860px)
+                    let mut col_rects: [Option<Rect>; 3] = [None, None, None];
+
+                    ui.columns(3, |cols| {
                         cols[0].set_clip_rect(cols[0].clip_rect().intersect(cols[0].max_rect()));
-                        top_rects[0] = render_track_info_card(&mut cols[0], &track, &palette, art_manager);
+                        col_rects[0] = render_track_info_card(&mut cols[0], &track, &palette, art_manager);
 
                         cols[1].set_clip_rect(cols[1].clip_rect().intersect(cols[1].max_rect()));
-                        top_rects[1] = render_synced_lyrics_card(&mut cols[1], player, &track, pos_ms, &palette);
+                        col_rects[1] = render_synced_lyrics_card(&mut cols[1], player, &track, pos_ms, &palette);
+
+                        cols[2].set_clip_rect(cols[2].clip_rect().intersect(cols[2].max_rect()));
+                        col_rects[2] = render_audio_analyzer_card(&mut cols[2], player, &track, theme, &palette);
                     });
 
-                    // Seam divider between the top 2 columns
-                    if let (Some(r0), Some(r1)) = (top_rects[0], top_rects[1]) {
-                        let y_min = r0.min.y.min(r1.min.y);
-                        let y_max = r0.max.y.max(r1.max.y);
-                        let seam_x = (r0.max.x + r1.min.x) * 0.5;
-                        let seam_rect = Rect::from_min_max(pos2(seam_x - 0.5, y_min), pos2(seam_x + 0.5, y_max));
-                        ui.painter().rect_filled(seam_rect, Rounding::ZERO, palette.seam);
-                    }
+                    // Subtle 1px vertical dark seam dividers between the 3 panels
+                    if let (Some(r0), Some(r1), Some(r2)) = (col_rects[0], col_rects[1], col_rects[2]) {
+                        let y_min = r0.min.y.min(r1.min.y).min(r2.min.y);
+                        let y_max = r0.max.y.max(r1.max.y).max(r2.max.y);
 
-                    // Bottom row: full-width AUDIO ANALYZER
-                    ui.vertical(|ui| {
-                        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
-                        render_audio_analyzer_card(ui, player, &track, theme, &palette);
+                        let seam1_x = (r0.max.x + r1.min.x) * 0.5;
+                        let seam1_rect = Rect::from_min_max(pos2(seam1_x - 0.5, y_min), pos2(seam1_x + 0.5, y_max));
+                        ui.painter().rect_filled(seam1_rect, Rounding::ZERO, palette.seam);
+
+                        let seam2_x = (r1.max.x + r2.min.x) * 0.5;
+                        let seam2_rect = Rect::from_min_max(pos2(seam2_x - 0.5, y_min), pos2(seam2_x + 0.5, y_max));
+                        ui.painter().rect_filled(seam2_rect, Rounding::ZERO, palette.seam);
+                    }
+                }
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.vertical_centered(|ui| {
+                        let (icon_rect, _) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::hover());
+                        paint_icon(ui.painter(), Icon::Disc, icon_rect, palette.text_muted);
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Nothing Playing").size(20.0).color(palette.text_muted));
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("Select a song from Songs or Home to start listening.").color(palette.text_secondary));
                     });
                 });
-        } else {
-            // Standard 3-column side-by-side layout (>= 860px)
-            let mut col_rects: [Option<Rect>; 3] = [None, None, None];
-
-            ui.columns(3, |cols| {
-                cols[0].set_clip_rect(cols[0].clip_rect().intersect(cols[0].max_rect()));
-                col_rects[0] = render_track_info_card(&mut cols[0], &track, &palette, art_manager);
-
-                cols[1].set_clip_rect(cols[1].clip_rect().intersect(cols[1].max_rect()));
-                col_rects[1] = render_synced_lyrics_card(&mut cols[1], player, &track, pos_ms, &palette);
-
-                cols[2].set_clip_rect(cols[2].clip_rect().intersect(cols[2].max_rect()));
-                col_rects[2] = render_audio_analyzer_card(&mut cols[2], player, &track, theme, &palette);
-            });
-
-            // Subtle 1px vertical dark seam dividers between the 3 panels
-            if let (Some(r0), Some(r1), Some(r2)) = (col_rects[0], col_rects[1], col_rects[2]) {
-                let y_min = r0.min.y.min(r1.min.y).min(r2.min.y);
-                let y_max = r0.max.y.max(r1.max.y).max(r2.max.y);
-
-                let seam1_x = (r0.max.x + r1.min.x) * 0.5;
-                let seam1_rect = Rect::from_min_max(pos2(seam1_x - 0.5, y_min), pos2(seam1_x + 0.5, y_max));
-                ui.painter().rect_filled(seam1_rect, Rounding::ZERO, palette.seam);
-
-                let seam2_x = (r1.max.x + r2.min.x) * 0.5;
-                let seam2_rect = Rect::from_min_max(pos2(seam2_x - 0.5, y_min), pos2(seam2_x + 0.5, y_max));
-                ui.painter().rect_filled(seam2_rect, Rounding::ZERO, palette.seam);
             }
-        }
-    } else {
-        ui.centered_and_justified(|ui| {
-            ui.vertical_centered(|ui| {
-                let (icon_rect, _) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::hover());
-                paint_icon(ui.painter(), Icon::Disc, icon_rect, palette.text_muted);
-                ui.add_space(8.0);
-                ui.label(RichText::new("Nothing Playing").size(20.0).color(palette.text_muted));
-                ui.add_space(8.0);
-                ui.label(RichText::new("Select a song from Songs or Home to start listening.").color(palette.text_secondary));
-            });
         });
-    }
 }
 
 /// Column 1: Artwork, Track Info, Technical Badges
@@ -140,45 +151,44 @@ fn render_track_info_card(
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
 
         ui.vertical_centered(|ui| {
-            let card_width = (ui.available_width() - 10.0).clamp(180.0, 260.0);
+            let avail_w = ui.available_width();
+            let avail_h = ui.available_height();
+            let max_h_card = (avail_h - 170.0).max(160.0);
+            let card_width = (avail_w - 10.0).clamp(180.0, 260.0).min(max_h_card);
             let art_size = vec2(card_width, card_width);
 
             // Ambient glow behind album art card matching active accent
             let (rect, _) = ui.allocate_exact_size(art_size, egui::Sense::hover());
 
-            // Multi-layered specular accent halo (borderless)
+            // Soft dark ambient shadow translated downward
+            let shadow_rect = rect.translate(vec2(0.0, 4.0));
             ui.painter().rect_filled(
-                rect.expand(10.0),
-                Rounding::same(18.0),
-                Color32::from_rgba_premultiplied(
-                    palette.accent.r(),
-                    palette.accent.g(),
-                    palette.accent.b(),
-                    18,
-                ),
-            );
-            ui.painter().rect_filled(
-                rect.expand(4.0),
-                Rounding::same(16.0),
-                Color32::from_rgba_premultiplied(
-                    palette.accent.r(),
-                    palette.accent.g(),
-                    palette.accent.b(),
-                    32,
-                ),
+                shadow_rect,
+                Rounding::same(12.0),
+                Color32::from_black_alpha(70),
             );
 
-            // Album Art Image: rounded egui::Image with Stroke::NONE
+            // Album Art Image: rounded egui::Image with 12.0px rounding and subtle stroke
             let mut painted_cover = false;
             if let Some(texture) = art_manager.get_or_load(ui.ctx(), &track.path) {
                 let img = egui::Image::new(egui::load::SizedTexture::new(texture.id(), rect.size()))
-                    .rounding(Rounding::same(14.0));
+                    .rounding(Rounding::same(12.0));
                 img.paint_at(ui, rect);
+                ui.painter().rect_stroke(
+                    rect,
+                    Rounding::same(12.0),
+                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 28)),
+                );
                 painted_cover = true;
             }
 
             if !painted_cover {
-                ui.painter().rect_filled(rect, Rounding::same(14.0), palette.bg_center);
+                ui.painter().rect_filled(rect, Rounding::same(12.0), palette.bg_center);
+                ui.painter().rect_stroke(
+                    rect,
+                    Rounding::same(12.0),
+                    Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 28)),
+                );
                 let icon_box = Rect::from_center_size(rect.center(), vec2(art_size.x * 0.36, art_size.x * 0.36));
                 paint_icon(ui.painter(), Icon::Disc, icon_box, palette.accent);
             }
@@ -279,9 +289,11 @@ fn render_synced_lyrics_card(
     let search_open_id = egui::Id::new("now_playing_lyrics_search_open");
     let search_query_id = egui::Id::new("now_playing_lyrics_search_query");
     let track_id_key = egui::Id::new("now_playing_lyrics_current_track_id");
+    let romaji_id = egui::Id::new("now_playing_lyrics_show_romaji");
 
     let mut is_search_open: bool = ui.data(|d| d.get_temp(search_open_id)).unwrap_or(false);
     let mut search_query: String = ui.data(|d| d.get_temp(search_query_id)).unwrap_or_default();
+    let mut show_romaji: bool = ui.data(|d| d.get_temp(romaji_id)).unwrap_or(true);
     let last_track_id: Option<i64> = ui.data(|d| d.get_temp(track_id_key));
 
     if last_track_id != Some(track.id) {
@@ -292,6 +304,38 @@ fn render_synced_lyrics_card(
     if search_query.trim().is_empty() {
         search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
     }
+
+    // Zero per-frame conversions: Cache has_romaji per track/lyrics
+    let has_romaji_id = egui::Id::new("now_playing_lyrics_has_romaji");
+    let has_romaji_hash_id = egui::Id::new("now_playing_lyrics_has_romaji_hash");
+    let lyrics_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        track.id.hash(&mut hasher);
+        if let Some(ref lyrics) = player.lyrics {
+            lyrics.lines.len().hash(&mut hasher);
+            if let Some(first) = lyrics.lines.first() {
+                first.timestamp_ms.hash(&mut hasher);
+                first.text.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    };
+    let last_hash: Option<u64> = ui.data(|d| d.get_temp(has_romaji_hash_id));
+    let has_romaji: bool = if last_hash == Some(lyrics_hash) {
+        ui.data(|d| d.get_temp(has_romaji_id)).unwrap_or(false)
+    } else {
+        let hr = if let Some(ref lrc) = player.lyrics {
+            lrc.lines.iter().any(|l| crate::ui::romaji::to_romaji_if_japanese(&l.text).is_some())
+        } else {
+            false
+        };
+        ui.data_mut(|d| {
+            d.insert_temp(has_romaji_hash_id, lyrics_hash);
+            d.insert_temp(has_romaji_id, hr);
+        });
+        hr
+    };
 
     let panel_frame = egui::Frame::none()
         .fill(palette.bg_card)
@@ -322,7 +366,7 @@ fn render_synced_lyrics_card(
 
             ui.horizontal(|ui| {
                 let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, palette);
-                pill_badge(ui, badge_text, badge_fill, badge_color);
+                pill_badge_with_stroke(ui, badge_text, badge_fill, badge_color, Some(Stroke::new(1.0_f32, palette.seam)));
 
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     let btn_resp = search_online_header_button(ui, is_search_open, palette);
@@ -330,6 +374,14 @@ fn render_synced_lyrics_card(
                         is_search_open = !is_search_open;
                         if is_search_open && search_query.trim().is_empty() {
                             search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+                        }
+                    }
+
+                    if has_romaji {
+                        ui.add_space(4.0);
+                        let romaji_resp = romaji_toggle_button(ui, show_romaji, palette);
+                        if romaji_resp.clicked() {
+                            show_romaji = !show_romaji;
                         }
                     }
                 });
@@ -348,7 +400,7 @@ fn render_synced_lyrics_card(
 
                 let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, palette);
                 ui.add_space(6.0);
-                pill_badge(ui, badge_text, badge_fill, badge_color);
+                pill_badge_with_stroke(ui, badge_text, badge_fill, badge_color, Some(Stroke::new(1.0_f32, palette.seam)));
 
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     let btn_resp = search_online_header_button(ui, is_search_open, palette);
@@ -356,6 +408,14 @@ fn render_synced_lyrics_card(
                         is_search_open = !is_search_open;
                         if is_search_open && search_query.trim().is_empty() {
                             search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+                        }
+                    }
+
+                    if has_romaji {
+                        ui.add_space(4.0);
+                        let romaji_resp = romaji_toggle_button(ui, show_romaji, palette);
+                        if romaji_resp.clicked() {
+                            show_romaji = !show_romaji;
                         }
                     }
                 });
@@ -697,6 +757,7 @@ fn render_synced_lyrics_card(
                     &lyrics.lines,
                     pos_ms,
                     palette,
+                    show_romaji,
                 ) {
                     seek_to(player, None, target);
                 }
@@ -732,6 +793,7 @@ fn render_synced_lyrics_card(
     ui.data_mut(|d| {
         d.insert_temp(search_open_id, is_search_open);
         d.insert_temp(search_query_id, search_query);
+        d.insert_temp(romaji_id, show_romaji);
     });
 
     Some(resp.response.rect)
@@ -1062,6 +1124,11 @@ fn seam_divider(ui: &mut Ui, palette: &BentoPalette) {
 
 /// Borderless pill badge helper matching matte-slate design
 fn pill_badge(ui: &mut Ui, text: &str, fill: Color32, text_color: Color32) {
+    pill_badge_with_stroke(ui, text, fill, text_color, None);
+}
+
+/// Pill badge helper with optional stroke
+fn pill_badge_with_stroke(ui: &mut Ui, text: &str, fill: Color32, text_color: Color32, stroke: Option<Stroke>) {
     let padding = vec2(7.5, 2.5);
     let galley = ui.painter().layout_no_wrap(
         text.to_string(),
@@ -1072,6 +1139,9 @@ fn pill_badge(ui: &mut Ui, text: &str, fill: Color32, text_color: Color32) {
     let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
     ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
+    if let Some(s) = stroke {
+        ui.painter().rect_stroke(rect, Rounding::same(6.0), s);
+    }
     ui.painter().galley(rect.min + padding, galley, text_color);
 }
 
@@ -1108,6 +1178,7 @@ pub struct DisplayLyricLine {
     pub timestamp_ms: u64,
     pub text: String,
     pub is_instrumental: bool,
+    pub romaji: Option<String>,
 }
 
 pub fn is_line_instrumental(text: &str) -> bool {
@@ -1145,6 +1216,7 @@ pub fn build_display_lyrics(lines: &[LyricLine]) -> Vec<DisplayLyricLine> {
                 timestamp_ms: 0,
                 text: String::new(),
                 is_instrumental: true,
+                romaji: None,
             });
         }
     }
@@ -1153,11 +1225,17 @@ pub fn build_display_lyrics(lines: &[LyricLine]) -> Vec<DisplayLyricLine> {
     for i in 0..lines.len() {
         let current = &lines[i];
         let is_inst = is_line_instrumental(&current.text);
+        let romaji = if is_inst {
+            None
+        } else {
+            crate::ui::romaji::to_romaji_if_japanese(&current.text)
+        };
 
         result.push(DisplayLyricLine {
             timestamp_ms: current.timestamp_ms,
             text: current.text.clone(),
             is_instrumental: is_inst,
+            romaji,
         });
 
         if i + 1 < lines.len() {
@@ -1170,6 +1248,7 @@ pub fn build_display_lyrics(lines: &[LyricLine]) -> Vec<DisplayLyricLine> {
                     timestamp_ms: mid_ts,
                     text: String::new(),
                     is_instrumental: true,
+                    romaji: None,
                 });
             }
         }
@@ -1199,122 +1278,395 @@ pub fn current_display_index(lines: &[DisplayLyricLine], pos_ms: u64) -> Option<
     }
 }
 
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct NowPlayingLyricsScrollState {
+    pub current_y: f32,
+    pub target_y: f32,
+    pub last_active_idx: Option<usize>,
+    pub manual_scroll_until: f64,
+    pub last_track_key: u64,
+}
+
+/// Linearly interpolates opaque RGB channels between background and foreground colors.
+#[inline]
+pub fn blend_rgb(bg: Color32, fg: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let r = (bg.r() as f32 + (fg.r() as f32 - bg.r() as f32) * t).round() as u8;
+    let g = (bg.g() as f32 + (fg.g() as f32 - bg.g() as f32) * t).round() as u8;
+    let b = (bg.b() as f32 + (fg.b() as f32 - bg.b() as f32) * t).round() as u8;
+    Color32::from_rgb(r, g, b)
+}
+
+/// Multiplies the alpha channel of a color by an edge fade factor (0.0..=1.0).
+#[inline]
+pub fn apply_edge_alpha(c: Color32, edge_alpha: f32) -> Color32 {
+    let factor = edge_alpha.clamp(0.0, 1.0);
+    let new_a = (c.a() as f32 * factor).round() as u8;
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), new_a)
+}
+
 pub fn render_synced_lyrics_list(
     ui: &mut Ui,
     scroll_id: &str,
     lines: &[LyricLine],
     pos_ms: u64,
     palette: &BentoPalette,
+    show_romaji: bool,
 ) -> Option<f64> {
-    let display_lines = build_display_lyrics(lines);
+    // Zero per-frame conversions: memoize display lines in ui.data
+    let cache_id = egui::Id::new("now_playing_cached_display_lyrics");
+    let cache_hash_id = egui::Id::new("now_playing_cached_display_lyrics_hash");
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        lines.len().hash(&mut hasher);
+        if let Some(first) = lines.first() {
+            first.timestamp_ms.hash(&mut hasher);
+            first.text.hash(&mut hasher);
+        }
+        hasher.finish()
+    };
+    let last_hash: Option<u64> = ui.data(|d| d.get_temp(cache_hash_id));
+    let display_lines: std::sync::Arc<Vec<DisplayLyricLine>> = if last_hash == Some(hash) {
+        if let Some(cached) = ui.data(|d| d.get_temp::<std::sync::Arc<Vec<DisplayLyricLine>>>(cache_id)) {
+            cached
+        } else {
+            let built = std::sync::Arc::new(build_display_lyrics(lines));
+            ui.data_mut(|d| {
+                d.insert_temp(cache_id, built.clone());
+                d.insert_temp(cache_hash_id, hash);
+            });
+            built
+        }
+    } else {
+        let built = std::sync::Arc::new(build_display_lyrics(lines));
+        ui.data_mut(|d| {
+            d.insert_temp(cache_id, built.clone());
+            d.insert_temp(cache_hash_id, hash);
+        });
+        built
+    };
+
     let current_idx = current_display_index(&display_lines, pos_ms);
     let mut clicked_seek_secs = None;
+    let mut detected_target_y: Option<f32> = None;
 
-    ScrollArea::vertical()
+    let viewport_h = ui.available_height().max(1.0);
+    let scroll_state_id = egui::Id::new(scroll_id).with("now_playing_scroll_state");
+    let mut scroll_state: NowPlayingLyricsScrollState = ui
+        .data(|d| d.get_temp(scroll_state_id))
+        .unwrap_or_default();
+
+    let now_secs = ui.input(|i| i.time);
+    let track_changed = scroll_state.last_track_key != hash;
+    if track_changed {
+        scroll_state.last_track_key = hash;
+        scroll_state.manual_scroll_until = 0.0;
+        scroll_state.last_active_idx = None;
+    }
+
+    let scroll_output = ScrollArea::vertical()
         .id_salt(scroll_id)
+        .vertical_scroll_offset(scroll_state.current_y)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+            let content_origin_y = ui.cursor().top();
+            let vp = ui.clip_rect();
+            ui.add_space(48.0);
+            ui.spacing_mut().item_spacing = vec2(0.0, 14.0);
 
             for (i, line) in display_lines.iter().enumerate() {
                 let is_current = current_idx == Some(i);
-
-                let size = if is_current { 18.0 } else { 14.5 };
-
-                // Active lyric highlight: subtle palette.accent_soft fill with Stroke::NONE
-                let fill = if is_current {
-                    palette.accent_soft
-                } else {
-                    Color32::TRANSPARENT
+                let is_past = current_idx.is_some_and(|act| i < act);
+                let dist = match current_idx {
+                    Some(act) => (i as isize - act as isize).unsigned_abs(),
+                    None => i,
                 };
 
-                let btn = if line.is_instrumental {
-                    let btn_resp = ui.add(
-                        egui::Button::new(RichText::new(" ").size(size))
-                            .fill(fill)
-                            .stroke(Stroke::NONE)
-                            .rounding(Rounding::same(8.0))
-                            .min_size(vec2(if is_current { 48.0 } else { 38.0 }, 0.0)),
-                    );
+                let pad_v = 10.0_f32;
+                let pad_h = 14.0_f32;
+                let avail_w = ui.available_width();
+                let wrap_width = (avail_w - pad_h * 2.0 - 12.0).max(100.0);
 
-                    let icon_color = if is_current {
-                        Color32::WHITE
-                    } else if btn_resp.hovered() {
-                        palette.text_primary
-                    } else {
-                        palette.text_muted
-                    };
+                if line.is_instrumental {
+                    let icon_size = if is_current { 16.0 } else { 12.0 };
+                    let desired_size = vec2(avail_w, icon_size + pad_v * 2.0);
+                    let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
 
-                    if btn_resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    let line_top = rect.min.y;
+                    let line_bottom = rect.max.y;
+                    let top_fade = ((line_top - (vp.top() + 14.0)) / 62.0).clamp(0.0, 1.0);
+                    let bot_fade = (((vp.bottom() - 14.0) - line_bottom) / 62.0).clamp(0.0, 1.0);
+                    let edge_alpha = top_fade.min(bot_fade).powf(1.3);
+
+                    if is_current {
+                        let local_center_y = rect.center().y - content_origin_y;
+                        detected_target_y = Some((local_center_y - viewport_h * 0.38).max(0.0));
                     }
 
-                    if ui.is_rect_visible(btn_resp.rect) {
-                        let icon_size = if is_current { 15.0 } else { 12.0 };
+                    if edge_alpha > 0.01 {
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+
+                        let (icon_color, fill) = if is_current {
+                            (
+                                Color32::WHITE,
+                                blend_rgb(palette.bg_center, palette.accent, 0.11),
+                            )
+                        } else if resp.hovered() {
+                            (
+                                Color32::from_white_alpha(225),
+                                Color32::from_white_alpha(10),
+                            )
+                        } else if is_past {
+                            (
+                                Color32::from_white_alpha(85),
+                                Color32::TRANSPARENT,
+                            )
+                        } else if dist <= 2 {
+                            (
+                                Color32::from_white_alpha(155),
+                                Color32::TRANSPARENT,
+                            )
+                        } else if dist == 3 {
+                            (
+                                Color32::from_white_alpha(90),
+                                Color32::TRANSPARENT,
+                            )
+                        } else {
+                            (
+                                Color32::from_white_alpha(70),
+                                Color32::TRANSPARENT,
+                            )
+                        };
+
+                        let icon_color = apply_edge_alpha(icon_color, edge_alpha);
+                        let fill = apply_edge_alpha(fill, edge_alpha);
+
+                        if fill != Color32::TRANSPARENT {
+                            ui.painter().rect_filled(rect, Rounding::same(10.0), fill);
+                        }
+
+                        if is_current {
+                            let bar_h = (rect.height() - 12.0).max(14.0);
+                            let bar_rect = Rect::from_min_size(
+                                pos2(rect.min.x + 4.0, rect.center().y - bar_h * 0.5),
+                                vec2(3.0, bar_h),
+                            );
+                            ui.painter().rect_filled(
+                                bar_rect,
+                                Rounding::same(1.5),
+                                apply_edge_alpha(palette.accent, edge_alpha),
+                            );
+                        }
+
                         let icon_rect = Rect::from_center_size(
-                            btn_resp.rect.center(),
+                            pos2(rect.min.x + pad_h + icon_size * 0.5, rect.center().y),
                             vec2(icon_size, icon_size),
                         );
                         paint_icon(ui.painter(), Icon::Music, icon_rect, icon_color);
 
-                        // 3.0px left palette.accent vertical bar when active
-                        if is_current {
-                            let bar_h = (btn_resp.rect.height() - 6.0).max(14.0);
-                            let bar_rect = Rect::from_min_size(
-                                pos2(btn_resp.rect.min.x + 3.0, btn_resp.rect.center().y - bar_h * 0.5),
-                                vec2(3.0, bar_h),
-                            );
-                            ui.painter().rect_filled(bar_rect, Rounding::same(1.5), palette.accent);
+                        if resp.clicked() {
+                            clicked_seek_secs = Some(line.timestamp_ms as f64 / 1000.0);
                         }
                     }
-
-                    btn_resp
                 } else {
-                    // Active line uses bold crisp Color32::WHITE text
-                    let text_color = if is_current {
-                        Color32::WHITE
+                    let has_romaji_line = show_romaji && line.romaji.is_some();
+                    let (main_size, base_main_color, romaji_size, base_romaji_color) = if is_current {
+                        (
+                            20.5_f32,
+                            Color32::WHITE,
+                            12.5_f32,
+                            Color32::from_white_alpha(190),
+                        )
+                    } else if is_past {
+                        (
+                            15.0_f32,
+                            Color32::from_white_alpha(85),
+                            11.5_f32,
+                            Color32::from_white_alpha(55),
+                        )
+                    } else if dist <= 2 {
+                        (
+                            15.0_f32,
+                            Color32::from_white_alpha(155),
+                            11.5_f32,
+                            Color32::from_white_alpha(95),
+                        )
+                    } else if dist == 3 {
+                        (
+                            14.5_f32,
+                            Color32::from_white_alpha(90),
+                            11.0_f32,
+                            Color32::from_white_alpha(60),
+                        )
                     } else {
-                        palette.text_muted
+                        (
+                            14.0_f32,
+                            Color32::from_white_alpha(70),
+                            10.5_f32,
+                            Color32::from_white_alpha(45),
+                        )
                     };
 
-                    let mut rich = RichText::new(&line.text)
-                        .color(text_color)
-                        .size(size);
-
+                    let mut main_rich = RichText::new(&line.text)
+                        .size(main_size)
+                        .color(base_main_color);
                     if is_current {
-                        rich = rich.strong();
+                        main_rich = main_rich.strong();
                     }
-
-                    let btn_resp = ui.add(
-                        egui::Button::new(rich)
-                            .fill(fill)
-                            .stroke(Stroke::NONE)
-                            .rounding(Rounding::same(8.0))
-                            .wrap(),
+                    let main_widget: egui::WidgetText = main_rich.into();
+                    let main_galley = main_widget.into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Wrap),
+                        wrap_width,
+                        egui::TextStyle::Body,
                     );
 
-                    // 3.0px left palette.accent vertical bar when active
-                    if is_current && ui.is_rect_visible(btn_resp.rect) {
-                        let bar_h = (btn_resp.rect.height() - 6.0).max(14.0);
-                        let bar_rect = Rect::from_min_size(
-                            pos2(btn_resp.rect.min.x + 3.0, btn_resp.rect.center().y - bar_h * 0.5),
-                            vec2(3.0, bar_h),
-                        );
-                        ui.painter().rect_filled(bar_rect, Rounding::same(1.5), palette.accent);
+                    let romaji_galley = if has_romaji_line {
+                        line.romaji.as_deref().map(|romaji_str| {
+                            let r_rich = RichText::new(romaji_str)
+                                .size(romaji_size)
+                                .color(base_romaji_color);
+                            let r_widget: egui::WidgetText = r_rich.into();
+                            r_widget.into_galley(
+                                ui,
+                                Some(egui::TextWrapMode::Wrap),
+                                wrap_width,
+                                egui::TextStyle::Body,
+                            )
+                        })
+                    } else {
+                        None
+                    };
+
+                    let text_h = if let Some(ref rg) = romaji_galley {
+                        main_galley.size().y + 4.0 + rg.size().y
+                    } else {
+                        main_galley.size().y
+                    };
+
+                    let desired_size = vec2(avail_w, text_h + pad_v * 2.0);
+                    let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
+
+                    let line_top = rect.min.y;
+                    let line_bottom = rect.max.y;
+                    let top_fade = ((line_top - (vp.top() + 14.0)) / 62.0).clamp(0.0, 1.0);
+                    let bot_fade = (((vp.bottom() - 14.0) - line_bottom) / 62.0).clamp(0.0, 1.0);
+                    let edge_alpha = top_fade.min(bot_fade).powf(1.3);
+
+                    if is_current {
+                        let local_center_y = rect.center().y - content_origin_y;
+                        detected_target_y = Some((local_center_y - viewport_h * 0.38).max(0.0));
                     }
 
-                    btn_resp
-                };
+                    if edge_alpha > 0.01 {
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
 
-                if is_current {
-                    btn.scroll_to_me(Some(egui::Align::Center));
-                }
+                        let (main_color, romaji_color, fill) = if is_current {
+                            (
+                                Color32::WHITE,
+                                Color32::from_white_alpha(190),
+                                blend_rgb(palette.bg_center, palette.accent, 0.11),
+                            )
+                        } else if resp.hovered() {
+                            (
+                                Color32::from_white_alpha(225),
+                                Color32::from_white_alpha(155),
+                                Color32::from_white_alpha(10),
+                            )
+                        } else {
+                            (
+                                base_main_color,
+                                base_romaji_color,
+                                Color32::TRANSPARENT,
+                            )
+                        };
 
-                if btn.clicked() {
-                    clicked_seek_secs = Some(line.timestamp_ms as f64 / 1000.0);
+                        let main_color = apply_edge_alpha(main_color, edge_alpha);
+                        let romaji_color = apply_edge_alpha(romaji_color, edge_alpha);
+                        let fill = apply_edge_alpha(fill, edge_alpha);
+
+                        if fill != Color32::TRANSPARENT {
+                            ui.painter().rect_filled(rect, Rounding::same(10.0), fill);
+                        }
+
+                        if is_current {
+                            let bar_h = (rect.height() - 16.0).max(16.0);
+                            let bar_rect = Rect::from_min_size(
+                                pos2(rect.min.x + 4.0, rect.center().y - bar_h * 0.5),
+                                vec2(3.0, bar_h),
+                            );
+                            ui.painter().rect_filled(
+                                bar_rect,
+                                Rounding::same(1.5),
+                                apply_edge_alpha(palette.accent, edge_alpha),
+                            );
+                        }
+
+                        let main_pos = pos2(rect.min.x + pad_h, rect.min.y + pad_v);
+                        ui.painter().galley(main_pos, main_galley, main_color);
+
+                        if let Some(ref rg) = romaji_galley {
+                            let romaji_pos = pos2(
+                                rect.min.x + pad_h,
+                                rect.min.y + pad_v + text_h - rg.size().y,
+                            );
+                            ui.painter().galley(romaji_pos, rg.clone(), romaji_color);
+                        }
+
+                        if resp.clicked() {
+                            clicked_seek_secs = Some(line.timestamp_ms as f64 / 1000.0);
+                        }
+                    }
                 }
             }
+
+            // 48.0px bottom spacer padding inside scroll content so last line can scroll completely clear of fade zone
+            ui.add_space(48.0);
         });
+
+    if let Some(target) = detected_target_y {
+        scroll_state.target_y = target;
+    } else if current_idx.is_none() {
+        scroll_state.target_y = 0.0;
+    }
+
+    if clicked_seek_secs.is_some() {
+        scroll_state.manual_scroll_until = 0.0;
+    }
+
+    let actual_offset_y = scroll_output.state.offset.y;
+    let wheel_delta = ui.input(|i| i.raw_scroll_delta.y.abs() + i.smooth_scroll_delta.y.abs());
+    let offset_diff = (actual_offset_y - scroll_state.current_y).abs();
+    let is_dragging = ui.input(|i| i.pointer.is_decidedly_dragging());
+
+    if (offset_diff > 0.5 && (wheel_delta > 0.0 || is_dragging)) || wheel_delta > 0.0 {
+        scroll_state.current_y = actual_offset_y;
+        scroll_state.manual_scroll_until = now_secs + 3.0;
+    }
+
+    if now_secs >= scroll_state.manual_scroll_until {
+        if track_changed || (scroll_state.target_y - scroll_state.current_y).abs() > viewport_h * 1.5 {
+            scroll_state.current_y = scroll_state.target_y;
+        } else {
+            let dt = ui.input(|i| i.stable_dt).clamp(0.001, 0.1);
+            let t = (dt * 8.0).clamp(0.0, 1.0);
+            scroll_state.current_y += (scroll_state.target_y - scroll_state.current_y) * t;
+            if (scroll_state.target_y - scroll_state.current_y).abs() > 0.5 {
+                ui.ctx().request_repaint();
+            }
+        }
+    } else {
+        let remaining_secs = (scroll_state.manual_scroll_until - now_secs).max(0.0);
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(remaining_secs));
+    }
+
+    scroll_state.last_active_idx = current_idx;
+    ui.data_mut(|d| d.insert_temp(scroll_state_id, scroll_state));
 
     clicked_seek_secs
 }
@@ -1323,7 +1675,7 @@ pub fn get_lyrics_badge(player: &PlayerController, palette: &BentoPalette) -> (&
     if player.is_loading_lyrics {
         return (
             "Searching...",
-            palette.accent_soft,
+            palette.bg_card,
             palette.accent,
         );
     }
@@ -1333,7 +1685,7 @@ pub fn get_lyrics_badge(player: &PlayerController, palette: &BentoPalette) -> (&
         _ => {
             return (
                 "No Lyrics",
-                palette.bg_center,
+                palette.bg_card,
                 palette.text_muted,
             );
         }
@@ -1352,30 +1704,30 @@ pub fn get_lyrics_badge(player: &PlayerController, palette: &BentoPalette) -> (&
     if lyrics.source == "Local .lrc" {
         return (
             "Local .lrc",
-            Color32::from_rgba_unmultiplied(59, 130, 246, 50),
-            Color32::from_rgb(147, 197, 253),
+            palette.bg_card,
+            palette.text_secondary,
         );
     }
 
     if lyrics.source == "Embedded Tag" {
         return (
             "Embedded Tag",
-            Color32::from_rgba_unmultiplied(16, 185, 129, 45),
-            Color32::from_rgb(110, 231, 183),
+            palette.bg_card,
+            palette.text_secondary,
         );
     }
 
     if lyrics.is_synced {
         (
             "LRCLIB (Synced)",
-            palette.accent_soft,
-            palette.accent,
+            palette.bg_card,
+            palette.text_secondary,
         )
     } else {
         (
             "Plain Lyrics (LRCLIB)",
-            palette.bg_center,
-            palette.text_secondary,
+            palette.bg_card,
+            palette.text_muted,
         )
     }
 }
@@ -1414,7 +1766,7 @@ fn search_online_header_button(ui: &mut Ui, is_active: bool, palette: &BentoPale
     } else if resp.hovered() {
         palette.bg_card_hover
     } else {
-        palette.bg_center
+        palette.bg_card
     };
 
     // Borderless button with Stroke::NONE
@@ -1434,6 +1786,65 @@ fn search_online_header_button(ui: &mut Ui, is_active: bool, palette: &BentoPale
     ui.painter().galley(text_pos, galley, text_color);
 
     resp
+}
+
+fn romaji_toggle_button(ui: &mut Ui, is_active: bool, palette: &BentoPalette) -> egui::Response {
+    let height = 24.0;
+    let font_size = 11.0;
+    let text = "Romaji";
+    let text_color = if is_active {
+        Color32::WHITE
+    } else {
+        palette.text_muted
+    };
+
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(font_size),
+        text_color,
+    );
+
+    let pad_x = 8.0;
+    let desired_width = pad_x * 2.0 + galley.size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(desired_width, height), egui::Sense::click());
+
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    let is_hovered = resp.hovered();
+    let bg = palette.bg_card;
+    let (fill, stroke) = if is_active {
+        let active_fill = if is_hovered {
+            blend_rgb(bg, palette.accent, 0.24)
+        } else {
+            blend_rgb(bg, palette.accent, 0.18)
+        };
+        (
+            active_fill,
+            Stroke::new(1.0_f32, blend_rgb(bg, palette.accent, 0.45)),
+        )
+    } else {
+        (
+            if is_hovered { palette.bg_card_hover } else { palette.bg_card },
+            Stroke::new(1.0_f32, palette.seam),
+        )
+    };
+
+    ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
+    ui.painter().rect_stroke(rect, Rounding::same(6.0), stroke);
+
+    let text_pos = pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter().galley(text_pos, galley, text_color);
+
+    resp.on_hover_text(if is_active {
+        "Romaji sub-lines: ON (Click to hide)"
+    } else {
+        "Romaji sub-lines: OFF (Click to show)"
+    })
 }
 
 fn render_lyrics_empty_state(
@@ -1645,7 +2056,10 @@ fn render_stream_info_card(
         ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
 
         ui.vertical_centered(|ui| {
-            let card_width = (ui.available_width() - 10.0).clamp(180.0, 260.0);
+            let avail_w = ui.available_width();
+            let avail_h = ui.available_height();
+            let max_h_card = (avail_h - 170.0).max(160.0);
+            let card_width = (avail_w - 10.0).clamp(180.0, 260.0).min(max_h_card);
             let art_size = vec2(card_width, card_width);
 
             let (rect, _) = ui.allocate_exact_size(art_size, egui::Sense::hover());
@@ -1662,30 +2076,21 @@ fn render_stream_info_card(
                 _ => Icon::Disc,
             };
 
-            // Multi-layered specular halo with Stroke::NONE
+            // Soft dark ambient shadow translated downward
+            let shadow_rect = rect.translate(vec2(0.0, 4.0));
             ui.painter().rect_filled(
-                rect.expand(10.0),
-                Rounding::same(18.0),
-                Color32::from_rgba_premultiplied(
-                    prov_color.r(),
-                    prov_color.g(),
-                    prov_color.b(),
-                    18,
-                ),
-            );
-            ui.painter().rect_filled(
-                rect.expand(4.0),
-                Rounding::same(16.0),
-                Color32::from_rgba_premultiplied(
-                    prov_color.r(),
-                    prov_color.g(),
-                    prov_color.b(),
-                    32,
-                ),
+                shadow_rect,
+                Rounding::same(12.0),
+                Color32::from_black_alpha(70),
             );
 
-            // Provider icon inside borderless card with Stroke::NONE
-            ui.painter().rect_filled(rect, Rounding::same(14.0), palette.bg_center);
+            // Provider icon inside card with 12.0px rounding and subtle stroke
+            ui.painter().rect_filled(rect, Rounding::same(12.0), palette.bg_center);
+            ui.painter().rect_stroke(
+                rect,
+                Rounding::same(12.0),
+                Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 28)),
+            );
             let icon_box = Rect::from_center_size(rect.center(), vec2(art_size.x * 0.38, art_size.x * 0.38));
             paint_icon(ui.painter(), prov_icon, icon_box, prov_color);
 
@@ -1764,9 +2169,11 @@ fn render_stream_lyrics_card(
     let search_open_id = egui::Id::new("now_playing_stream_lyrics_search_open");
     let search_query_id = egui::Id::new("now_playing_stream_lyrics_search_query");
     let track_id_key = egui::Id::new("now_playing_stream_lyrics_track_id");
+    let romaji_id = egui::Id::new("now_playing_lyrics_show_romaji");
 
     let mut is_search_open: bool = ui.data(|d| d.get_temp(search_open_id)).unwrap_or(false);
     let mut search_query: String = ui.data(|d| d.get_temp(search_query_id)).unwrap_or_default();
+    let mut show_romaji: bool = ui.data(|d| d.get_temp(romaji_id)).unwrap_or(true);
     let last_track_id: Option<String> = ui.data(|d| d.get_temp(track_id_key));
 
     if last_track_id.as_deref() != Some(&track.id) {
@@ -1812,6 +2219,12 @@ fn render_stream_lyrics_card(
                     if btn_resp.clicked() {
                         is_search_open = !is_search_open;
                     }
+
+                    ui.add_space(4.0);
+                    let romaji_resp = romaji_toggle_button(ui, show_romaji, palette);
+                    if romaji_resp.clicked() {
+                        show_romaji = !show_romaji;
+                    }
                 });
             });
         } else {
@@ -1835,6 +2248,12 @@ fn render_stream_lyrics_card(
                     if btn_resp.clicked() {
                         is_search_open = !is_search_open;
                     }
+
+                    ui.add_space(4.0);
+                    let romaji_resp = romaji_toggle_button(ui, show_romaji, palette);
+                    if romaji_resp.clicked() {
+                        show_romaji = !show_romaji;
+                    }
                 });
             });
         }
@@ -1851,6 +2270,7 @@ fn render_stream_lyrics_card(
                     &lyrics.lines,
                     pos_ms,
                     palette,
+                    show_romaji,
                 ) {
                     seek_to(player, stream_controller, target);
                 }
@@ -1884,6 +2304,7 @@ fn render_stream_lyrics_card(
     ui.data_mut(|d| {
         d.insert_temp(search_open_id, is_search_open);
         d.insert_temp(search_query_id, search_query);
+        d.insert_temp(romaji_id, show_romaji);
     });
 
     Some(resp.response.rect)
@@ -2605,9 +3026,146 @@ mod tests {
                     &lines,
                     12000,
                     &palette,
+                    true,
                 );
                 assert!(clicked.is_none());
             });
         });
+    }
+
+    #[test]
+    fn test_build_display_lyrics_romaji_caching() {
+        use crate::lyrics::LyricLine;
+
+        let lines = vec![
+            LyricLine {
+                timestamp_ms: 1000,
+                text: "君が好きだと叫びたい".into(),
+            },
+            LyricLine {
+                timestamp_ms: 5000,
+                text: "I want to shout I love you".into(),
+            },
+            LyricLine {
+                timestamp_ms: 9000,
+                text: "instrumental".into(),
+            },
+        ];
+
+        let display = super::build_display_lyrics(&lines);
+        assert_eq!(display.len(), 3);
+        if crate::ui::romaji::to_romaji_if_japanese(&lines[0].text).is_some() {
+            assert!(display[0].romaji.is_some());
+        }
+        assert_eq!(display[1].romaji, None);
+        assert_eq!(display[2].romaji, None);
+    }
+
+    #[test]
+    fn test_feishin_matte_lyrics_badge_and_romaji_pill() {
+        use crate::config::AppConfig;
+        let theme = Theme::from_name("Eclipse", None);
+        let palette = BentoPalette::from_theme(&theme);
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+
+        // 1. Loading lyrics badge
+        player.is_loading_lyrics = true;
+        let (txt, fill, _col) = super::get_lyrics_badge(&player, &palette);
+        assert_eq!(txt, "Searching...");
+        assert_eq!(fill, palette.bg_card);
+
+        // 2. Synced LRCLIB badge
+        player.is_loading_lyrics = false;
+        player.lyrics = Some(crate::lyrics::Lyrics {
+            lines: vec![crate::lyrics::LyricLine { timestamp_ms: 1000, text: "Line".into() }],
+            is_synced: true,
+            source: "LRCLIB (Synced)".into(),
+        });
+        let (txt2, fill2, col2) = super::get_lyrics_badge(&player, &palette);
+        assert_eq!(txt2, "LRCLIB (Synced)");
+        assert_eq!(fill2, palette.bg_card);
+        assert_eq!(col2, palette.text_secondary);
+
+        // 3. Local .lrc badge
+        player.lyrics = Some(crate::lyrics::Lyrics {
+            lines: vec![crate::lyrics::LyricLine { timestamp_ms: 1000, text: "Line".into() }],
+            is_synced: true,
+            source: "Local .lrc".into(),
+        });
+        let (txt3, fill3, col3) = super::get_lyrics_badge(&player, &palette);
+        assert_eq!(txt3, "Local .lrc");
+        assert_eq!(fill3, palette.bg_card);
+        assert_eq!(col3, palette.text_secondary);
+    }
+
+    #[test]
+    fn test_romaji_hiding_on_non_japanese_tracks() {
+        // English text has no romaji
+        let en_text = "Never gonna give you up";
+        assert_eq!(crate::ui::romaji::to_romaji_if_japanese(en_text), None);
+
+        // Korean text has no romaji
+        let kr_text = "안녕하세요";
+        assert_eq!(crate::ui::romaji::to_romaji_if_japanese(kr_text), None);
+
+        // Check FullscreenLyrics has_romaji
+        let en_lrc = crate::lyrics::Lyrics {
+            lines: vec![
+                crate::lyrics::LyricLine { timestamp_ms: 1000, text: en_text.into() },
+                crate::lyrics::LyricLine { timestamp_ms: 3000, text: "Together forever".into() },
+            ],
+            is_synced: true,
+            source: "test_en".into(),
+        };
+        let fs_en = crate::ui::fullscreen_lyrics::FullscreenLyrics::from_lyrics(&en_lrc);
+        assert!(!fs_en.has_romaji(), "English track must have has_romaji == false");
+
+        // When Japanese text is converted to romaji, has_romaji returns true
+        let jp_text = "君が好きだと叫びたい";
+        if crate::ui::romaji::to_romaji_if_japanese(jp_text).is_some() {
+            let jp_lrc = crate::lyrics::Lyrics {
+                lines: vec![
+                    crate::lyrics::LyricLine { timestamp_ms: 1000, text: jp_text.into() },
+                ],
+                is_synced: true,
+                source: "test_jp".into(),
+            };
+            let fs_jp = crate::ui::fullscreen_lyrics::FullscreenLyrics::from_lyrics(&jp_lrc);
+            assert!(fs_jp.has_romaji(), "Japanese track must have has_romaji == true");
+        }
+    }
+
+    #[test]
+    fn test_blend_rgb() {
+        let bg = Color32::from_rgb(29, 33, 41);
+        let fg = Color32::from_rgb(156, 108, 255);
+        let blended_0 = blend_rgb(bg, fg, 0.0);
+        assert_eq!(blended_0, bg);
+        let blended_1 = blend_rgb(bg, fg, 1.0);
+        assert_eq!(blended_1, fg);
+        let blended_mid = blend_rgb(bg, fg, 0.11);
+        assert_eq!(blended_mid, Color32::from_rgb(43, 41, 65));
+    }
+
+    #[test]
+    fn test_apply_edge_alpha() {
+        let white = Color32::from_rgba_unmultiplied(255, 255, 255, 255);
+        let half_alpha = apply_edge_alpha(white, 0.5);
+        assert_eq!(half_alpha.a(), 128);
+
+        let zero_alpha = apply_edge_alpha(white, 0.0);
+        assert_eq!(zero_alpha.a(), 0);
+
+        let full_alpha = apply_edge_alpha(white, 1.0);
+        assert_eq!(full_alpha.a(), 255);
+
+        // Clamp below 0 and above 1
+        assert_eq!(apply_edge_alpha(white, -0.5).a(), 0);
+        assert_eq!(apply_edge_alpha(white, 1.5).a(), 255);
+
+        // Scaling non-255 alpha
+        let semi = Color32::from_rgba_unmultiplied(100, 150, 200, 100);
+        assert_eq!(apply_edge_alpha(semi, 0.5).a(), 50);
     }
 }
