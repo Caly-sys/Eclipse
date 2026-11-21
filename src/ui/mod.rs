@@ -615,9 +615,8 @@ impl EclipseApp {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResizeStripDef {
-    pub id: &'static str,
     pub direction: egui::ResizeDirection,
     pub cursor: egui::CursorIcon,
     pub rect: Rect,
@@ -628,82 +627,74 @@ pub struct ResizeStripDef {
 pub fn get_resize_strips(screen: Rect) -> [ResizeStripDef; 8] {
     [
         // Corners first (priority over edges):
-        // 1. NorthWest: 18x18 at top-left
+        // 1. NorthWest: 12x12 at top-left
         ResizeStripDef {
-            id: "resize_strip_nw",
             direction: egui::ResizeDirection::NorthWest,
             cursor: egui::CursorIcon::ResizeNwSe,
-            rect: Rect::from_min_size(screen.min, vec2(18.0, 18.0)),
+            rect: Rect::from_min_size(screen.min, vec2(12.0_f32, 12.0_f32)),
         },
-        // 2. SouthWest: 18x18 at bottom-left
+        // 2. NorthEast: 4x4 at top-right (leaves -, □, and × 100% cleanly clickable)
         ResizeStripDef {
-            id: "resize_strip_sw",
-            direction: egui::ResizeDirection::SouthWest,
-            cursor: egui::CursorIcon::ResizeNeSw,
-            rect: Rect::from_min_max(
-                pos2(screen.min.x, screen.max.y - 18.0),
-                pos2(screen.min.x + 18.0, screen.max.y),
-            ),
-        },
-        // 3. SouthEast: 20x20 at bottom-right
-        ResizeStripDef {
-            id: "resize_strip_se",
-            direction: egui::ResizeDirection::SouthEast,
-            cursor: egui::CursorIcon::ResizeNwSe,
-            rect: Rect::from_min_max(
-                pos2(screen.max.x - 20.0, screen.max.y - 20.0),
-                screen.max,
-            ),
-        },
-        // 4. NorthEast: 8x8 at top-right (leaves the Close button cleanly clickable)
-        ResizeStripDef {
-            id: "resize_strip_ne",
             direction: egui::ResizeDirection::NorthEast,
             cursor: egui::CursorIcon::ResizeNeSw,
             rect: Rect::from_min_max(
-                pos2(screen.max.x - 8.0, screen.min.y),
-                pos2(screen.max.x, screen.min.y + 8.0),
+                pos2(screen.max.x - 4.0_f32, screen.min.y),
+                pos2(screen.max.x, screen.min.y + 4.0_f32),
+            ),
+        },
+        // 3. SouthWest: 12x12 at bottom-left
+        ResizeStripDef {
+            direction: egui::ResizeDirection::SouthWest,
+            cursor: egui::CursorIcon::ResizeNeSw,
+            rect: Rect::from_min_max(
+                pos2(screen.min.x, screen.max.y - 12.0_f32),
+                pos2(screen.min.x + 12.0_f32, screen.max.y),
+            ),
+        },
+        // 4. SouthEast: 12x12 at bottom-right
+        ResizeStripDef {
+            direction: egui::ResizeDirection::SouthEast,
+            cursor: egui::CursorIcon::ResizeNwSe,
+            rect: Rect::from_min_max(
+                pos2(screen.max.x - 12.0_f32, screen.max.y - 12.0_f32),
+                screen.max,
             ),
         },
         // Edges (between the corners, never overlapping corner areas):
-        // 5. West (left): 10px wide
+        // 5. West (left): 6px wide
         ResizeStripDef {
-            id: "resize_strip_w",
             direction: egui::ResizeDirection::West,
             cursor: egui::CursorIcon::ResizeHorizontal,
             rect: Rect::from_min_max(
-                pos2(screen.min.x, screen.min.y + 18.0),
-                pos2(screen.min.x + 10.0, screen.max.y - 18.0),
+                pos2(screen.min.x, screen.min.y + 12.0_f32),
+                pos2(screen.min.x + 6.0_f32, screen.max.y - 12.0_f32),
             ),
         },
-        // 6. East (right): 10px wide
+        // 6. East (right): 6px wide
         ResizeStripDef {
-            id: "resize_strip_e",
             direction: egui::ResizeDirection::East,
             cursor: egui::CursorIcon::ResizeHorizontal,
             rect: Rect::from_min_max(
-                pos2(screen.max.x - 10.0, screen.min.y + 8.0),
-                pos2(screen.max.x, screen.max.y - 20.0),
+                pos2(screen.max.x - 6.0_f32, screen.min.y + 4.0_f32),
+                pos2(screen.max.x, screen.max.y - 12.0_f32),
             ),
         },
-        // 7. South (bottom): 10px tall
+        // 7. South (bottom): 6px tall
         ResizeStripDef {
-            id: "resize_strip_s",
             direction: egui::ResizeDirection::South,
             cursor: egui::CursorIcon::ResizeVertical,
             rect: Rect::from_min_max(
-                pos2(screen.min.x + 18.0, screen.max.y - 10.0),
-                pos2(screen.max.x - 20.0, screen.max.y),
+                pos2(screen.min.x + 12.0_f32, screen.max.y - 6.0_f32),
+                pos2(screen.max.x - 12.0_f32, screen.max.y),
             ),
         },
-        // 8. North (top): 6px tall
+        // 8. North (top): 4px tall
         ResizeStripDef {
-            id: "resize_strip_n",
             direction: egui::ResizeDirection::North,
             cursor: egui::CursorIcon::ResizeVertical,
             rect: Rect::from_min_max(
-                pos2(screen.min.x + 18.0, screen.min.y),
-                pos2(screen.max.x - 8.0, screen.min.y + 6.0),
+                pos2(screen.min.x + 12.0_f32, screen.min.y),
+                pos2(screen.max.x - 4.0_f32, screen.min.y + 4.0_f32),
             ),
         },
     ]
@@ -715,7 +706,7 @@ pub fn detect_resize_zone(
     rect: Rect,
     pos: egui::Pos2,
 ) -> Option<(Rect, egui::ResizeDirection, egui::CursorIcon)> {
-    if !rect.expand(1.0).contains(pos) {
+    if !rect.contains(pos) {
         return None;
     }
 
@@ -732,6 +723,7 @@ pub fn detect_resize_zone(
 pub struct FramelessResizeState {
     pub active_resize_cursor: Option<egui::CursorIcon>,
     pub resize_claimed_pointer: bool,
+    pub active_strip: Option<(Rect, egui::ResizeDirection, egui::CursorIcon)>,
 }
 
 impl FramelessResizeState {
@@ -740,117 +732,100 @@ impl FramelessResizeState {
     }
 }
 
-/// Subtle bottom-right diagonal corner grip indicator.
-fn paint_corner_grip(ctx: &egui::Context, screen: Rect, accent: Color32) {
+/// Paint subtle edge hairline and non-interactive bottom-right corner grip on `Order::Foreground`.
+/// Strictly paint-only—ZERO interactive widgets, ZERO Area allocations, never steals clicks.
+pub fn paint_resize_visuals(
+    ctx: &egui::Context,
+    screen: Rect,
+    active_strip: Option<(Rect, egui::ResizeDirection, egui::CursorIcon)>,
+    accent: Color32,
+) {
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        egui::Id::new("bottom_right_corner_grip"),
+        egui::Id::new("frameless_resize_visuals"),
     ));
-    let color = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 100);
-    let stroke = Stroke::new(1.5_f32, color);
+
+    // Subtle bottom-right diagonal corner grip indicator (always painted when not fullscreen/maximized)
+    let grip_color = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 100);
+    let grip_stroke = Stroke::new(1.5_f32, grip_color);
     let br = screen.max;
-    for offset in [4.0_f32, 8.0, 12.0] {
+    for offset in [4.0_f32, 8.0_f32, 12.0_f32] {
         painter.line_segment(
-            [pos2(br.x - offset, br.y - 2.0), pos2(br.x - 2.0, br.y - offset)],
-            stroke,
+            [pos2(br.x - offset, br.y - 2.0_f32), pos2(br.x - 2.0_f32, br.y - offset)],
+            grip_stroke,
         );
+    }
+
+    // Paint active edge hairline when hovering a resize zone
+    if let Some((strip_rect, dir, _)) = active_strip {
+        let stroke_color = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 150);
+        let stroke = Stroke::new(2.0_f32, stroke_color);
+
+        match dir {
+            egui::ResizeDirection::North => {
+                painter.line_segment(
+                    [pos2(strip_rect.min.x, strip_rect.min.y + 1.0_f32), pos2(strip_rect.max.x, strip_rect.min.y + 1.0_f32)],
+                    stroke,
+                );
+            }
+            egui::ResizeDirection::South => {
+                painter.line_segment(
+                    [pos2(strip_rect.min.x, strip_rect.max.y - 1.0_f32), pos2(strip_rect.max.x, strip_rect.max.y - 1.0_f32)],
+                    stroke,
+                );
+            }
+            egui::ResizeDirection::West => {
+                painter.line_segment(
+                    [pos2(strip_rect.min.x + 1.0_f32, strip_rect.min.y), pos2(strip_rect.min.x + 1.0_f32, strip_rect.max.y)],
+                    stroke,
+                );
+            }
+            egui::ResizeDirection::East => {
+                painter.line_segment(
+                    [pos2(strip_rect.max.x - 1.0_f32, strip_rect.min.y), pos2(strip_rect.max.x - 1.0_f32, strip_rect.max.y)],
+                    stroke,
+                );
+            }
+            _ => {
+                painter.rect_stroke(strip_rect, Rounding::ZERO, stroke);
+            }
+        }
     }
 }
 
-/// Foreground-priority 8-direction frameless window resize handler.
-/// Spawns 8 explicit invisible `egui::Area` capture strips on `egui::Order::Foreground`
-/// pinned to `ctx.screen_rect()`, `.interactable(true)`, with `Sense::click_and_drag()`.
+/// Zero-Area pure pointer frameless window resize handler.
+/// Uses pure ctx.input pointer coordinates—ZERO egui::Area allocations and ZERO interactive overlays.
+/// Dispatches BeginResize at the start of update() before titlebar drag logic.
 pub fn handle_frameless_resize(
     ctx: &egui::Context,
     is_fullscreen: bool,
-    accent: Color32,
+    has_modal: bool,
 ) -> FramelessResizeState {
     let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or_default());
     let is_fullscreen_vp = ctx.input(|i| i.viewport().fullscreen.unwrap_or_default());
-    if is_fullscreen || is_maximized || is_fullscreen_vp {
+    if is_fullscreen || is_maximized || is_fullscreen_vp || has_modal {
         return FramelessResizeState::default();
     }
 
     let screen = ctx.screen_rect();
-    if screen.width() <= 0.0 || screen.height() <= 0.0 {
+    if screen.width() < 30.0_f32 || screen.height() < 30.0_f32 {
         return FramelessResizeState::default();
     }
 
-    let mut state = FramelessResizeState::default();
-    let strips = get_resize_strips(screen);
-
     let hover_pos = ctx.input(|i| i.pointer.hover_pos());
-    let primary_pressed = ctx.input(|i| i.pointer.primary_pressed());
-    let primary_down = ctx.input(|i| i.pointer.primary_down());
+    let resize_zone = hover_pos.and_then(|pos| detect_resize_zone(screen, pos));
 
-    for strip in strips {
-        if strip.rect.width() <= 0.0 || strip.rect.height() <= 0.0 {
-            continue;
+    let mut state = FramelessResizeState::default();
+
+    if let Some((strip_rect, dir, cursor)) = resize_zone {
+        state.active_resize_cursor = Some(cursor);
+        state.active_strip = Some((strip_rect, dir, cursor));
+
+        if ctx.input(|i| i.pointer.primary_pressed()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            state.resize_claimed_pointer = true;
         }
 
-        let area_id = egui::Id::new(strip.id);
-        egui::Area::new(area_id)
-            .order(egui::Order::Foreground)
-            .fixed_pos(strip.rect.min)
-            .interactable(true)
-            .show(ctx, |ui| {
-                let response = ui.allocate_rect(strip.rect, egui::Sense::click_and_drag());
-                let is_hovered = response.hovered()
-                    || hover_pos.is_some_and(|pos| strip.rect.contains(pos));
-
-                if is_hovered {
-                    if state.active_resize_cursor.is_none() {
-                        state.active_resize_cursor = Some(strip.cursor);
-                    }
-
-                    // Paint a clean 2.0px palette.accent (with alpha 150) hover hairline / accent stroke along that active edge/corner strip
-                    let stroke_color = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 150);
-                    let stroke = Stroke::new(2.0_f32, stroke_color);
-
-                    match strip.direction {
-                        egui::ResizeDirection::North => {
-                            ui.painter().line_segment(
-                                [pos2(strip.rect.min.x, strip.rect.min.y + 1.0), pos2(strip.rect.max.x, strip.rect.min.y + 1.0)],
-                                stroke,
-                            );
-                        }
-                        egui::ResizeDirection::South => {
-                            ui.painter().line_segment(
-                                [pos2(strip.rect.min.x, strip.rect.max.y - 1.0), pos2(strip.rect.max.x, strip.rect.max.y - 1.0)],
-                                stroke,
-                            );
-                        }
-                        egui::ResizeDirection::West => {
-                            ui.painter().line_segment(
-                                [pos2(strip.rect.min.x + 1.0, strip.rect.min.y), pos2(strip.rect.min.x + 1.0, strip.rect.max.y)],
-                                stroke,
-                            );
-                        }
-                        egui::ResizeDirection::East => {
-                            ui.painter().line_segment(
-                                [pos2(strip.rect.max.x - 1.0, strip.rect.min.y), pos2(strip.rect.max.x - 1.0, strip.rect.max.y)],
-                                stroke,
-                            );
-                        }
-                        _ => {
-                            ui.painter().rect_stroke(strip.rect, Rounding::ZERO, stroke);
-                        }
-                    }
-                }
-
-                if response.drag_started()
-                    || (is_hovered && (primary_pressed || (primary_down && response.dragged())))
-                {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(strip.direction));
-                    state.resize_claimed_pointer = true;
-                }
-            });
-    }
-
-    // Keep the bottom-right corner grip and early-exit when is_fullscreen or maximized
-    paint_corner_grip(ctx, screen, accent);
-
-    if let Some(cursor) = state.active_resize_cursor {
         ctx.set_cursor_icon(cursor);
     }
 
@@ -860,7 +835,11 @@ pub fn handle_frameless_resize(
 impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let palette = self.theme.bento_palette();
-        let resize_state = handle_frameless_resize(ctx, self.is_cinematic_fullscreen, palette.accent);
+        let resize_state = handle_frameless_resize(
+            ctx,
+            self.is_cinematic_fullscreen,
+            self.pending_delete_track.is_some(),
+        );
         apply_bento_visuals(ctx, &palette);
 
         // Live filesystem change monitoring & automatic missing track pruning
@@ -1246,7 +1225,7 @@ impl App for EclipseApp {
                 .fill(BG_BAR)
                 .inner_margin(egui::Margin { left: h_pad, right: h_pad, top: 5.0, bottom: 5.0 })
                 .show(ui, |ui| {
-                    if resize_state.is_resizing() {
+                    if resize_state.resize_claimed_pointer {
                         let search_rect_id = ui.id().with("titlebar_search_rect_cache");
                         ui.data_mut(|d| d.insert_temp(search_rect_id, Rect::EVERYTHING));
                     }
@@ -1267,18 +1246,8 @@ impl App for EclipseApp {
                 });
 
             let titlebar_rect = titlebar_resp.response.rect;
-            if resize_state.resize_claimed_pointer {
-                // Foreground blocker over titlebar during active resize to completely prevent window dragging
-                egui::Area::new(egui::Id::new("titlebar_drag_guard"))
-                    .order(egui::Order::Foreground)
-                    .fixed_pos(titlebar_rect.min)
-                    .interactable(true)
-                    .show(ctx, |ui| {
-                        ui.allocate_rect(titlebar_rect, egui::Sense::hover());
-                    });
-            }
             let top_seam = Rect::from_min_max(
-                pos2(titlebar_rect.min.x, titlebar_rect.max.y - 1.0),
+                pos2(titlebar_rect.min.x, titlebar_rect.max.y - 1.0_f32),
                 pos2(titlebar_rect.max.x, titlebar_rect.max.y),
             );
             ui.painter().rect_filled(top_seam, Rounding::ZERO, SEAM_DARK);
@@ -2047,7 +2016,10 @@ impl App for EclipseApp {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
 
-        // Apply active resize cursor at the very end of update so panel widgets cannot overwrite it
+        // Paint resize visuals and ensure active resize cursor icon is applied at the very end of update
+        if !self.is_cinematic_fullscreen && !ctx.input(|i| i.viewport().maximized.unwrap_or_default()) {
+            paint_resize_visuals(ctx, ctx.screen_rect(), resize_state.active_strip, palette.accent);
+        }
         if let Some(cursor) = resize_state.active_resize_cursor {
             ctx.set_cursor_icon(cursor);
         }
@@ -2539,91 +2511,91 @@ mod tests {
     fn test_detect_resize_zone_corners_and_edges() {
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
 
-        // 1. Top-Left corner (18x18 grab zone)
-        let tl = detect_resize_zone(screen, egui::pos2(10.0, 10.0));
+        // 1. Top-Left corner (12x12 grab zone)
+        let tl = detect_resize_zone(screen, egui::pos2(5.0, 5.0));
         assert!(tl.is_some(), "Must detect Top-Left corner");
         if let Some((z, dir, cur)) = tl {
             assert_eq!(dir, egui::ResizeDirection::NorthWest);
             assert_eq!(cur, egui::CursorIcon::ResizeNwSe);
-            assert_eq!(z.size(), egui::vec2(18.0, 18.0));
+            assert_eq!(z.size(), egui::vec2(12.0, 12.0));
         }
 
-        // 2. Top-Right corner (8x8 grab zone)
-        let tr = detect_resize_zone(screen, egui::pos2(996.0, 3.0));
+        // 2. Top-Right corner (4x4 grab zone)
+        let tr = detect_resize_zone(screen, egui::pos2(998.0, 2.0));
         assert!(tr.is_some(), "Must detect Top-Right corner");
         if let Some((z, dir, cur)) = tr {
             assert_eq!(dir, egui::ResizeDirection::NorthEast);
             assert_eq!(cur, egui::CursorIcon::ResizeNeSw);
-            assert_eq!(z.size(), egui::vec2(8.0, 8.0));
+            assert_eq!(z.size(), egui::vec2(4.0, 4.0));
         }
 
-        // 3. Bottom-Left corner (18x18 grab zone)
-        let bl = detect_resize_zone(screen, egui::pos2(10.0, 690.0));
+        // 3. Bottom-Left corner (12x12 grab zone)
+        let bl = detect_resize_zone(screen, egui::pos2(5.0, 695.0));
         assert!(bl.is_some(), "Must detect Bottom-Left corner");
         if let Some((z, dir, cur)) = bl {
             assert_eq!(dir, egui::ResizeDirection::SouthWest);
             assert_eq!(cur, egui::CursorIcon::ResizeNeSw);
-            assert_eq!(z.size(), egui::vec2(18.0, 18.0));
+            assert_eq!(z.size(), egui::vec2(12.0, 12.0));
         }
 
-        // 4. Bottom-Right corner (20x20 grab zone)
-        let br = detect_resize_zone(screen, egui::pos2(990.0, 690.0));
+        // 4. Bottom-Right corner (12x12 grab zone)
+        let br = detect_resize_zone(screen, egui::pos2(995.0, 695.0));
         assert!(br.is_some(), "Must detect Bottom-Right corner");
         if let Some((z, dir, cur)) = br {
             assert_eq!(dir, egui::ResizeDirection::SouthEast);
             assert_eq!(cur, egui::CursorIcon::ResizeNwSe);
-            assert_eq!(z.size(), egui::vec2(20.0, 20.0));
+            assert_eq!(z.size(), egui::vec2(12.0, 12.0));
         }
 
-        // 5. Top edge (6px outer thickness)
-        let top = detect_resize_zone(screen, egui::pos2(500.0, 3.0));
+        // 5. Top edge (4px outer thickness)
+        let top = detect_resize_zone(screen, egui::pos2(500.0, 2.0));
         assert!(top.is_some(), "Must detect Top edge");
         if let Some((z, dir, cur)) = top {
             assert_eq!(dir, egui::ResizeDirection::North);
             assert_eq!(cur, egui::CursorIcon::ResizeVertical);
-            assert_eq!(z.height(), 6.0);
+            assert_eq!(z.height(), 4.0);
         }
 
-        // 6. Bottom edge (10px outer thickness)
-        let btm = detect_resize_zone(screen, egui::pos2(500.0, 695.0));
+        // 6. Bottom edge (6px outer thickness)
+        let btm = detect_resize_zone(screen, egui::pos2(500.0, 697.0));
         assert!(btm.is_some(), "Must detect Bottom edge");
         if let Some((z, dir, cur)) = btm {
             assert_eq!(dir, egui::ResizeDirection::South);
             assert_eq!(cur, egui::CursorIcon::ResizeVertical);
-            assert_eq!(z.height(), 10.0);
+            assert_eq!(z.height(), 6.0);
         }
 
-        // 7. Left edge (10px outer thickness)
-        let left = detect_resize_zone(screen, egui::pos2(5.0, 350.0));
+        // 7. Left edge (6px outer thickness)
+        let left = detect_resize_zone(screen, egui::pos2(3.0, 350.0));
         assert!(left.is_some(), "Must detect Left edge");
         if let Some((z, dir, cur)) = left {
             assert_eq!(dir, egui::ResizeDirection::West);
             assert_eq!(cur, egui::CursorIcon::ResizeHorizontal);
-            assert_eq!(z.width(), 10.0);
+            assert_eq!(z.width(), 6.0);
         }
 
-        // 8. Right edge (10px outer thickness)
-        let right = detect_resize_zone(screen, egui::pos2(995.0, 350.0));
+        // 8. Right edge (6px outer thickness)
+        let right = detect_resize_zone(screen, egui::pos2(997.0, 350.0));
         assert!(right.is_some(), "Must detect Right edge");
         if let Some((z, dir, cur)) = right {
             assert_eq!(dir, egui::ResizeDirection::East);
             assert_eq!(cur, egui::CursorIcon::ResizeHorizontal);
-            assert_eq!(z.width(), 10.0);
+            assert_eq!(z.width(), 6.0);
         }
 
         // Interior positions must be ignored
         assert!(detect_resize_zone(screen, egui::pos2(50.0, 50.0)).is_none());
         assert!(detect_resize_zone(screen, egui::pos2(500.0, 350.0)).is_none());
 
-        // Close button zone (e.g. x = 970.0, y = 15.0) must not be intercepted
+        // Close button and titlebar button zones must not be intercepted
         assert!(detect_resize_zone(screen, egui::pos2(970.0, 15.0)).is_none());
+        assert!(detect_resize_zone(screen, egui::pos2(950.0, 10.0)).is_none());
     }
 
     #[test]
     fn test_handle_frameless_resize_behavior() {
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
-        let accent = egui::Color32::from_rgb(120, 160, 255);
 
         // When fullscreen, must return inactive state immediately
         let full_output = ctx.run(
@@ -2632,7 +2604,7 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                let res = handle_frameless_resize(ctx, true, accent);
+                let res = handle_frameless_resize(ctx, true, false);
                 assert!(!res.is_resizing());
             },
         );
@@ -2643,16 +2615,16 @@ mod tests {
             screen_rect: Some(screen),
             ..Default::default()
         };
-        raw_input.events.push(egui::Event::PointerMoved(egui::pos2(5.0, 350.0)));
+        raw_input.events.push(egui::Event::PointerMoved(egui::pos2(3.0, 350.0)));
         raw_input.events.push(egui::Event::PointerButton {
-            pos: egui::pos2(5.0, 350.0),
+            pos: egui::pos2(3.0, 350.0),
             button: egui::PointerButton::Primary,
             pressed: true,
             modifiers: Default::default(),
         });
 
         let full_output = ctx.run(raw_input, |ctx| {
-            let res = handle_frameless_resize(ctx, false, accent);
+            let res = handle_frameless_resize(ctx, false, false);
             assert!(res.is_resizing(), "Must handle Left edge resize");
         });
 
@@ -2667,17 +2639,16 @@ mod tests {
     fn test_handle_frameless_resize_all_directions() {
         let ctx = egui::Context::default();
         let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
-        let accent = egui::Color32::from_rgb(120, 160, 255);
 
         let test_cases = [
             (egui::pos2(5.0, 5.0), egui::ResizeDirection::NorthWest, egui::CursorIcon::ResizeNwSe),
-            (egui::pos2(996.0, 3.0), egui::ResizeDirection::NorthEast, egui::CursorIcon::ResizeNeSw),
-            (egui::pos2(5.0, 690.0), egui::ResizeDirection::SouthWest, egui::CursorIcon::ResizeNeSw),
-            (egui::pos2(990.0, 690.0), egui::ResizeDirection::SouthEast, egui::CursorIcon::ResizeNwSe),
-            (egui::pos2(500.0, 3.0), egui::ResizeDirection::North, egui::CursorIcon::ResizeVertical),
-            (egui::pos2(500.0, 695.0), egui::ResizeDirection::South, egui::CursorIcon::ResizeVertical),
-            (egui::pos2(5.0, 350.0), egui::ResizeDirection::West, egui::CursorIcon::ResizeHorizontal),
-            (egui::pos2(995.0, 350.0), egui::ResizeDirection::East, egui::CursorIcon::ResizeHorizontal),
+            (egui::pos2(998.0, 2.0), egui::ResizeDirection::NorthEast, egui::CursorIcon::ResizeNeSw),
+            (egui::pos2(5.0, 695.0), egui::ResizeDirection::SouthWest, egui::CursorIcon::ResizeNeSw),
+            (egui::pos2(995.0, 695.0), egui::ResizeDirection::SouthEast, egui::CursorIcon::ResizeNwSe),
+            (egui::pos2(500.0, 2.0), egui::ResizeDirection::North, egui::CursorIcon::ResizeVertical),
+            (egui::pos2(500.0, 697.0), egui::ResizeDirection::South, egui::CursorIcon::ResizeVertical),
+            (egui::pos2(3.0, 350.0), egui::ResizeDirection::West, egui::CursorIcon::ResizeHorizontal),
+            (egui::pos2(997.0, 350.0), egui::ResizeDirection::East, egui::CursorIcon::ResizeHorizontal),
         ];
 
         for (pos, expected_dir, expected_cursor) in test_cases {
@@ -2694,7 +2665,7 @@ mod tests {
             });
 
             let full_output = ctx.run(raw_input, |ctx| {
-                let res = handle_frameless_resize(ctx, false, accent);
+                let res = handle_frameless_resize(ctx, false, false);
                 assert!(res.is_resizing(), "Must detect resizing for {:?}", expected_dir);
             });
 
@@ -2704,6 +2675,23 @@ mod tests {
             });
             assert!(has_cmd, "Must send ViewportCommand::BeginResize({:?})", expected_dir);
         }
+    }
+
+    #[test]
+    fn test_zero_area_frameless_resize() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ctx| {
+                let res = handle_frameless_resize(ctx, false, false);
+                assert!(!res.is_resizing());
+            },
+        );
     }
 
     fn dummy_test_track(id: i64, path: &str) -> Track {
