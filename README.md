@@ -73,10 +73,6 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 - **Subtle 1px Structural Pane Seams**: Replaced harsh high-contrast white strokes with quiet, dark 1px pane dividers (`Color32::from_rgb(36, 41, 50)`) for crisp architectural separation.
 - **Dynamic Bento Palette & Settings Theming**: Dynamic palette generator powered by active Settings Themes (`Ember`, `Verdant`, `Nebula`, `Glacier`, `Obsidian`, `Eclipse`) and Accent Colors.
 
-### 🌌 Edge-to-Edge Home Ambient Gradient
-- **Full-Bleed Center Glow**: Edge-to-edge 10-row multi-stop `egui::Mesh` blending from center slate into active theme accent color across the entire top header width with zero dark gutters.
-- **Ease-Out Color Mathematics**: Calibrated lerp curve maintains pure RGB color vibrancy without dark grey muddying.
-
 ### 🪟 Native Windows Pop-Out Mini-Player Rounding
 - **DWM Native Window Rounding**: Native Win32 `DwmSetWindowAttribute` / `CreateRoundRectRgn` rounded corners on the borderless mini-player viewport (`HWND`), eliminating dark rectangular corner artifacts on Windows 10/11.
 
