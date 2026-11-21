@@ -174,6 +174,10 @@ pub fn scan_directories(folders: &[String], db: &Database) -> (usize, usize) {
         crate::library::genre_fetcher::start_genre_backfill(std::sync::Arc::new(db.clone()));
     }
 
+    // Automatically prune missing local tracks for the scanned library roots
+    let configured_roots: Vec<PathBuf> = folders.iter().map(PathBuf::from).collect();
+    let _ = db.prune_missing_local_tracks(&configured_roots);
+
     (total_scanned, added_or_updated)
 }
 

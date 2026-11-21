@@ -1,6 +1,7 @@
 ﻿use crate::audio::PlayerController;
 use crate::library::model::Track;
 use crate::ui::art::AlbumArtManager;
+use crate::ui::bento_theme::BentoPalette;
 use crate::ui::components::{dark_pill_button, format_badge, white_pill_button};
 use crate::ui::context_menu::TrackContextMenuState;
 use crate::ui::icons::{icon_button, paint_icon, Icon};
@@ -201,6 +202,8 @@ pub fn render_track_table(
     let x4 = x3 + col_added_w + gap;
     let x5 = x4 + col_plays_w + gap;
 
+    let palette = BentoPalette::from_theme(theme);
+
     // Multi-Column Table Header
     let (header_rect, _) = ui.allocate_exact_size(vec2(total_width, 28.0), egui::Sense::hover());
     ui.painter().line_segment(
@@ -208,7 +211,7 @@ pub fn render_track_table(
             pos2(header_rect.min.x, header_rect.max.y),
             pos2(header_rect.max.x, header_rect.max.y),
         ],
-        Stroke::new(1.0_f32, Color32::from_rgb(38, 43, 53)),
+        Stroke::new(1.0_f32, palette.seam),
     );
 
     ui.painter().text(
@@ -216,42 +219,42 @@ pub fn render_track_table(
         Align2::CENTER_CENTER,
         "#",
         FontId::proportional(11.0),
-        theme.text_muted,
+        palette.text_muted,
     );
     ui.painter().text(
         pos2(header_rect.min.x + x1 + 4.0, header_rect.center().y),
         Align2::LEFT_CENTER,
         "TITLE",
         FontId::proportional(11.0),
-        theme.text_muted,
+        palette.text_muted,
     );
     ui.painter().text(
         pos2(header_rect.min.x + x2, header_rect.center().y),
         Align2::LEFT_CENTER,
         "ALBUM",
         FontId::proportional(11.0),
-        theme.text_muted,
+        palette.text_muted,
     );
     ui.painter().text(
         pos2(header_rect.min.x + x3, header_rect.center().y),
         Align2::LEFT_CENTER,
         "ADDED",
         FontId::proportional(11.0),
-        theme.text_muted,
+        palette.text_muted,
     );
     ui.painter().text(
         pos2(header_rect.min.x + x4, header_rect.center().y),
         Align2::LEFT_CENTER,
         "PLAYS",
         FontId::proportional(11.0),
-        theme.text_muted,
+        palette.text_muted,
     );
     ui.painter().text(
         pos2(header_rect.max.x - 4.0, header_rect.center().y),
         Align2::RIGHT_CENTER,
         "TIME",
         FontId::proportional(11.0),
-        theme.text_muted,
+        palette.text_muted,
     );
 
     ui.add_space(4.0);
@@ -274,9 +277,9 @@ pub fn render_track_table(
                 let row_bg = if is_current {
                     theme.accent_glow
                 } else if is_selected {
-                    Color32::from_rgba_premultiplied(124, 77, 255, if is_row_hovered { 50 } else { 35 })
+                    palette.accent_soft
                 } else if is_row_hovered {
-                    Color32::from_rgba_premultiplied(124, 77, 255, 20)
+                    palette.bg_card_hover
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -285,16 +288,27 @@ pub fn render_track_table(
                     ui.painter().rect_filled(row_rect, Rounding::same(6.0), row_bg);
                 }
 
+                // Crisp 3.0px wide vertical indicator bar on left edge for selected row
+                if is_selected {
+                    let indicator_rect = Rect::from_min_max(
+                        pos2(row_rect.min.x + 2.0, row_rect.min.y + 6.0),
+                        pos2(row_rect.min.x + 5.0, row_rect.max.y - 6.0),
+                    );
+                    ui.painter().rect_filled(indicator_rect, Rounding::same(1.5), palette.accent);
+                }
+
                 // Col 0: # (40px)
                 if is_current {
                     let play_state_icon = if player.engine.is_playing() { Icon::Play } else { Icon::Pause };
                     let icon_r = Rect::from_center_size(pos2(row_rect.min.x + 20.0, row_rect.center().y), vec2(14.0, 14.0));
-                    paint_icon(ui.painter(), play_state_icon, icon_r, theme.accent);
+                    paint_icon(ui.painter(), play_state_icon, icon_r, palette.accent);
                 } else {
-                    let num_color = if is_selected || is_row_hovered {
-                        Color32::from_rgb(212, 212, 216)
+                    let num_color = if is_selected || is_current {
+                        palette.text_primary
+                    } else if is_row_hovered {
+                        palette.text_secondary
                     } else {
-                        theme.text_muted
+                        palette.text_muted
                     };
                     ui.painter().text(
                         pos2(row_rect.min.x + 20.0, row_rect.center().y),
@@ -321,7 +335,7 @@ pub fn render_track_table(
                 if !painted_thumb {
                     ui.painter().rect_filled(thumb_rect, Rounding::same(6.0), Color32::from_rgb(26, 26, 30));
                     let icon_r = Rect::from_center_size(thumb_rect.center(), vec2(16.0, 16.0));
-                    paint_icon(ui.painter(), Icon::Music, icon_r, theme.text_muted);
+                    paint_icon(ui.painter(), Icon::Music, icon_r, palette.text_muted);
                 }
 
                 // 2 stacked lines for title and artist/format badge
@@ -333,21 +347,23 @@ pub fn render_track_table(
                     lines_ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
 
                     let title_color = if is_current {
-                        theme.accent
+                        palette.accent
                     } else if is_selected || is_row_hovered {
                         Color32::WHITE
                     } else {
-                        Color32::from_rgb(244, 244, 245)
+                        palette.text_primary
                     };
                     lines_ui.add(egui::Label::new(RichText::new(track.display_title()).size(13.5).color(title_color).strong()).truncate());
 
                     lines_ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
                         format_badge(ui, &track.format, track.is_lossless(), theme);
-                        let artist_color = if is_selected || is_row_hovered {
-                            Color32::from_rgb(212, 212, 216)
+                        let artist_color = if is_selected || is_current {
+                            palette.text_primary
+                        } else if is_row_hovered {
+                            palette.text_secondary
                         } else {
-                            Color32::from_rgb(161, 161, 170)
+                            palette.text_muted
                         };
                         ui.add(egui::Label::new(RichText::new(track.display_artist()).size(11.5).color(artist_color)).truncate());
                     });
@@ -359,10 +375,12 @@ pub fn render_track_table(
                     pos2(row_rect.min.x + x2 + col_album_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(album_rect).layout(Layout::left_to_right(egui::Align::Center)), |album_ui| {
-                    let album_color = if is_selected || is_row_hovered {
-                        Color32::from_rgb(212, 212, 216)
+                    let album_color = if is_selected || is_current {
+                        palette.text_primary
+                    } else if is_row_hovered {
+                        palette.text_secondary
                     } else {
-                        Color32::from_rgb(161, 161, 170)
+                        palette.text_muted
                     };
                     album_ui.add(egui::Label::new(RichText::new(track.display_album()).size(12.0).color(album_color)).truncate());
                 });
@@ -373,10 +391,12 @@ pub fn render_track_table(
                     pos2(row_rect.min.x + x3 + col_added_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(added_rect).layout(Layout::left_to_right(egui::Align::Center)), |added_ui| {
-                    let added_color = if is_selected || is_row_hovered {
-                        Color32::from_rgb(212, 212, 216)
+                    let added_color = if is_selected || is_current {
+                        palette.text_primary
+                    } else if is_row_hovered {
+                        palette.text_secondary
                     } else {
-                        Color32::from_rgb(161, 161, 170)
+                        palette.text_muted
                     };
                     added_ui.label(RichText::new(track.relative_added_str()).size(12.0).color(added_color));
                 });
@@ -387,10 +407,12 @@ pub fn render_track_table(
                     pos2(row_rect.min.x + x4 + col_plays_w, row_rect.max.y),
                 );
                 ui.allocate_new_ui(UiBuilder::new().max_rect(plays_rect).layout(Layout::left_to_right(egui::Align::Center)), |plays_ui| {
-                    let plays_color = if is_selected || is_row_hovered {
-                        Color32::from_rgb(212, 212, 216)
+                    let plays_color = if is_selected || is_current {
+                        palette.text_primary
+                    } else if is_row_hovered {
+                        palette.text_secondary
                     } else {
-                        Color32::from_rgb(161, 161, 170)
+                        palette.text_muted
                     };
                     plays_ui.label(RichText::new(format!("{}", track.play_count)).size(12.0).color(plays_color));
                 });
@@ -403,10 +425,12 @@ pub fn render_track_table(
                 let mut fav_clicked = false;
                 let mut more_clicked = false;
                 ui.allocate_new_ui(UiBuilder::new().max_rect(time_rect).layout(Layout::right_to_left(egui::Align::Center)), |time_ui| {
-                    let time_color = if is_selected || is_row_hovered {
-                        Color32::from_rgb(212, 212, 216)
+                    let time_color = if is_selected || is_current {
+                        palette.text_primary
+                    } else if is_row_hovered {
+                        palette.text_secondary
                     } else {
-                        Color32::from_rgb(161, 161, 170)
+                        palette.text_muted
                     };
                     time_ui.label(RichText::new(track.formatted_duration()).size(12.0).color(time_color));
 
@@ -415,7 +439,7 @@ pub fn render_track_table(
                     let (fav_icon, fav_color) = if track.favorite {
                         (Icon::Heart, Color32::from_rgb(239, 68, 68))
                     } else {
-                        (Icon::HeartOutline, theme.text_muted)
+                        (Icon::HeartOutline, palette.text_muted)
                     };
                     let fav_resp = icon_button(time_ui, fav_icon, 13.0, fav_color);
                     if fav_resp.clicked() {
@@ -427,7 +451,7 @@ pub fn render_track_table(
                     let is_menu_open_for_this = context_menu.as_ref().is_some_and(|cm| cm.track.id == track.id);
                     if is_row_hovered || is_menu_open_for_this {
                         time_ui.add_space(4.0);
-                        let more_color = if is_menu_open_for_this { theme.accent } else { theme.text_muted };
+                        let more_color = if is_menu_open_for_this { palette.accent } else { palette.text_muted };
                         let more_resp = icon_button(time_ui, Icon::MoreHorizontal, 13.0, more_color);
                         if more_resp.clicked() {
                             more_clicked = true;
@@ -655,5 +679,42 @@ mod tests {
 
         println!("After click context_menu: {:?}", context_menu);
         assert!(context_menu.is_some(), "Context menu must be opened after clicking the more button!");
+    }
+
+    #[test]
+    fn test_track_table_selected_and_active_row_styling() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let theme = Theme::from_name("Eclipse", None);
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let mut art_manager = AlbumArtManager::new();
+                let mut selected_id = Some(1);
+                let mut on_toggle_fav = None;
+                let mut context_menu = None;
+
+                let tracks = vec![
+                    sample_track(1, "Neon Horizon", "Solaris", "Midnight Echoes"),
+                    sample_track(2, "Velvet Sky", "Komorebi", "Aether"),
+                ];
+
+                // Load queue and play track 2 as currently active track
+                player.load_queue(tracks.clone(), 1);
+
+                render_track_table(
+                    ui,
+                    &tracks,
+                    None,
+                    &mut selected_id,
+                    &mut player,
+                    &theme,
+                    &mut art_manager,
+                    &mut on_toggle_fav,
+                    &mut context_menu,
+                    None,
+                );
+            });
+        });
     }
 }

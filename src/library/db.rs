@@ -956,6 +956,177 @@ impl Database {
         )?;
         Ok(count as usize)
     }
+
+    /// Transactionally delete a track from the database.
+    /// Also cleanly removes referencing rows from `playlist_items`, `playlist_tracks` (if exists),
+    /// and `history`.
+    pub fn delete_track(&self, track_id: i64) -> Result<()> {
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+
+        // Cleanly remove any referencing rows from playlist_items
+        tx.execute(
+            "DELETE FROM playlist_items WHERE track_id = ?1",
+            params![track_id],
+        )?;
+
+        // If an optional playlist_tracks table exists in the schema, cleanly remove references from it as well
+        let has_playlist_tracks: bool = match tx.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='playlist_tracks'",
+            [],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(count) => count > 0,
+            Err(_) => false,
+        };
+        if has_playlist_tracks {
+            tx.execute(
+                "DELETE FROM playlist_tracks WHERE track_id = ?1",
+                params![track_id],
+            )?;
+        }
+
+        // Cleanly remove referencing rows from history
+        tx.execute(
+            "DELETE FROM history WHERE track_id = ?1",
+            params![track_id],
+        )?;
+
+        // Delete the track itself from tracks table
+        tx.execute(
+            "DELETE FROM tracks WHERE id = ?1",
+            params![track_id],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Prune missing local audio files from the database.
+    ///
+    /// Rules:
+    /// 1. Only checks local tracks (`source = 'local'`).
+    /// 2. NEVER prunes remote or stream tracks (skips any path starting with http://, https://,
+    ///    spotify:, youtube:, stream:, or where source != 'local').
+    /// 3. Checks parent root existence: verifies whether the track belongs to any configured root
+    ///    folder in `configured_roots`.
+    /// 4. If the configured root folder containing the track does NOT exist on disk (e.g. unplugged
+    ///    external drive or unmounted share), does NOT prune that track!
+    /// 5. Only if the configured root folder exists on disk, checks `!Path::new(&track.path).exists()`.
+    /// 6. If the root exists but the file is missing on disk, deletes the track via `self.delete_track(id)`
+    ///    and records its ID.
+    ///
+    /// Returns the list of deleted track IDs.
+    pub fn prune_missing_local_tracks(
+        &self,
+        configured_roots: &[std::path::PathBuf],
+    ) -> Result<Vec<i64>> {
+        if configured_roots.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let local_tracks: Vec<(i64, String)> = {
+            let conn = self.lock_conn();
+            let mut stmt = conn.prepare("SELECT id, path FROM tracks WHERE source = 'local'")?;
+            let rows = stmt.query_map([], |row| {
+                let id: i64 = row.get(0)?;
+                let path: String = row.get(1)?;
+                Ok((id, path))
+            })?;
+            let mut list = Vec::new();
+            for pair in rows.flatten() {
+                list.push(pair);
+            }
+            list
+        };
+
+        let mut pruned_ids = Vec::new();
+
+        for (id, path) in local_tracks {
+            // NEVER prune remote/stream tracks
+            if path.starts_with("http://")
+                || path.starts_with("https://")
+                || path.starts_with("spotify:")
+                || path.starts_with("youtube:")
+                || path.starts_with("stream:")
+            {
+                continue;
+            }
+
+            let track_p = std::path::Path::new(&path);
+
+            // Find configured root(s) containing this track
+            let containing_roots: Vec<&std::path::PathBuf> = configured_roots
+                .iter()
+                .filter(|root| is_path_under_root(track_p, root))
+                .collect();
+
+            if containing_roots.is_empty() {
+                // Track does not belong to any configured root folder -> DO NOT prune
+                continue;
+            }
+
+            // If the configured root folder containing the track does NOT exist on disk, DO NOT prune!
+            if containing_roots.iter().any(|root| !root.exists()) {
+                continue;
+            }
+
+            // Only if the configured root folder exists on disk, check if the file is missing
+            if !track_p.exists() {
+                self.delete_track(id)?;
+                pruned_ids.push(id);
+            }
+        }
+
+        Ok(pruned_ids)
+    }
+}
+
+fn is_path_under_root(track_path: &std::path::Path, root: &std::path::Path) -> bool {
+    if track_path.starts_with(root) {
+        return true;
+    }
+
+    let track_str = track_path.to_string_lossy().replace('/', "\\");
+    let root_str = root.to_string_lossy().replace('/', "\\");
+    let root_trimmed = root_str.trim_end_matches('\\');
+
+    if root_trimmed.is_empty() {
+        return false;
+    }
+
+    if cfg!(target_os = "windows") {
+        let track_lower = track_str.to_lowercase();
+        let root_lower = root_trimmed.to_lowercase();
+
+        if track_lower == root_lower {
+            return true;
+        }
+
+        let prefix = format!("{root_lower}\\");
+        if track_lower.starts_with(&prefix) {
+            return true;
+        }
+    } else {
+        let track_unix = track_path.to_string_lossy();
+        let root_unix = root.to_string_lossy();
+        let root_trimmed = root_unix.trim_end_matches('/');
+
+        if root_trimmed.is_empty() {
+            return false;
+        }
+
+        if track_unix == root_trimmed {
+            return true;
+        }
+
+        let prefix = format!("{root_trimmed}/");
+        if track_unix.starts_with(&prefix) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Cached stream match pairing record stored in SQLite.
@@ -1423,6 +1594,288 @@ mod tests {
         let pl_tracks_after = db.get_playlist_tracks(pl_id)?;
         assert_eq!(pl_tracks_after.len(), 1);
         assert_eq!(pl_tracks_after[0].id, local_id);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_track_removes_from_playlists_and_history() -> Result<(), Box<dyn std::error::Error>> {
+        let db = Database::open_in_memory()?;
+
+        // Also ensure playlist_tracks table exists to verify cascading deletion across both tables
+        {
+            let conn = db.lock_conn();
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS playlist_tracks (
+                    playlist_id INTEGER,
+                    track_id INTEGER,
+                    pos INTEGER DEFAULT 0
+                );"
+            )?;
+        }
+
+        let track = Track {
+            id: 0,
+            path: "C:\\music\\track_to_delete.flac".to_string(),
+            title: "Delete Me".to_string(),
+            artist: "Artist".to_string(),
+            album_artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            genre: "Rock".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 200.0,
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 1024,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "C:\\music".to_string(),
+        };
+
+        let track_id = db.upsert_track(&track)?;
+
+        // Add to playlist via standard db method (playlist_items)
+        let pl_id = db.create_playlist("Cascade Test Playlist")?;
+        db.add_track_to_playlist(pl_id, track_id)?;
+
+        // Also add to playlist_tracks table explicitly
+        {
+            let conn = db.lock_conn();
+            conn.execute(
+                "INSERT INTO playlist_tracks (playlist_id, track_id, pos) VALUES (?1, ?2, 1)",
+                params![pl_id, track_id],
+            )?;
+        }
+
+        // Add to history
+        db.increment_play_count(track_id)?;
+
+        // Verify initial existence
+        assert_eq!(db.get_playlist_tracks(pl_id)?.len(), 1);
+        assert_eq!(db.get_recent_history(10)?.len(), 1);
+        assert!(db.get_track_by_id(track_id)?.is_some());
+
+        // Perform transactional deletion
+        db.delete_track(track_id)?;
+
+        // Verify track is completely gone from tracks table
+        assert!(db.get_track_by_id(track_id)?.is_none());
+
+        // Verify removed from playlist_items
+        assert_eq!(db.get_playlist_tracks(pl_id)?.len(), 0);
+
+        // Verify removed from playlist_tracks
+        {
+            let conn = db.lock_conn();
+            let count: i64 = conn.query_row(
+                "SELECT count(*) FROM playlist_tracks WHERE track_id = ?1",
+                params![track_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 0);
+        }
+
+        // Verify removed from history
+        assert_eq!(db.get_recent_history(10)?.len(), 0);
+        {
+            let conn = db.lock_conn();
+            let count: i64 = conn.query_row(
+                "SELECT count(*) FROM history WHERE track_id = ?1",
+                params![track_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 0);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_prune_missing_local_tracks() -> Result<(), Box<dyn std::error::Error>> {
+        let db = Database::open_in_memory()?;
+
+        let timestamp = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_nanos(),
+            Err(_) => 0,
+        };
+        let temp_dir = std::env::temp_dir().join(format!("eclipse_test_prune_{timestamp}"));
+        std::fs::create_dir_all(&temp_dir)?;
+
+        let temp_file = temp_dir.join("test_song.flac");
+        std::fs::write(&temp_file, b"fake flac content for pruning test")?;
+
+        let track = Track {
+            id: 0,
+            path: temp_file.to_string_lossy().to_string(),
+            title: "Prunable Song".to_string(),
+            artist: "Artist".to_string(),
+            album_artist: "Artist".to_string(),
+            album: "Album".to_string(),
+            genre: "Rock".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 180.0,
+            bitrate_kbps: 1000,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 1024,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: temp_dir.to_string_lossy().to_string(),
+        };
+
+        let track_id = db.upsert_track(&track)?;
+        assert!(db.get_track_by_id(track_id)?.is_some());
+
+        // First test: file still exists, so prune should NOT delete it
+        let pruned_before = db.prune_missing_local_tracks(&[temp_dir.clone()])?;
+        assert!(pruned_before.is_empty());
+        assert!(db.get_track_by_id(track_id)?.is_some());
+
+        // Delete the file from disk
+        std::fs::remove_file(&temp_file)?;
+        assert!(!temp_file.exists());
+
+        // Now run pruning
+        let pruned_after = db.prune_missing_local_tracks(&[temp_dir.clone()])?;
+        assert_eq!(pruned_after, vec![track_id]);
+
+        // Assert track is gone from database
+        assert!(db.get_track_by_id(track_id)?.is_none());
+
+        // Clean up temp dir
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_prune_never_prunes_stream_or_unmounted_drive() -> Result<(), Box<dyn std::error::Error>> {
+        let db = Database::open_in_memory()?;
+
+        // 1. Create stream tracks with source = 'local' to ensure even misattributed stream paths are NEVER pruned
+        let stream_track1 = Track {
+            id: 0,
+            path: "spotify:track:abc123456789".to_string(),
+            title: "Spotify Stream".to_string(),
+            artist: "Streamer".to_string(),
+            album_artist: "Streamer".to_string(),
+            album: "Stream Album".to_string(),
+            genre: "Pop".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 180.0,
+            bitrate_kbps: 320,
+            sample_rate: 44100,
+            channels: 2,
+            format: "STREAM".to_string(),
+            file_size: 0,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: String::new(),
+        };
+
+        let stream_track2 = Track {
+            id: 0,
+            path: "http://example.com/radio.mp3".to_string(),
+            title: "HTTP Stream".to_string(),
+            artist: "Radio".to_string(),
+            album_artist: "Radio".to_string(),
+            album: "Live".to_string(),
+            genre: "Radio".to_string(),
+            year: 2024,
+            track_number: 2,
+            duration_secs: 0.0,
+            bitrate_kbps: 128,
+            sample_rate: 44100,
+            channels: 2,
+            format: "STREAM".to_string(),
+            file_size: 0,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: String::new(),
+        };
+
+        let stream_track3 = Track {
+            id: 0,
+            path: "youtube:video:xyz987654321".to_string(),
+            title: "YouTube Video".to_string(),
+            artist: "Channel".to_string(),
+            album_artist: "Channel".to_string(),
+            album: "Videos".to_string(),
+            genre: "Soundtrack".to_string(),
+            year: 2024,
+            track_number: 3,
+            duration_secs: 240.0,
+            bitrate_kbps: 192,
+            sample_rate: 44100,
+            channels: 2,
+            format: "STREAM".to_string(),
+            file_size: 0,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: String::new(),
+        };
+
+        // 2. Track on an unmounted / non-existent root folder (e.g. unplugged external drive)
+        let unmounted_root = std::path::PathBuf::from("Z:\\EclipseNonExistentDrive\\Music");
+        assert!(!unmounted_root.exists(), "Root must not exist for unmounted drive test");
+
+        let unmounted_track = Track {
+            id: 0,
+            path: "Z:\\EclipseNonExistentDrive\\Music\\RareTrack.flac".to_string(),
+            title: "External Track".to_string(),
+            artist: "Offline Artist".to_string(),
+            album_artist: "Offline Artist".to_string(),
+            album: "Offline Album".to_string(),
+            genre: "Jazz".to_string(),
+            year: 2023,
+            track_number: 1,
+            duration_secs: 300.0,
+            bitrate_kbps: 1411,
+            sample_rate: 44100,
+            channels: 2,
+            format: "FLAC".to_string(),
+            file_size: 50000000,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "Z:\\EclipseNonExistentDrive\\Music".to_string(),
+        };
+
+        let s1_id = db.upsert_track(&stream_track1)?;
+        let s2_id = db.upsert_track(&stream_track2)?;
+        let s3_id = db.upsert_track(&stream_track3)?;
+        let unmounted_id = db.upsert_track(&unmounted_track)?;
+
+        // Ensure in tracks table source='local' for these so we test the path and root check safeguards
+        {
+            let conn = db.lock_conn();
+            conn.execute(
+                "UPDATE tracks SET source = 'local' WHERE id IN (?1, ?2, ?3, ?4)",
+                params![s1_id, s2_id, s3_id, unmounted_id],
+            )?;
+        }
+
+        // Run pruning with unmounted root and an arbitrary empty root
+        let roots = vec![unmounted_root, std::path::PathBuf::from("C:\\NonExistentFolder12345")];
+        let pruned = db.prune_missing_local_tracks(&roots)?;
+
+        // Must NEVER prune streams or tracks on unmounted/non-existent roots
+        assert!(pruned.is_empty(), "Pruned list should be empty, but got {:?}", pruned);
+        assert!(db.get_track_by_id(s1_id)?.is_some(), "Stream 1 must not be pruned");
+        assert!(db.get_track_by_id(s2_id)?.is_some(), "Stream 2 must not be pruned");
+        assert!(db.get_track_by_id(s3_id)?.is_some(), "Stream 3 must not be pruned");
+        assert!(db.get_track_by_id(unmounted_id)?.is_some(), "Unmounted drive track must not be pruned");
 
         Ok(())
     }

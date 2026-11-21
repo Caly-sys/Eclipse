@@ -58,43 +58,60 @@ pub fn render_bento_player_dock(
         ui.set_height(dock_h - 10.0);
 
         let total_w = ui.available_width();
-        let spacing = ui.spacing().item_spacing.x;
 
-        // Adaptive zone allocation: Zone 1 (~260px), Zone 3 (~220px), Zone 2 (Center remainder)
-        let left_w = 260.0_f32.min(total_w * 0.30).max(180.0);
-        let right_w = 220.0_f32.min(total_w * 0.26).max(170.0);
-        let center_w = (total_w - left_w - right_w - spacing * 2.0).max(240.0);
+        // Right zone (right_w): ALWAYS reserve enough fixed width so all utility icons
+        // (Queue/Lyrics, Mini-Player, Fullscreen, Inspector toggle) + Volume icon NEVER clip off the right edge of the window!
+        // - If total_w >= 960.0: full volume slider (~80px) + all utility icons.
+        // - If total_w < 960.0: compact volume slider (~44px) + all utility icons (or hide just the slider track below 820.0px, keeping the mute/volume icon + all utility icons 100% visible).
+        let (right_w, slider_w) = if total_w >= 960.0 {
+            (252.0_f32, Some(80.0_f32))
+        } else if total_w >= 820.0 {
+            (216.0_f32, Some(44.0_f32))
+        } else {
+            (168.0_f32, None)
+        };
+
+        // Left zone (left_w): clamp strictly to (total_w * 0.27).clamp(170.0, 290.0)
+        let left_w = (total_w * 0.27).clamp(170.0, 290.0);
+
+        // Center zone: center_w = (total_w - left_w - right_w - 24.0).max(200.0)
+        let center_w = (total_w - left_w - right_w - 24.0).max(200.0);
+
+        ui.spacing_mut().item_spacing = vec2(12.0, 0.0);
 
         ui.horizontal(|ui| {
-            // Zone 1: Left (~260px) - Album Art, Title, Artist, Badges, Heart
+            // Zone 1: Left - Album Art, Title, Artist, Badges, Heart (clipped child UI)
             ui.allocate_ui_with_layout(
                 vec2(left_w, dock_h - 10.0),
                 Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    render_zone1_metadata(ui, player, art_manager, &palette, left_w, &mut action);
+                    ui.set_clip_rect(ui.max_rect());
+                    render_zone1_metadata(ui, player, art_manager, &palette, left_w, total_w, &mut action);
                 },
             );
 
-            // Zone 2: Center (~440px - 500px) - Transport controls & scrubbable seekbar
+            // Zone 2: Center - Transport controls & scrubbable seekbar
             ui.allocate_ui_with_layout(
                 vec2(center_w, dock_h - 10.0),
                 Layout::top_down(egui::Align::Center),
                 |ui| {
+                    ui.set_clip_rect(ui.max_rect());
                     render_zone2_transport(ui, player, stream_controller, &palette, center_w);
                 },
             );
 
-            // Zone 3: Right (~220px) - Volume slider and view mode toggle buttons
+            // Zone 3: Right - Volume slider and view mode toggle buttons
             // Centered on the exact same vertical centerline as transport controls (controls_h = 36.0)
             ui.allocate_ui_with_layout(
                 vec2(right_w, dock_h - 10.0),
                 Layout::top_down(egui::Align::Min),
                 |ui| {
+                    ui.set_clip_rect(ui.max_rect());
                     ui.allocate_ui_with_layout(
                         vec2(right_w, 36.0),
                         Layout::right_to_left(egui::Align::Center),
                         |ui| {
-                            render_zone3_controls(ui, player, stream_controller, &palette, is_inspector_open, &mut action);
+                            render_zone3_controls(ui, player, stream_controller, &palette, is_inspector_open, slider_w, &mut action);
                         },
                     );
                 },
@@ -122,9 +139,11 @@ fn render_zone1_metadata(
     art_manager: &mut AlbumArtManager,
     palette: &BentoPalette,
     left_w: f32,
+    total_w: f32,
     action: &mut BentoPlayerDockAction,
 ) {
     let is_stream = player.playback_source.is_stream();
+    let show_badge = total_w >= 900.0;
 
     if is_stream {
         if let Some(ref track) = player.active_stream_track {
@@ -145,7 +164,7 @@ fn render_zone1_metadata(
 
             // Title and Artist column
             let text_w = (left_w - 46.0 - 16.0).max(60.0);
-            render_title_artist_column(ui, track.display_title(), track.display_artist(), "STREAM", false, palette, text_w);
+            render_title_artist_column(ui, track.display_title(), track.display_artist(), "STREAM", false, palette, text_w, show_badge);
         } else {
             render_empty_track_zone(ui, palette);
         }
@@ -191,8 +210,9 @@ fn render_zone1_metadata(
             }
         };
 
-        let text_w = (left_w - 46.0 - 32.0 - 18.0).max(60.0);
-        render_title_artist_column(ui, track.display_title(), track.display_artist(), &format_badge_text, is_hires, palette, text_w);
+        // Text width accounts for Art (46px) + Spacing (8px) + Heart button (26px) + Spacing (4px) + margin
+        let text_w = (left_w - 46.0 - 8.0 - 26.0 - 12.0).max(50.0);
+        render_title_artist_column(ui, track.display_title(), track.display_artist(), &format_badge_text, is_hires, palette, text_w, show_badge);
 
         ui.add_space(4.0);
 
@@ -220,6 +240,7 @@ fn render_zone1_metadata(
 }
 
 /// Helper for rendering title, artist, and format badge column.
+#[allow(clippy::too_many_arguments)]
 fn render_title_artist_column(
     ui: &mut Ui,
     title: &str,
@@ -228,28 +249,51 @@ fn render_title_artist_column(
     is_hires: bool,
     palette: &BentoPalette,
     max_w: f32,
+    show_badge: bool,
 ) {
     ui.allocate_ui_with_layout(
         vec2(max_w, 46.0),
         Layout::top_down(egui::Align::Min),
         |ui| {
+            ui.set_clip_rect(ui.max_rect());
             ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
 
-            // Title
+            // Title - single-line ellipsis truncation
             let title_font = FontId::proportional(12.5);
-            let truncated_title = truncate_string(ui, title, title_font.clone(), palette.text_primary, max_w);
-            ui.label(RichText::new(truncated_title).size(12.5).strong().color(palette.text_primary));
+            let truncated_title = truncate_string(ui, title, title_font, palette.text_primary, max_w);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(truncated_title)
+                        .size(12.5)
+                        .strong()
+                        .color(palette.text_primary),
+                )
+                .truncate(),
+            );
 
             // Artist and Quality Badge row
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-                let artist_max_w = (max_w - 60.0).max(30.0);
+                let artist_max_w = if show_badge {
+                    (max_w - 60.0).max(30.0)
+                } else {
+                    max_w
+                };
                 let artist_font = FontId::proportional(11.0);
                 let truncated_artist = truncate_string(ui, artist, artist_font, palette.text_secondary, artist_max_w);
-                ui.label(RichText::new(truncated_artist).size(11.0).color(palette.text_secondary));
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(truncated_artist)
+                            .size(11.0)
+                            .color(palette.text_secondary),
+                    )
+                    .truncate(),
+                );
 
-                // Quality format pill badge via quality_badge_pill
-                quality_badge_pill(ui, badge, is_hires, palette);
+                // Quality format pill badge via quality_badge_pill (hidden when total_w < 900.0)
+                if show_badge {
+                    quality_badge_pill(ui, badge, is_hires, palette);
+                }
             });
         },
     );
@@ -588,6 +632,7 @@ fn render_zone3_controls(
     stream_controller: Option<&StreamController>,
     palette: &BentoPalette,
     is_inspector_open: bool,
+    slider_w: Option<f32>,
     action: &mut BentoPlayerDockAction,
 ) {
     ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
@@ -659,11 +704,13 @@ fn render_zone3_controls(
         *action = BentoPlayerDockAction::JumpToLyrics;
     }
 
-    // 5. Slim Volume Slider
+    // 5. Slim Volume Slider (rendered if slider_w is Some, hidden below 820.0px)
     let vol = player.engine.volume();
-    render_dock_volume_slider(ui, vol, player, stream_controller, palette);
+    if let Some(desired_w) = slider_w {
+        render_dock_volume_slider(ui, vol, desired_w, player, stream_controller, palette);
+    }
 
-    // 6. Volume Mute Icon Button
+    // 6. Volume Mute Icon Button (always 100% visible)
     let is_muted = player.engine.is_muted();
     let vol_icon = if is_muted || vol <= 0.001 {
         Icon::VolumeMute
@@ -681,6 +728,24 @@ fn render_zone3_controls(
     if is_mute_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         ui.painter().rect_filled(mute_rect, Rounding::same(6.0), palette.bg_card_hover);
+
+        // Scroll wheel adjusts volume even when hovering mute button
+        let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
+        if scroll_y != 0.0 {
+            let step = if scroll_y > 0.0 { 0.05 } else { -0.05 };
+            let new_vol = (vol + step).clamp(0.0, 1.0);
+            if player.playback_source.is_stream() {
+                if let Some(sc) = stream_controller {
+                    let prov_id = player.stream_provider_id().unwrap_or("spotify");
+                    sc.set_volume(prov_id, new_vol);
+                }
+            } else {
+                if player.engine.is_muted() && new_vol > 0.0 {
+                    player.engine.set_muted(false);
+                }
+                player.engine.set_volume(new_vol);
+            }
+        }
     }
     let vol_btn_color = if is_muted {
         Color32::from_rgb(220, 38, 38)
@@ -711,11 +776,11 @@ fn render_zone3_controls(
 fn render_dock_volume_slider(
     ui: &mut Ui,
     vol: f32,
+    desired_w: f32,
     player: &mut PlayerController,
     stream_controller: Option<&StreamController>,
     palette: &BentoPalette,
 ) {
-    let desired_w = 64.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(desired_w, 16.0), egui::Sense::click_and_drag());
     let is_hovered = resp.hovered();
     let is_dragged = resp.dragged();
@@ -949,6 +1014,87 @@ mod tests {
                 assert_eq!(action, BentoPlayerDockAction::None);
             });
         });
+    }
+
+    #[test]
+    fn test_dock_width_budgets_and_adaptive_slider() {
+        // 1. Wide viewport (>= 960.0): full slider (~80px)
+        let total_w_wide = 1200.0_f32;
+        let (right_w_wide, slider_w_wide) = if total_w_wide >= 960.0 {
+            (252.0_f32, Some(80.0_f32))
+        } else if total_w_wide >= 820.0 {
+            (216.0_f32, Some(44.0_f32))
+        } else {
+            (168.0_f32, None)
+        };
+        let left_w_wide = (total_w_wide * 0.27).clamp(170.0, 290.0);
+        let center_w_wide = (total_w_wide - left_w_wide - right_w_wide - 24.0).max(200.0);
+
+        assert_eq!(right_w_wide, 252.0);
+        assert_eq!(slider_w_wide, Some(80.0));
+        assert_eq!(left_w_wide, 290.0);
+        assert_eq!(center_w_wide, 1200.0 - 290.0 - 252.0 - 24.0);
+
+        // 2. Compact viewport (820.0 <= total_w < 960.0): compact slider (~44px)
+        let total_w_compact = 880.0_f32;
+        let (right_w_compact, slider_w_compact) = if total_w_compact >= 960.0 {
+            (252.0_f32, Some(80.0_f32))
+        } else if total_w_compact >= 820.0 {
+            (216.0_f32, Some(44.0_f32))
+        } else {
+            (168.0_f32, None)
+        };
+        let left_w_compact = (total_w_compact * 0.27).clamp(170.0, 290.0);
+        let center_w_compact = (total_w_compact - left_w_compact - right_w_compact - 24.0).max(200.0);
+
+        assert_eq!(right_w_compact, 216.0);
+        assert_eq!(slider_w_compact, Some(44.0));
+        assert!((left_w_compact - 880.0 * 0.27).abs() < 1e-4);
+        assert!(center_w_compact >= 200.0);
+
+        // 3. Narrow viewport (< 820.0): slider track hidden (None), all utility icons + mute visible
+        let total_w_narrow = 760.0_f32;
+        let (right_w_narrow, slider_w_narrow) = if total_w_narrow >= 960.0 {
+            (252.0_f32, Some(80.0_f32))
+        } else if total_w_narrow >= 820.0 {
+            (216.0_f32, Some(44.0_f32))
+        } else {
+            (168.0_f32, None)
+        };
+        let left_w_narrow = (total_w_narrow * 0.27).clamp(170.0, 290.0);
+        let center_w_narrow = (total_w_narrow - left_w_narrow - right_w_narrow - 24.0).max(200.0);
+
+        assert_eq!(right_w_narrow, 168.0);
+        assert_eq!(slider_w_narrow, None);
+        assert!((left_w_narrow - 760.0 * 0.27).abs() < 1e-4);
+        assert!(center_w_narrow >= 200.0);
+    }
+
+    #[test]
+    fn test_render_bento_player_dock_different_widths() {
+        for width in [760.0, 810.0, 880.0, 960.0, 1280.0] {
+            let ctx = egui::Context::default();
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.set_width(width);
+                    let theme = Theme::from_name("Obsidian", None);
+                    let cfg = crate::config::AppConfig::default();
+                    let mut player = PlayerController::new(&cfg);
+                    let mut art_manager = AlbumArtManager::new();
+
+                    let action = render_bento_player_dock(
+                        ui,
+                        &mut player,
+                        None,
+                        &mut art_manager,
+                        &theme,
+                        false,
+                    );
+
+                    assert_eq!(action, BentoPlayerDockAction::None);
+                });
+            });
+        }
     }
 
     #[test]

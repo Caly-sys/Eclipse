@@ -42,847 +42,70 @@ pub fn render_now_playing(
         let pos_secs = player.engine.position().as_secs_f64();
         let pos_ms = (pos_secs * 1000.0) as u64;
 
-        let mut col_rects: [Option<Rect>; 3] = [None, None, None];
+        let total_width = ui.available_width();
 
-        ui.columns(3, |cols| {
-            // =================================================================
-            // COLUMN 1 (LEFT): Artwork, Track Info, Technical Badges
-            // =================================================================
-            cols[0].vertical(|ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
+        // Responsive layout breakpoint: < 860px switches to 2-row layout
+        if total_width < 860.0 {
+            ScrollArea::vertical()
+                .id_salt("now_playing_responsive_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
 
-                let panel_frame = egui::Frame::none()
-                    .fill(palette.bg_card)
-                    .rounding(Rounding::same(12.0))
-                    .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin::same(16.0));
+                    let mut top_rects: [Option<Rect>; 2] = [None, None];
 
-                let resp = panel_frame.show(ui, |ui| {
-                    ui.vertical_centered(|ui| {
-                        let card_width = (ui.available_width() - 10.0).clamp(180.0, 260.0);
-                        let art_size = vec2(card_width, card_width);
+                    // Top row: Cover Art + Synced Lyrics side-by-side (50/50)
+                    ui.columns(2, |cols| {
+                        cols[0].set_clip_rect(cols[0].clip_rect().intersect(cols[0].max_rect()));
+                        top_rects[0] = render_track_info_card(&mut cols[0], &track, &palette, art_manager);
 
-                        // Ambient glow behind album art card matching active accent
-                        let (rect, _) = ui.allocate_exact_size(art_size, egui::Sense::hover());
-
-                        // Multi-layered specular accent halo (borderless)
-                        ui.painter().rect_filled(
-                            rect.expand(10.0),
-                            Rounding::same(18.0),
-                            Color32::from_rgba_premultiplied(
-                                palette.accent.r(),
-                                palette.accent.g(),
-                                palette.accent.b(),
-                                18,
-                            ),
-                        );
-                        ui.painter().rect_filled(
-                            rect.expand(4.0),
-                            Rounding::same(16.0),
-                            Color32::from_rgba_premultiplied(
-                                palette.accent.r(),
-                                palette.accent.g(),
-                                palette.accent.b(),
-                                32,
-                            ),
-                        );
-
-                        // Album Art Image: rounded egui::Image with Stroke::NONE
-                        let mut painted_cover = false;
-                        if let Some(texture) = art_manager.get_or_load(ui.ctx(), &track.path) {
-                            let img = egui::Image::new(egui::load::SizedTexture::new(texture.id(), rect.size()))
-                                .rounding(Rounding::same(14.0));
-                            img.paint_at(ui, rect);
-                            painted_cover = true;
-                        }
-
-                        if !painted_cover {
-                            ui.painter().rect_filled(rect, Rounding::same(14.0), palette.bg_center);
-                            let icon_box = Rect::from_center_size(rect.center(), vec2(art_size.x * 0.36, art_size.x * 0.36));
-                            paint_icon(ui.painter(), Icon::Disc, icon_box, palette.accent);
-                        }
-
-                        ui.add_space(14.0);
-
-                        // Track Title
-                        ui.label(
-                            RichText::new(track.display_title())
-                                .size(19.0)
-                                .color(palette.text_primary)
-                                .strong(),
-                        );
-                        ui.add_space(2.0);
-
-                        // Artist
-                        ui.label(
-                            RichText::new(track.display_artist())
-                                .size(14.5)
-                                .color(palette.text_secondary),
-                        );
-                        ui.add_space(2.0);
-
-                        // Album and Year
-                        let album_year = if track.year > 0 {
-                            format!("{} · {}", track.display_album(), track.year)
-                        } else {
-                            track.display_album().to_string()
-                        };
-                        ui.label(
-                            RichText::new(album_year)
-                                .size(12.5)
-                                .color(palette.text_muted),
-                        );
-
-                        ui.add_space(10.0);
-
-                        // Format Badges with Stroke::NONE
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-
-                            // High-contrast format badge (FLAC, MP3, etc.)
-                            format_badge(ui, &track.format, track.is_lossless(), &palette);
-
-                            // Bit depth & Sample rate badge (e.g. 24-BIT 48 KHZ)
-                            let bit_depth = if track.is_hires() { "24-BIT" } else { "16-BIT" };
-                            let sr_khz = if track.sample_rate > 0 {
-                                format!("{} KHZ", track.sample_rate / 1000)
-                            } else {
-                                "44.1 KHZ".to_string()
-                            };
-                            pill_badge(
-                                ui,
-                                &format!("{} {}", bit_depth, sr_khz),
-                                palette.bg_center,
-                                palette.text_secondary,
-                            );
-
-                            // Play count badge
-                            pill_badge(
-                                ui,
-                                &format!("{} plays", track.play_count),
-                                palette.bg_center,
-                                palette.text_secondary,
-                            );
-
-                            // Lossless or Hi-Res badge
-                            if track.is_hires() {
-                                pill_badge(
-                                    ui,
-                                    "HI-RES LOSSLESS",
-                                    Color32::from_rgba_unmultiplied(255, 178, 92, 45),
-                                    Color32::from_rgb(255, 178, 92),
-                                );
-                            } else if track.is_lossless() {
-                                pill_badge(
-                                    ui,
-                                    "LOSSLESS",
-                                    palette.accent_soft,
-                                    palette.accent,
-                                );
-                            }
-                        });
-                    });
-                });
-                col_rects[0] = Some(resp.response.rect);
-            });
-
-            // =================================================================
-            // COLUMN 2 (CENTER): Synced Lyrics with Auto-Scrolling & Click-Seek
-            // =================================================================
-            cols[1].vertical(|ui| {
-                let search_open_id = egui::Id::new("now_playing_lyrics_search_open");
-                let search_query_id = egui::Id::new("now_playing_lyrics_search_query");
-                let track_id_key = egui::Id::new("now_playing_lyrics_current_track_id");
-
-                let mut is_search_open: bool = ui.data(|d| d.get_temp(search_open_id)).unwrap_or(false);
-                let mut search_query: String = ui.data(|d| d.get_temp(search_query_id)).unwrap_or_default();
-                let last_track_id: Option<i64> = ui.data(|d| d.get_temp(track_id_key));
-
-                if last_track_id != Some(track.id) {
-                    search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
-                    ui.data_mut(|d| d.insert_temp(track_id_key, track.id));
-                }
-
-                if search_query.trim().is_empty() {
-                    search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
-                }
-
-                let panel_frame = egui::Frame::none()
-                    .fill(palette.bg_card)
-                    .rounding(Rounding::same(12.0))
-                    .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin::same(16.0));
-
-                let resp = panel_frame.show(ui, |ui| {
-                    // Header layout: Title `SYNCED LYRICS`, source badge, compact "Search Online (LRCLIB)" button
-                    ui.horizontal(|ui| {
-                        let (icon_box, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
-                        paint_icon(ui.painter(), Icon::Mic, icon_box, palette.accent);
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("SYNCED LYRICS")
-                                .size(13.0)
-                                .color(palette.text_primary)
-                                .strong(),
-                        );
-
-                        let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, &palette);
-                        ui.add_space(6.0);
-                        pill_badge(ui, badge_text, badge_fill, badge_color);
-
-                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            let btn_resp = search_online_header_button(ui, is_search_open, &palette);
-                            if btn_resp.clicked() {
-                                is_search_open = !is_search_open;
-                                if is_search_open && search_query.trim().is_empty() {
-                                    search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
-                                }
-                            }
-                        });
+                        cols[1].set_clip_rect(cols[1].clip_rect().intersect(cols[1].max_rect()));
+                        top_rects[1] = render_synced_lyrics_card(&mut cols[1], player, &track, pos_ms, &palette);
                     });
 
-                    seam_divider(ui, &palette);
-
-                    if is_search_open {
-                        let mut picked_record = None;
-                        let mut trigger_search_query = None;
-
-                        // Inline LRCLIB Search Drawer inside Synced Lyrics card with Stroke::NONE
-                        let drawer_card = egui::Frame::none()
-                            .fill(palette.bg_center)
-                            .rounding(Rounding::same(10.0))
-                            .stroke(Stroke::NONE)
-                            .inner_margin(egui::Margin::same(12.0));
-
-                        drawer_card.show(ui, |ui| {
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
-
-                                // Header: "Search LRCLIB Online" and vector Close button
-                                ui.horizontal(|ui| {
-                                    let (s_icon_box, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
-                                    paint_icon(ui.painter(), Icon::Search, s_icon_box, palette.accent);
-                                    ui.add_space(4.0);
-                                    ui.label(
-                                        RichText::new("Search LRCLIB Online")
-                                            .size(13.0)
-                                            .color(palette.text_primary)
-                                            .strong(),
-                                    );
-
-                                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                        let close_resp = vector_icon_button(ui, Icon::Close, 14.0, palette.text_muted);
-                                        if close_resp.hovered() {
-                                            close_resp.clone().on_hover_text("Close Search Drawer");
-                                        }
-                                        if close_resp.clicked() {
-                                            is_search_open = false;
-                                        }
-                                    });
-                                });
-
-                                // Search input row: Text input + "Search" button
-                                ui.horizontal(|ui| {
-                                    let btn_w = 72.0;
-                                    let input_w = (ui.available_width() - btn_w - 8.0).max(100.0);
-
-                                    let mut enter_pressed = false;
-                                    let input_frame = egui::Frame::none()
-                                        .fill(palette.bg_sidebar)
-                                        .rounding(Rounding::same(6.0))
-                                        .stroke(Stroke::NONE)
-                                        .inner_margin(egui::Margin::symmetric(8.0, 4.0));
-
-                                    input_frame.show(ui, |ui| {
-                                        let edit_resp = ui.add(
-                                            egui::TextEdit::singleline(&mut search_query)
-                                                .hint_text("Title Artist...")
-                                                .desired_width(input_w)
-                                                .text_color(palette.text_primary)
-                                                .frame(false),
-                                        );
-                                        if edit_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                            enter_pressed = true;
-                                        }
-                                    });
-
-                                    let search_btn = egui::Button::new(
-                                        RichText::new("Search")
-                                            .color(Color32::from_rgb(11, 9, 20))
-                                            .size(12.5)
-                                            .strong(),
-                                    )
-                                    .fill(palette.accent)
-                                    .stroke(Stroke::NONE)
-                                    .rounding(Rounding::same(6.0))
-                                    .min_size(vec2(btn_w, 28.0));
-
-                                    let search_clicked = ui.add(search_btn).clicked();
-
-                                    if (search_clicked || enter_pressed) && !search_query.trim().is_empty() {
-                                        trigger_search_query = Some(search_query.trim().to_string());
-                                    }
-                                });
-
-                                seam_divider(ui, &palette);
-
-                                // Drawer Body: Searching, Error, Results, or Empty prompt
-                                if player.is_searching_lyrics {
-                                    ui.add_space(24.0);
-                                    ui.vertical_centered(|ui| {
-                                        let (spk_box, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
-                                        paint_icon(ui.painter(), Icon::Sparkle, spk_box, palette.accent);
-                                        ui.add_space(8.0);
-                                        ui.label(
-                                            RichText::new("Searching LRCLIB online...")
-                                                .color(palette.text_secondary)
-                                                .size(13.0),
-                                        );
-                                    });
-                                    ui.add_space(24.0);
-                                } else if let Some(ref err) = player.manual_search_error {
-                                    ui.add_space(16.0);
-                                    ui.vertical_centered(|ui| {
-                                        ui.label(
-                                            RichText::new(format!("Search failed: {}", err))
-                                                .color(Color32::from_rgb(248, 113, 113))
-                                                .size(12.5),
-                                        );
-                                    });
-                                    ui.add_space(16.0);
-                                } else if let Some(ref results) = player.manual_search_results {
-                                    if results.is_empty() {
-                                        ui.add_space(24.0);
-                                        ui.vertical_centered(|ui| {
-                                            ui.label(
-                                                RichText::new("No matching lyrics found on LRCLIB.")
-                                                    .color(palette.text_muted)
-                                                    .size(13.0),
-                                            );
-                                            ui.add_space(4.0);
-                                            ui.label(
-                                                RichText::new("Try adjusting the title or artist in your search query.")
-                                                    .color(palette.text_muted)
-                                                    .size(11.5),
-                                            );
-                                        });
-                                        ui.add_space(24.0);
-                                    } else {
-                                        ScrollArea::vertical()
-                                            .id_salt("manual_lyrics_search_results_scroll")
-                                            .auto_shrink([false, false])
-                                            .show(ui, |ui| {
-                                                ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
-
-                                                for record in results {
-                                                    let dur_str = record
-                                                        .duration
-                                                        .map(format_time_secs)
-                                                        .unwrap_or_else(|| "--:--".to_string());
-
-                                                    let album_display = record
-                                                        .album_name
-                                                        .as_deref()
-                                                        .unwrap_or("Unknown Album");
-
-                                                    let title_display = if !record.track_name.is_empty() {
-                                                        &record.track_name
-                                                    } else if let Some(ref n) = record.name {
-                                                        n
-                                                    } else {
-                                                        "Unknown Title"
-                                                    };
-
-                                                    let item_frame = egui::Frame::none()
-                                                        .fill(palette.bg_card)
-                                                        .stroke(Stroke::NONE)
-                                                        .rounding(Rounding::same(8.0))
-                                                        .inner_margin(egui::Margin::symmetric(10.0, 8.0));
-
-                                                    let item_resp = item_frame.show(ui, |ui| {
-                                                        ui.horizontal(|ui| {
-                                                            ui.vertical(|ui| {
-                                                                ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
-                                                                ui.label(
-                                                                    RichText::new(title_display)
-                                                                        .size(13.0)
-                                                                        .color(palette.text_primary)
-                                                                        .strong(),
-                                                                );
-
-                                                                let sub_str = format!(
-                                                                    "{} · {} · {}",
-                                                                    record.artist_name, album_display, dur_str
-                                                                );
-                                                                ui.label(
-                                                                    RichText::new(sub_str)
-                                                                        .size(11.0)
-                                                                        .color(palette.text_muted),
-                                                                );
-                                                            });
-
-                                                            ui.with_layout(
-                                                                Layout::right_to_left(egui::Align::Center),
-                                                                |ui| {
-                                                                    if record
-                                                                        .synced_lyrics
-                                                                        .as_ref()
-                                                                        .is_some_and(|s| !s.trim().is_empty())
-                                                                    {
-                                                                        pill_badge(
-                                                                            ui,
-                                                                            "SYNCED",
-                                                                            palette.accent_soft,
-                                                                            palette.accent,
-                                                                        );
-                                                                    } else if record.instrumental {
-                                                                        pill_badge(
-                                                                            ui,
-                                                                            "INSTRUMENTAL",
-                                                                            Color32::from_rgba_unmultiplied(255, 178, 92, 45),
-                                                                            Color32::from_rgb(255, 178, 92),
-                                                                        );
-                                                                    } else {
-                                                                        pill_badge(
-                                                                            ui,
-                                                                            "PLAIN",
-                                                                            palette.bg_sidebar,
-                                                                            palette.text_muted,
-                                                                        );
-                                                                    }
-                                                                },
-                                                            );
-                                                        });
-                                                    });
-
-                                                    let interact = item_resp.response.interact(egui::Sense::click());
-                                                    if interact.hovered() {
-                                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                                        ui.painter().rect_filled(
-                                                            item_resp.response.rect,
-                                                            Rounding::same(8.0),
-                                                            palette.bg_card_hover,
-                                                        );
-                                                    }
-                                                    if interact.clicked() {
-                                                        picked_record = Some(record.clone());
-                                                    }
-                                                }
-                                            });
-                                    }
-                                } else {
-                                    // Initial prompt inside drawer
-                                    ui.add_space(16.0);
-                                    ui.vertical_centered(|ui| {
-                                        ui.label(
-                                            RichText::new("Enter title or artist to search LRCLIB online.")
-                                                .color(palette.text_muted)
-                                                .size(12.5),
-                                        );
-                                        ui.add_space(8.0);
-                                        let quick_search_btn = egui::Button::new(
-                                            RichText::new(format!("Search \"{}\"", search_query.trim()))
-                                                .color(palette.text_primary)
-                                                .size(12.0),
-                                        )
-                                        .fill(palette.bg_sidebar)
-                                        .stroke(Stroke::NONE)
-                                        .rounding(Rounding::same(6.0))
-                                        .min_size(vec2(140.0, 28.0));
-
-                                        if ui.add(quick_search_btn).clicked() && !search_query.trim().is_empty() {
-                                            trigger_search_query = Some(search_query.trim().to_string());
-                                        }
-                                    });
-                                    ui.add_space(16.0);
-                                }
-                            });
-                        });
-
-                        if let Some(q) = trigger_search_query {
-                            player.search_lyrics_manual(
-                                &q,
-                                Some(&track.title),
-                                Some(&track.artist),
-                            );
-                        }
-                        if let Some(rec) = picked_record {
-                            player.apply_custom_lyrics(&rec);
-                            is_search_open = false;
-                        }
-                    } else if player.is_loading_lyrics {
-                        ui.add_space(48.0);
-                        ui.vertical_centered(|ui| {
-                            let (icon_rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::hover());
-                            paint_icon(ui.painter(), Icon::Sparkle, icon_rect, palette.accent);
-                            ui.add_space(10.0);
-                            ui.label(
-                                RichText::new("Searching LRCLIB...")
-                                    .color(palette.text_secondary)
-                                    .size(14.0),
-                            );
-                            ui.add_space(4.0);
-                            ui.label(
-                                RichText::new("Looking for synced lyrics online")
-                                    .color(palette.text_muted)
-                                    .size(12.0),
-                            );
-                        });
-                    } else if let Some(ref lyrics) = player.lyrics {
-                        if lyrics.lines.is_empty() {
-                            render_lyrics_empty_state(ui, &palette, &track, &mut is_search_open, &mut search_query);
-                        } else if lyrics.source.contains("Instrumental")
-                            || (lyrics.lines.len() == 1 && lyrics.lines[0].text.eq_ignore_ascii_case("instrumental"))
-                        {
-                            ui.add_space(40.0);
-                            ui.vertical_centered(|ui| {
-                                let (icon_rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), egui::Sense::hover());
-                                paint_icon(ui.painter(), Icon::Music, icon_rect, Color32::from_rgb(255, 178, 92));
-                                ui.add_space(10.0);
-                                ui.label(
-                                    RichText::new("Instrumental Track")
-                                        .size(15.0)
-                                        .color(palette.text_primary)
-                                        .strong(),
-                                );
-                                ui.add_space(4.0);
-                                ui.label(
-                                    RichText::new("This song does not contain vocal lyrics.")
-                                        .size(12.5)
-                                        .color(palette.text_muted),
-                                );
-                                ui.add_space(16.0);
-                                let search_btn = egui::Button::new(
-                                    RichText::new("Search LRCLIB Anyway")
-                                        .color(palette.text_primary)
-                                        .size(12.5),
-                                )
-                                .fill(palette.bg_center)
-                                .stroke(Stroke::NONE)
-                                .rounding(Rounding::same(8.0))
-                                .min_size(vec2(150.0, 30.0));
-
-                                if ui.add(search_btn).clicked() {
-                                    is_search_open = true;
-                                    if search_query.trim().is_empty() {
-                                        search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
-                                    }
-                                }
-                            });
-                        } else if lyrics.is_synced {
-                            if let Some(target) = render_synced_lyrics_list(
-                                ui,
-                                "synced_lyrics_scroll",
-                                &lyrics.lines,
-                                pos_ms,
-                                &palette,
-                            ) {
-                                seek_to(player, None, target);
-                            }
-                        } else {
-                            // Plain (unsynced) lyrics
-                            ScrollArea::vertical()
-                                .id_salt("synced_lyrics_scroll")
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
-
-                                    for line in &lyrics.lines {
-                                        if line.text.trim().is_empty() {
-                                            ui.add_space(10.0);
-                                        } else {
-                                            ui.label(
-                                                RichText::new(&line.text)
-                                                    .color(palette.text_primary)
-                                                    .size(14.5)
-                                                    .line_height(Some(22.0)),
-                                            );
-                                        }
-                                    }
-                                });
-                        }
-                    } else {
-                        // Empty state: lyrics is None
-                        render_lyrics_empty_state(ui, &palette, &track, &mut is_search_open, &mut search_query);
+                    // Seam divider between the top 2 columns
+                    if let (Some(r0), Some(r1)) = (top_rects[0], top_rects[1]) {
+                        let y_min = r0.min.y.min(r1.min.y);
+                        let y_max = r0.max.y.max(r1.max.y);
+                        let seam_x = (r0.max.x + r1.min.x) * 0.5;
+                        let seam_rect = Rect::from_min_max(pos2(seam_x - 0.5, y_min), pos2(seam_x + 0.5, y_max));
+                        ui.painter().rect_filled(seam_rect, Rounding::ZERO, palette.seam);
                     }
-                });
-                col_rects[1] = Some(resp.response.rect);
 
-                // Persist search drawer state in ui temp data
-                ui.data_mut(|d| {
-                    d.insert_temp(search_open_id, is_search_open);
-                    d.insert_temp(search_query_id, search_query);
+                    // Bottom row: full-width AUDIO ANALYZER
+                    ui.vertical(|ui| {
+                        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                        render_audio_analyzer_card(ui, player, &track, theme, &palette);
+                    });
                 });
+        } else {
+            // Standard 3-column side-by-side layout (>= 860px)
+            let mut col_rects: [Option<Rect>; 3] = [None, None, None];
+
+            ui.columns(3, |cols| {
+                cols[0].set_clip_rect(cols[0].clip_rect().intersect(cols[0].max_rect()));
+                col_rects[0] = render_track_info_card(&mut cols[0], &track, &palette, art_manager);
+
+                cols[1].set_clip_rect(cols[1].clip_rect().intersect(cols[1].max_rect()));
+                col_rects[1] = render_synced_lyrics_card(&mut cols[1], player, &track, pos_ms, &palette);
+
+                cols[2].set_clip_rect(cols[2].clip_rect().intersect(cols[2].max_rect()));
+                col_rects[2] = render_audio_analyzer_card(&mut cols[2], player, &track, theme, &palette);
             });
 
-            // =================================================================
-            // COLUMN 3 (RIGHT): Audio Analyzer Card
-            // =================================================================
-            cols[2].vertical(|ui| {
-                ui.spacing_mut().item_spacing = vec2(0.0, 10.0);
+            // Subtle 1px vertical dark seam dividers between the 3 panels
+            if let (Some(r0), Some(r1), Some(r2)) = (col_rects[0], col_rects[1], col_rects[2]) {
+                let y_min = r0.min.y.min(r1.min.y).min(r2.min.y);
+                let y_max = r0.max.y.max(r1.max.y).max(r2.max.y);
 
-                let panel_frame = egui::Frame::none()
-                    .fill(palette.bg_card)
-                    .rounding(Rounding::same(12.0))
-                    .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin::same(14.0));
+                let seam1_x = (r0.max.x + r1.min.x) * 0.5;
+                let seam1_rect = Rect::from_min_max(pos2(seam1_x - 0.5, y_min), pos2(seam1_x + 0.5, y_max));
+                ui.painter().rect_filled(seam1_rect, Rounding::ZERO, palette.seam);
 
-                let resp = panel_frame.show(ui, |ui| {
-                    // 1. Format Header with glowing HI-RES LOSSLESS / LOSSLESS badge (Stroke::NONE)
-                    ui.horizontal(|ui| {
-                        render_icon(ui, Icon::BarChart, 14.0, palette.accent);
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("AUDIO ANALYZER")
-                                .size(12.5)
-                                .color(palette.text_secondary)
-                                .strong(),
-                        );
-
-                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                            if track.is_hires() {
-                                pill_badge(
-                                    ui,
-                                    "HI-RES LOSSLESS",
-                                    Color32::from_rgba_unmultiplied(255, 178, 92, 45),
-                                    Color32::from_rgb(255, 178, 92),
-                                );
-                            } else if track.is_lossless() {
-                                pill_badge(
-                                    ui,
-                                    "LOSSLESS",
-                                    palette.accent_soft,
-                                    palette.accent,
-                                );
-                            } else {
-                                pill_badge(
-                                    ui,
-                                    &track.format.to_uppercase(),
-                                    palette.bg_center,
-                                    palette.text_secondary,
-                                );
-                            }
-                        });
-                    });
-
-                    ui.add_space(8.0);
-
-                    // 2. Technical Stats Sub-Card with Stroke::NONE
-                    let specs_card = egui::Frame::none()
-                        .fill(palette.bg_center)
-                        .rounding(Rounding::same(8.0))
-                        .stroke(Stroke::NONE)
-                        .inner_margin(egui::Margin::same(8.0));
-
-                    specs_card.show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
-
-                            stat_row(ui, "Format / Codec", &track.format.to_uppercase(), &palette);
-
-                            let sr_val = if track.sample_rate > 0 {
-                                format!("{} Hz", track.sample_rate)
-                            } else {
-                                "44,100 Hz".to_string()
-                            };
-                            stat_row(ui, "Sample Rate", &sr_val, &palette);
-
-                            let bit_depth = if track.is_hires() { "24-bit" } else { "16-bit" };
-                            let br_val = if track.bitrate_kbps > 0 {
-                                format!("{} · {} kbps", bit_depth, track.bitrate_kbps)
-                            } else {
-                                format!("{} · Lossless", bit_depth)
-                            };
-                            stat_row(ui, "Bit Depth / Rate", &br_val, &palette);
-
-                            let ch_val = if track.channels == 1 {
-                                "Mono (1.0 ch)"
-                            } else {
-                                "Stereo (2.0 ch)"
-                            };
-                            stat_row(ui, "Channels", ch_val, &palette);
-                        });
-                    });
-
-                    ui.add_space(8.0);
-
-                    // 3. Real-Time Audio Metrics Sub-Card (Peak dBFS, LUFS, Dynamic Range)
-                    let metrics_card = egui::Frame::none()
-                        .fill(palette.bg_center)
-                        .rounding(Rounding::same(8.0))
-                        .stroke(Stroke::NONE)
-                        .inner_margin(egui::Margin::same(8.0));
-
-                    metrics_card.show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let col_w = (ui.available_width() - 8.0) / 3.0;
-
-                            // Metric 1: Peak Level (dBFS)
-                            ui.allocate_ui_with_layout(vec2(col_w, 42.0), Layout::top_down(egui::Align::Center), |ui| {
-                                ui.label(RichText::new("PEAK").size(9.5).color(palette.text_muted).strong());
-                                let peak_str = if player.visualizer.peak_dbfs <= -55.0 {
-                                    "-∞ dBFS".to_string()
-                                } else {
-                                    format!("{:.1} dBFS", player.visualizer.peak_dbfs)
-                                };
-                                let peak_col = if player.visualizer.peak_dbfs > -1.0 {
-                                    Color32::from_rgb(255, 178, 92)
-                                } else {
-                                    palette.text_primary
-                                };
-                                ui.label(RichText::new(peak_str).size(12.5).color(peak_col).strong());
-                            });
-
-                            // Metric 2: LUFS
-                            ui.allocate_ui_with_layout(vec2(col_w, 42.0), Layout::top_down(egui::Align::Center), |ui| {
-                                ui.label(RichText::new("LUFS").size(9.5).color(palette.text_muted).strong());
-                                let lufs_str = if player.visualizer.lufs <= -55.0 {
-                                    "-∞".to_string()
-                                } else {
-                                    format!("{:.1}", player.visualizer.lufs)
-                                };
-                                ui.label(RichText::new(lufs_str).size(12.5).color(palette.text_primary).strong());
-                            });
-
-                            // Metric 3: Dynamic Range
-                            ui.allocate_ui_with_layout(vec2(col_w, 42.0), Layout::top_down(egui::Align::Center), |ui| {
-                                ui.label(RichText::new("DYN RANGE").size(9.5).color(palette.text_muted).strong());
-                                let dr_str = if player.visualizer.dynamic_range < 1.0 {
-                                    "--".to_string()
-                                } else {
-                                    format!("DR {:.0}", player.visualizer.dynamic_range)
-                                };
-                                ui.label(RichText::new(dr_str).size(12.5).color(palette.accent).strong());
-                            });
-                        });
-                    });
-
-                    ui.add_space(8.0);
-
-                    // 4. Live L/R Stereo Volume Level Meters with palette.accent
-                    let meter_card = egui::Frame::none()
-                        .fill(palette.bg_center)
-                        .rounding(Rounding::same(8.0))
-                        .stroke(Stroke::NONE)
-                        .inner_margin(egui::Margin::same(8.0));
-
-                    meter_card.show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("STEREO METERS").size(10.0).color(palette.text_muted).strong());
-                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                    ui.label(RichText::new("0 dB").size(9.0).color(palette.text_muted));
-                                });
-                            });
-
-                            ui.add_space(4.0);
-                            render_channel_meter(ui, "L", player.visualizer.left_level, player.visualizer.left_peak, &palette);
-                            ui.add_space(3.0);
-                            render_channel_meter(ui, "R", player.visualizer.right_level, player.visualizer.right_peak, &palette);
-                        });
-                    });
-
-                    ui.add_space(8.0);
-
-                    // 5. 20Hz - 20kHz Responsive Audio Spectrum Visualizer
-                    let spec_card = egui::Frame::none()
-                        .fill(palette.bg_center)
-                        .rounding(Rounding::same(8.0))
-                        .stroke(Stroke::NONE)
-                        .inner_margin(egui::Margin::same(8.0));
-
-                    spec_card.show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("SPECTRUM").size(10.0).color(palette.text_muted).strong());
-                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if segmented_tab_button(ui, "Bars", player.visualizer.style == VisualizerStyle::Bars, &palette).clicked() {
-                                        player.visualizer.style = VisualizerStyle::Bars;
-                                    }
-                                    if segmented_tab_button(ui, "Mirror", player.visualizer.style == VisualizerStyle::Mirror, &palette).clicked() {
-                                        player.visualizer.style = VisualizerStyle::Mirror;
-                                    }
-                                    if segmented_tab_button(ui, "Scope", player.visualizer.style == VisualizerStyle::Scope, &palette).clicked() {
-                                        player.visualizer.style = VisualizerStyle::Scope;
-                                    }
-                                });
-                            });
-
-                            ui.add_space(4.0);
-
-                            // Responsive Spectrum Visualizer Canvas using palette.accent
-                            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 76.0), egui::Sense::hover());
-                            render_spectrum(
-                                ui.painter(),
-                                rect,
-                                &player.visualizer.band_values,
-                                &player.visualizer.peak_values,
-                                &player.visualizer.wave_buffer,
-                                player.visualizer.style,
-                                palette.accent,
-                                theme,
-                            );
-
-                            ui.add_space(4.0);
-
-                            // Frequency Axis Markers (20Hz - 20kHz) proportionally spaced across spectrum width
-                            let (axis_rect, _) = ui.allocate_exact_size(vec2(rect.width(), 16.0), egui::Sense::hover());
-                            let painter = ui.painter();
-
-                            let freq_markers: [(&str, f32); 7] = [
-                                ("20Hz", 0.00),
-                                ("100Hz", 0.17),
-                                ("500Hz", 0.36),
-                                ("1kHz", 0.52),
-                                ("5kHz", 0.70),
-                                ("10kHz", 0.86),
-                                ("20kHz", 1.00),
-                            ];
-
-                            for &(lbl, fraction) in &freq_markers {
-                                let x = axis_rect.min.x + fraction * axis_rect.width();
-
-                                // Subtle seam tick mark connecting spectrum to frequency label
-                                painter.line_segment(
-                                    [pos2(x, axis_rect.min.y), pos2(x, axis_rect.min.y + 3.0)],
-                                    Stroke::new(1.0_f32, palette.seam),
-                                );
-
-                                let align = if fraction <= 0.01 {
-                                    egui::Align2::LEFT_TOP
-                                } else if fraction >= 0.99 {
-                                    egui::Align2::RIGHT_TOP
-                                } else {
-                                    egui::Align2::CENTER_TOP
-                                };
-
-                                painter.text(
-                                    pos2(x, axis_rect.min.y + 4.0),
-                                    align,
-                                    lbl,
-                                    egui::FontId::proportional(9.0),
-                                    palette.text_muted,
-                                );
-                            }
-                        });
-                    });
-                });
-                col_rects[2] = Some(resp.response.rect);
-            });
-        });
-
-        // Subtle 1px vertical dark seam dividers between the 3 panels
-        if let (Some(r0), Some(r1), Some(r2)) = (col_rects[0], col_rects[1], col_rects[2]) {
-            let y_min = r0.min.y.min(r1.min.y).min(r2.min.y);
-            let y_max = r0.max.y.max(r1.max.y).max(r2.max.y);
-
-            let seam1_x = (r0.max.x + r1.min.x) * 0.5;
-            let seam1_rect = Rect::from_min_max(pos2(seam1_x - 0.5, y_min), pos2(seam1_x + 0.5, y_max));
-            ui.painter().rect_filled(seam1_rect, Rounding::ZERO, palette.seam);
-
-            let seam2_x = (r1.max.x + r2.min.x) * 0.5;
-            let seam2_rect = Rect::from_min_max(pos2(seam2_x - 0.5, y_min), pos2(seam2_x + 0.5, y_max));
-            ui.painter().rect_filled(seam2_rect, Rounding::ZERO, palette.seam);
+                let seam2_x = (r1.max.x + r2.min.x) * 0.5;
+                let seam2_rect = Rect::from_min_max(pos2(seam2_x - 0.5, y_min), pos2(seam2_x + 0.5, y_max));
+                ui.painter().rect_filled(seam2_rect, Rounding::ZERO, palette.seam);
+            }
         }
     } else {
         ui.centered_and_justified(|ui| {
@@ -898,6 +121,937 @@ pub fn render_now_playing(
     }
 }
 
+/// Column 1: Artwork, Track Info, Technical Badges
+fn render_track_info_card(
+    ui: &mut Ui,
+    track: &crate::library::Track,
+    palette: &BentoPalette,
+    art_manager: &mut AlbumArtManager,
+) -> Option<Rect> {
+    ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
+
+    let panel_frame = egui::Frame::none()
+        .fill(palette.bg_card)
+        .rounding(Rounding::same(12.0))
+        .stroke(Stroke::NONE)
+        .inner_margin(egui::Margin::same(16.0));
+
+    let resp = panel_frame.show(ui, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+
+        ui.vertical_centered(|ui| {
+            let card_width = (ui.available_width() - 10.0).clamp(180.0, 260.0);
+            let art_size = vec2(card_width, card_width);
+
+            // Ambient glow behind album art card matching active accent
+            let (rect, _) = ui.allocate_exact_size(art_size, egui::Sense::hover());
+
+            // Multi-layered specular accent halo (borderless)
+            ui.painter().rect_filled(
+                rect.expand(10.0),
+                Rounding::same(18.0),
+                Color32::from_rgba_premultiplied(
+                    palette.accent.r(),
+                    palette.accent.g(),
+                    palette.accent.b(),
+                    18,
+                ),
+            );
+            ui.painter().rect_filled(
+                rect.expand(4.0),
+                Rounding::same(16.0),
+                Color32::from_rgba_premultiplied(
+                    palette.accent.r(),
+                    palette.accent.g(),
+                    palette.accent.b(),
+                    32,
+                ),
+            );
+
+            // Album Art Image: rounded egui::Image with Stroke::NONE
+            let mut painted_cover = false;
+            if let Some(texture) = art_manager.get_or_load(ui.ctx(), &track.path) {
+                let img = egui::Image::new(egui::load::SizedTexture::new(texture.id(), rect.size()))
+                    .rounding(Rounding::same(14.0));
+                img.paint_at(ui, rect);
+                painted_cover = true;
+            }
+
+            if !painted_cover {
+                ui.painter().rect_filled(rect, Rounding::same(14.0), palette.bg_center);
+                let icon_box = Rect::from_center_size(rect.center(), vec2(art_size.x * 0.36, art_size.x * 0.36));
+                paint_icon(ui.painter(), Icon::Disc, icon_box, palette.accent);
+            }
+
+            ui.add_space(14.0);
+
+            // Track Title
+            ui.label(
+                RichText::new(track.display_title())
+                    .size(19.0)
+                    .color(palette.text_primary)
+                    .strong(),
+            );
+            ui.add_space(2.0);
+
+            // Artist
+            ui.label(
+                RichText::new(track.display_artist())
+                    .size(14.5)
+                    .color(palette.text_secondary),
+            );
+            ui.add_space(2.0);
+
+            // Album and Year
+            let album_year = if track.year > 0 {
+                format!("{} · {}", track.display_album(), track.year)
+            } else {
+                track.display_album().to_string()
+            };
+            ui.label(
+                RichText::new(album_year)
+                    .size(12.5)
+                    .color(palette.text_muted),
+            );
+
+            ui.add_space(10.0);
+
+            // Format Badges inside horizontal_wrapped so they wrap onto a second row
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+
+                // High-contrast format badge (FLAC, MP3, etc.)
+                format_badge(ui, &track.format, track.is_lossless(), palette);
+
+                // Bit depth & Sample rate badge (e.g. 24-BIT 48 KHZ)
+                let bit_depth = if track.is_hires() { "24-BIT" } else { "16-BIT" };
+                let sr_khz = if track.sample_rate > 0 {
+                    format!("{} KHZ", track.sample_rate / 1000)
+                } else {
+                    "44.1 KHZ".to_string()
+                };
+                pill_badge(
+                    ui,
+                    &format!("{} {}", bit_depth, sr_khz),
+                    palette.bg_center,
+                    palette.text_secondary,
+                );
+
+                // Play count badge
+                pill_badge(
+                    ui,
+                    &format!("{} plays", track.play_count),
+                    palette.bg_center,
+                    palette.text_secondary,
+                );
+
+                // Lossless or Hi-Res badge
+                if track.is_hires() {
+                    pill_badge(
+                        ui,
+                        "HI-RES LOSSLESS",
+                        Color32::from_rgba_unmultiplied(255, 178, 92, 45),
+                        Color32::from_rgb(255, 178, 92),
+                    );
+                } else if track.is_lossless() {
+                    pill_badge(
+                        ui,
+                        "LOSSLESS",
+                        palette.accent_soft,
+                        palette.accent,
+                    );
+                }
+            });
+        });
+    });
+
+    Some(resp.response.rect)
+}
+
+/// Column 2: Synced Lyrics with Auto-Scrolling & Click-Seek
+fn render_synced_lyrics_card(
+    ui: &mut Ui,
+    player: &mut PlayerController,
+    track: &crate::library::Track,
+    pos_ms: u64,
+    palette: &BentoPalette,
+) -> Option<Rect> {
+    let search_open_id = egui::Id::new("now_playing_lyrics_search_open");
+    let search_query_id = egui::Id::new("now_playing_lyrics_search_query");
+    let track_id_key = egui::Id::new("now_playing_lyrics_current_track_id");
+
+    let mut is_search_open: bool = ui.data(|d| d.get_temp(search_open_id)).unwrap_or(false);
+    let mut search_query: String = ui.data(|d| d.get_temp(search_query_id)).unwrap_or_default();
+    let last_track_id: Option<i64> = ui.data(|d| d.get_temp(track_id_key));
+
+    if last_track_id != Some(track.id) {
+        search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+        ui.data_mut(|d| d.insert_temp(track_id_key, track.id));
+    }
+
+    if search_query.trim().is_empty() {
+        search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+    }
+
+    let panel_frame = egui::Frame::none()
+        .fill(palette.bg_card)
+        .rounding(Rounding::same(12.0))
+        .stroke(Stroke::NONE)
+        .inner_margin(egui::Margin::same(16.0));
+
+    let resp = panel_frame.show(ui, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+
+        let lyrics_width = ui.available_width();
+
+        // Responsive Synced Lyrics Header: When < 310px, place badge + search button on second row
+        if lyrics_width < 310.0 {
+            ui.horizontal(|ui| {
+                let (icon_box, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                paint_icon(ui.painter(), Icon::Mic, icon_box, palette.accent);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("SYNCED LYRICS")
+                        .size(13.0)
+                        .color(palette.text_primary)
+                        .strong(),
+                );
+            });
+
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, palette);
+                pill_badge(ui, badge_text, badge_fill, badge_color);
+
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn_resp = search_online_header_button(ui, is_search_open, palette);
+                    if btn_resp.clicked() {
+                        is_search_open = !is_search_open;
+                        if is_search_open && search_query.trim().is_empty() {
+                            search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+                        }
+                    }
+                });
+            });
+        } else {
+            ui.horizontal(|ui| {
+                let (icon_box, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                paint_icon(ui.painter(), Icon::Mic, icon_box, palette.accent);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("SYNCED LYRICS")
+                        .size(13.0)
+                        .color(palette.text_primary)
+                        .strong(),
+                );
+
+                let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, palette);
+                ui.add_space(6.0);
+                pill_badge(ui, badge_text, badge_fill, badge_color);
+
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn_resp = search_online_header_button(ui, is_search_open, palette);
+                    if btn_resp.clicked() {
+                        is_search_open = !is_search_open;
+                        if is_search_open && search_query.trim().is_empty() {
+                            search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+                        }
+                    }
+                });
+            });
+        }
+
+        seam_divider(ui, palette);
+
+        if is_search_open {
+            let mut picked_record = None;
+            let mut trigger_search_query = None;
+
+            // Inline LRCLIB Search Drawer inside Synced Lyrics card with Stroke::NONE
+            let drawer_card = egui::Frame::none()
+                .fill(palette.bg_center)
+                .rounding(Rounding::same(10.0))
+                .stroke(Stroke::NONE)
+                .inner_margin(egui::Margin::same(12.0));
+
+            drawer_card.show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(0.0, 8.0);
+
+                    // Header: "Search LRCLIB Online" and vector Close button
+                    ui.horizontal(|ui| {
+                        let (s_icon_box, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
+                        paint_icon(ui.painter(), Icon::Search, s_icon_box, palette.accent);
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("Search LRCLIB Online")
+                                .size(13.0)
+                                .color(palette.text_primary)
+                                .strong(),
+                        );
+
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close_resp = vector_icon_button(ui, Icon::Close, 14.0, palette.text_muted);
+                            if close_resp.hovered() {
+                                close_resp.clone().on_hover_text("Close Search Drawer");
+                            }
+                            if close_resp.clicked() {
+                                is_search_open = false;
+                            }
+                        });
+                    });
+
+                    // Search input row: Text input + "Search" button
+                    ui.horizontal(|ui| {
+                        let btn_w = 72.0;
+                        let input_w = (ui.available_width() - btn_w - 8.0).max(100.0);
+
+                        let mut enter_pressed = false;
+                        let input_frame = egui::Frame::none()
+                            .fill(palette.bg_sidebar)
+                            .rounding(Rounding::same(6.0))
+                            .stroke(Stroke::NONE)
+                            .inner_margin(egui::Margin::symmetric(8.0, 4.0));
+
+                        input_frame.show(ui, |ui| {
+                            let edit_resp = ui.add(
+                                egui::TextEdit::singleline(&mut search_query)
+                                    .hint_text("Title Artist...")
+                                    .desired_width(input_w)
+                                    .text_color(palette.text_primary)
+                                    .frame(false),
+                            );
+                            if edit_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                enter_pressed = true;
+                            }
+                        });
+
+                        let search_btn = egui::Button::new(
+                            RichText::new("Search")
+                                .color(Color32::from_rgb(11, 9, 20))
+                                .size(12.5)
+                                .strong(),
+                        )
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .rounding(Rounding::same(6.0))
+                        .min_size(vec2(btn_w, 28.0));
+
+                        let search_clicked = ui.add(search_btn).clicked();
+
+                        if (search_clicked || enter_pressed) && !search_query.trim().is_empty() {
+                            trigger_search_query = Some(search_query.trim().to_string());
+                        }
+                    });
+
+                    seam_divider(ui, palette);
+
+                    // Drawer Body: Searching, Error, Results, or Empty prompt
+                    if player.is_searching_lyrics {
+                        ui.add_space(24.0);
+                        ui.vertical_centered(|ui| {
+                            let (spk_box, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
+                            paint_icon(ui.painter(), Icon::Sparkle, spk_box, palette.accent);
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new("Searching LRCLIB online...")
+                                    .color(palette.text_secondary)
+                                    .size(13.0),
+                            );
+                        });
+                        ui.add_space(24.0);
+                    } else if let Some(ref err) = player.manual_search_error {
+                        ui.add_space(16.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                RichText::new(format!("Search failed: {}", err))
+                                    .color(Color32::from_rgb(248, 113, 113))
+                                    .size(12.5),
+                            );
+                        });
+                        ui.add_space(16.0);
+                    } else if let Some(ref results) = player.manual_search_results {
+                        if results.is_empty() {
+                            ui.add_space(24.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    RichText::new("No matching lyrics found on LRCLIB.")
+                                        .color(palette.text_muted)
+                                        .size(13.0),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new("Try adjusting the title or artist in your search query.")
+                                        .color(palette.text_muted)
+                                        .size(11.5),
+                                );
+                            });
+                            ui.add_space(24.0);
+                        } else {
+                            ScrollArea::vertical()
+                                .id_salt("manual_lyrics_search_results_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+
+                                    for record in results {
+                                        let dur_str = record
+                                            .duration
+                                            .map(format_time_secs)
+                                            .unwrap_or_else(|| "--:--".to_string());
+
+                                        let album_display = record
+                                            .album_name
+                                            .as_deref()
+                                            .unwrap_or("Unknown Album");
+
+                                        let title_display = if !record.track_name.is_empty() {
+                                            &record.track_name
+                                        } else if let Some(ref n) = record.name {
+                                            n
+                                        } else {
+                                            "Unknown Title"
+                                        };
+
+                                        let item_frame = egui::Frame::none()
+                                            .fill(palette.bg_card)
+                                            .stroke(Stroke::NONE)
+                                            .rounding(Rounding::same(8.0))
+                                            .inner_margin(egui::Margin::symmetric(10.0, 8.0));
+
+                                        let item_resp = item_frame.show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.vertical(|ui| {
+                                                    ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+                                                    ui.label(
+                                                        RichText::new(title_display)
+                                                            .size(13.0)
+                                                            .color(palette.text_primary)
+                                                            .strong(),
+                                                    );
+
+                                                    let sub_str = format!(
+                                                        "{} · {} · {}",
+                                                        record.artist_name, album_display, dur_str
+                                                    );
+                                                    ui.label(
+                                                        RichText::new(sub_str)
+                                                            .size(11.0)
+                                                            .color(palette.text_muted),
+                                                    );
+                                                });
+
+                                                ui.with_layout(
+                                                    Layout::right_to_left(egui::Align::Center),
+                                                    |ui| {
+                                                        if record
+                                                            .synced_lyrics
+                                                            .as_ref()
+                                                            .is_some_and(|s| !s.trim().is_empty())
+                                                        {
+                                                            pill_badge(
+                                                                ui,
+                                                                "SYNCED",
+                                                                palette.accent_soft,
+                                                                palette.accent,
+                                                            );
+                                                        } else if record.instrumental {
+                                                            pill_badge(
+                                                                ui,
+                                                                "INSTRUMENTAL",
+                                                                Color32::from_rgba_unmultiplied(255, 178, 92, 45),
+                                                                Color32::from_rgb(255, 178, 92),
+                                                            );
+                                                        } else {
+                                                            pill_badge(
+                                                                ui,
+                                                                "PLAIN",
+                                                                palette.bg_sidebar,
+                                                                palette.text_muted,
+                                                            );
+                                                        }
+                                                    },
+                                                );
+                                            });
+                                        });
+
+                                        let interact = item_resp.response.interact(egui::Sense::click());
+                                        if interact.hovered() {
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                            ui.painter().rect_filled(
+                                                item_resp.response.rect,
+                                                Rounding::same(8.0),
+                                                palette.bg_card_hover,
+                                            );
+                                        }
+                                        if interact.clicked() {
+                                            picked_record = Some(record.clone());
+                                        }
+                                    }
+                                });
+                        }
+                    } else {
+                        // Initial prompt inside drawer
+                        ui.add_space(16.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                RichText::new("Enter title or artist to search LRCLIB online.")
+                                    .color(palette.text_muted)
+                                    .size(12.5),
+                            );
+                            ui.add_space(8.0);
+                            let quick_search_btn = egui::Button::new(
+                                RichText::new(format!("Search \"{}\"", search_query.trim()))
+                                    .color(palette.text_primary)
+                                    .size(12.0),
+                            )
+                            .fill(palette.bg_sidebar)
+                            .stroke(Stroke::NONE)
+                            .rounding(Rounding::same(6.0))
+                            .min_size(vec2(140.0, 28.0));
+
+                            if ui.add(quick_search_btn).clicked() && !search_query.trim().is_empty() {
+                                trigger_search_query = Some(search_query.trim().to_string());
+                            }
+                        });
+                        ui.add_space(16.0);
+                    }
+                });
+            });
+
+            if let Some(q) = trigger_search_query {
+                player.search_lyrics_manual(
+                    &q,
+                    Some(&track.title),
+                    Some(&track.artist),
+                );
+            }
+            if let Some(rec) = picked_record {
+                player.apply_custom_lyrics(&rec);
+                is_search_open = false;
+            }
+        } else if player.is_loading_lyrics {
+            ui.add_space(48.0);
+            ui.vertical_centered(|ui| {
+                let (icon_rect, _) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::hover());
+                paint_icon(ui.painter(), Icon::Sparkle, icon_rect, palette.accent);
+                ui.add_space(10.0);
+                ui.label(
+                    RichText::new("Searching LRCLIB...")
+                        .color(palette.text_secondary)
+                        .size(14.0),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Looking for synced lyrics online")
+                        .color(palette.text_muted)
+                        .size(12.0),
+                );
+            });
+        } else if let Some(ref lyrics) = player.lyrics {
+            if lyrics.lines.is_empty() {
+                render_lyrics_empty_state(ui, palette, track, &mut is_search_open, &mut search_query);
+            } else if lyrics.source.contains("Instrumental")
+                || (lyrics.lines.len() == 1 && lyrics.lines[0].text.eq_ignore_ascii_case("instrumental"))
+            {
+                ui.add_space(40.0);
+                ui.vertical_centered(|ui| {
+                    let (icon_rect, _) = ui.allocate_exact_size(vec2(32.0, 32.0), egui::Sense::hover());
+                    paint_icon(ui.painter(), Icon::Music, icon_rect, Color32::from_rgb(255, 178, 92));
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new("Instrumental Track")
+                            .size(15.0)
+                            .color(palette.text_primary)
+                            .strong(),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("This song does not contain vocal lyrics.")
+                            .size(12.5)
+                            .color(palette.text_muted),
+                    );
+                    ui.add_space(16.0);
+                    let search_btn = egui::Button::new(
+                        RichText::new("Search LRCLIB Anyway")
+                            .color(palette.text_primary)
+                            .size(12.5),
+                    )
+                    .fill(palette.bg_center)
+                    .stroke(Stroke::NONE)
+                    .rounding(Rounding::same(8.0))
+                    .min_size(vec2(150.0, 30.0));
+
+                    if ui.add(search_btn).clicked() {
+                        is_search_open = true;
+                        if search_query.trim().is_empty() {
+                            search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+                        }
+                    }
+                });
+            } else if lyrics.is_synced {
+                if let Some(target) = render_synced_lyrics_list(
+                    ui,
+                    "synced_lyrics_scroll",
+                    &lyrics.lines,
+                    pos_ms,
+                    palette,
+                ) {
+                    seek_to(player, None, target);
+                }
+            } else {
+                // Plain (unsynced) lyrics
+                ScrollArea::vertical()
+                    .id_salt("synced_lyrics_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+
+                        for line in &lyrics.lines {
+                            if line.text.trim().is_empty() {
+                                ui.add_space(10.0);
+                            } else {
+                                ui.label(
+                                    RichText::new(&line.text)
+                                        .color(palette.text_primary)
+                                        .size(14.5)
+                                        .line_height(Some(22.0)),
+                                );
+                            }
+                        }
+                    });
+            }
+        } else {
+            // Empty state: lyrics is None
+            render_lyrics_empty_state(ui, palette, track, &mut is_search_open, &mut search_query);
+        }
+    });
+
+    // Persist search drawer state in ui temp data
+    ui.data_mut(|d| {
+        d.insert_temp(search_open_id, is_search_open);
+        d.insert_temp(search_query_id, search_query);
+    });
+
+    Some(resp.response.rect)
+}
+
+/// Column 3: Audio Analyzer Card (Stats, Metrics, Meters, Spectrum Visualizer)
+fn render_audio_analyzer_card(
+    ui: &mut Ui,
+    player: &mut PlayerController,
+    track: &crate::library::Track,
+    theme: &Theme,
+    palette: &BentoPalette,
+) -> Option<Rect> {
+    ui.spacing_mut().item_spacing = vec2(0.0, 10.0);
+
+    let panel_frame = egui::Frame::none()
+        .fill(palette.bg_card)
+        .rounding(Rounding::same(12.0))
+        .stroke(Stroke::NONE)
+        .inner_margin(egui::Margin::same(14.0));
+
+    let resp = panel_frame.show(ui, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+
+        // 1. Format Header: When width < 300px, place badge cleanly below AUDIO ANALYZER heading
+        let card_w = ui.available_width();
+        if card_w < 300.0 {
+            ui.horizontal(|ui| {
+                render_icon(ui, Icon::BarChart, 14.0, palette.accent);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("AUDIO ANALYZER")
+                        .size(12.5)
+                        .color(palette.text_secondary)
+                        .strong(),
+                );
+            });
+            ui.add_space(4.0);
+            render_audio_analyzer_badge(ui, track, palette);
+        } else {
+            ui.horizontal(|ui| {
+                render_icon(ui, Icon::BarChart, 14.0, palette.accent);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("AUDIO ANALYZER")
+                        .size(12.5)
+                        .color(palette.text_secondary)
+                        .strong(),
+                );
+
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    render_audio_analyzer_badge(ui, track, palette);
+                });
+            });
+        }
+
+        ui.add_space(8.0);
+
+        // 2. Technical Stats Sub-Card with Stroke::NONE
+        let specs_card = egui::Frame::none()
+            .fill(palette.bg_center)
+            .rounding(Rounding::same(8.0))
+            .stroke(Stroke::NONE)
+            .inner_margin(egui::Margin::same(8.0));
+
+        specs_card.show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+
+                stat_row(ui, "Format / Codec", &track.format.to_uppercase(), palette);
+
+                let sr_val = if track.sample_rate > 0 {
+                    format!("{} Hz", track.sample_rate)
+                } else {
+                    "44,100 Hz".to_string()
+                };
+                stat_row(ui, "Sample Rate", &sr_val, palette);
+
+                let bit_depth = if track.is_hires() { "24-bit" } else { "16-bit" };
+                let br_val = if track.bitrate_kbps > 0 {
+                    format!("{} · {} kbps", bit_depth, track.bitrate_kbps)
+                } else {
+                    format!("{} · Lossless", bit_depth)
+                };
+                stat_row(ui, "Bit Depth / Rate", &br_val, palette);
+
+                let ch_val = if track.channels == 1 {
+                    "Mono (1.0 ch)"
+                } else {
+                    "Stereo (2.0 ch)"
+                };
+                stat_row(ui, "Channels", ch_val, palette);
+            });
+        });
+
+        ui.add_space(8.0);
+
+        // 3. Real-Time Audio Metrics Sub-Card (Peak dBFS, LUFS, Dynamic Range)
+        let metrics_card = egui::Frame::none()
+            .fill(palette.bg_center)
+            .rounding(Rounding::same(8.0))
+            .stroke(Stroke::NONE)
+            .inner_margin(egui::Margin::same(8.0));
+
+        metrics_card.show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let col_w = (ui.available_width() - 8.0) / 3.0;
+
+                // Metric 1: Peak Level (dBFS)
+                ui.allocate_ui_with_layout(vec2(col_w, 42.0), Layout::top_down(egui::Align::Center), |ui| {
+                    ui.label(RichText::new("PEAK").size(9.5).color(palette.text_muted).strong());
+                    let peak_str = if player.visualizer.peak_dbfs <= -55.0 {
+                        "-∞ dBFS".to_string()
+                    } else {
+                        format!("{:.1} dBFS", player.visualizer.peak_dbfs)
+                    };
+                    let peak_col = if player.visualizer.peak_dbfs > -1.0 {
+                        Color32::from_rgb(255, 178, 92)
+                    } else {
+                        palette.text_primary
+                    };
+                    ui.label(RichText::new(peak_str).size(12.5).color(peak_col).strong());
+                });
+
+                // Metric 2: LUFS
+                ui.allocate_ui_with_layout(vec2(col_w, 42.0), Layout::top_down(egui::Align::Center), |ui| {
+                    ui.label(RichText::new("LUFS").size(9.5).color(palette.text_muted).strong());
+                    let lufs_str = if player.visualizer.lufs <= -55.0 {
+                        "-∞".to_string()
+                    } else {
+                        format!("{:.1}", player.visualizer.lufs)
+                    };
+                    ui.label(RichText::new(lufs_str).size(12.5).color(palette.text_primary).strong());
+                });
+
+                // Metric 3: Dynamic Range
+                ui.allocate_ui_with_layout(vec2(col_w, 42.0), Layout::top_down(egui::Align::Center), |ui| {
+                    ui.label(RichText::new("DYN RANGE").size(9.5).color(palette.text_muted).strong());
+                    let dr_str = if player.visualizer.dynamic_range < 1.0 {
+                        "--".to_string()
+                    } else {
+                        format!("DR {:.0}", player.visualizer.dynamic_range)
+                    };
+                    ui.label(RichText::new(dr_str).size(12.5).color(palette.accent).strong());
+                });
+            });
+        });
+
+        ui.add_space(8.0);
+
+        // 4. Live L/R Stereo Volume Level Meters with palette.accent
+        let meter_card = egui::Frame::none()
+            .fill(palette.bg_center)
+            .rounding(Rounding::same(8.0))
+            .stroke(Stroke::NONE)
+            .inner_margin(egui::Margin::same(8.0));
+
+        meter_card.show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("STEREO METERS").size(10.0).color(palette.text_muted).strong());
+                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new("0 dB").size(9.0).color(palette.text_muted));
+                    });
+                });
+
+                ui.add_space(4.0);
+                render_channel_meter(ui, "L", player.visualizer.left_level, player.visualizer.left_peak, palette);
+                ui.add_space(3.0);
+                render_channel_meter(ui, "R", player.visualizer.right_level, player.visualizer.right_peak, palette);
+            });
+        });
+
+        ui.add_space(8.0);
+
+        // 5. 20Hz - 20kHz Responsive Audio Spectrum Visualizer
+        let spec_card = egui::Frame::none()
+            .fill(palette.bg_center)
+            .rounding(Rounding::same(8.0))
+            .stroke(Stroke::NONE)
+            .inner_margin(egui::Margin::same(8.0));
+
+        spec_card.show(ui, |ui| {
+            ui.vertical(|ui| {
+                let spec_w = ui.available_width();
+                // Responsive switcher: When < 290px, stack switcher cleanly below SPECTRUM heading
+                if spec_w < 290.0 {
+                    ui.label(RichText::new("SPECTRUM").size(10.0).color(palette.text_muted).strong());
+                    ui.add_space(3.0);
+                    ui.horizontal(|ui| {
+                        if segmented_tab_button(ui, "Bars", player.visualizer.style == VisualizerStyle::Bars, palette).clicked() {
+                            player.visualizer.style = VisualizerStyle::Bars;
+                        }
+                        if segmented_tab_button(ui, "Mirror", player.visualizer.style == VisualizerStyle::Mirror, palette).clicked() {
+                            player.visualizer.style = VisualizerStyle::Mirror;
+                        }
+                        if segmented_tab_button(ui, "Scope", player.visualizer.style == VisualizerStyle::Scope, palette).clicked() {
+                            player.visualizer.style = VisualizerStyle::Scope;
+                        }
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("SPECTRUM").size(10.0).color(palette.text_muted).strong());
+                        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                            if segmented_tab_button(ui, "Bars", player.visualizer.style == VisualizerStyle::Bars, palette).clicked() {
+                                player.visualizer.style = VisualizerStyle::Bars;
+                            }
+                            if segmented_tab_button(ui, "Mirror", player.visualizer.style == VisualizerStyle::Mirror, palette).clicked() {
+                                player.visualizer.style = VisualizerStyle::Mirror;
+                            }
+                            if segmented_tab_button(ui, "Scope", player.visualizer.style == VisualizerStyle::Scope, palette).clicked() {
+                                player.visualizer.style = VisualizerStyle::Scope;
+                            }
+                        });
+                    });
+                }
+
+                ui.add_space(4.0);
+
+                // Responsive Spectrum Visualizer Canvas using palette.accent
+                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 76.0), egui::Sense::hover());
+                render_spectrum(
+                    ui.painter(),
+                    rect,
+                    &player.visualizer.band_values,
+                    &player.visualizer.peak_values,
+                    &player.visualizer.wave_buffer,
+                    player.visualizer.style,
+                    palette.accent,
+                    theme,
+                );
+
+                ui.add_space(4.0);
+
+                // Frequency Axis Markers (20Hz - 20kHz) dynamically thinned out based on width
+                let (axis_rect, _) = ui.allocate_exact_size(vec2(rect.width(), 16.0), egui::Sense::hover());
+                let painter = ui.painter();
+                let freq_markers = frequency_axis_markers(axis_rect.width());
+
+                for &(lbl, fraction) in freq_markers {
+                    let x = axis_rect.min.x + fraction * axis_rect.width();
+
+                    // Subtle seam tick mark connecting spectrum to frequency label
+                    painter.line_segment(
+                        [pos2(x, axis_rect.min.y), pos2(x, axis_rect.min.y + 3.0)],
+                        Stroke::new(1.0_f32, palette.seam),
+                    );
+
+                    let align = if fraction <= 0.01 {
+                        egui::Align2::LEFT_TOP
+                    } else if fraction >= 0.99 {
+                        egui::Align2::RIGHT_TOP
+                    } else {
+                        egui::Align2::CENTER_TOP
+                    };
+
+                    painter.text(
+                        pos2(x, axis_rect.min.y + 4.0),
+                        align,
+                        lbl,
+                        egui::FontId::proportional(9.0),
+                        palette.text_muted,
+                    );
+                }
+            });
+        });
+    });
+
+    Some(resp.response.rect)
+}
+
+/// Dynamically thins out spectrum frequency markers based on available width:
+/// Wide (>= 280px): all 7 markers (20Hz, 100Hz, 500Hz, 1kHz, 5kHz, 10kHz, 20kHz).
+/// Narrow (< 280px): spaced anchors (20Hz, 500Hz, 2kHz, 20kHz).
+pub fn frequency_axis_markers(width: f32) -> &'static [(&'static str, f32)] {
+    if width >= 280.0 {
+        &[
+            ("20Hz", 0.00),
+            ("100Hz", 0.17),
+            ("500Hz", 0.36),
+            ("1kHz", 0.52),
+            ("5kHz", 0.70),
+            ("10kHz", 0.86),
+            ("20kHz", 1.00),
+        ]
+    } else {
+        &[
+            ("20Hz", 0.00),
+            ("500Hz", 0.36),
+            ("2kHz", 0.60),
+            ("20kHz", 1.00),
+        ]
+    }
+}
+
+fn render_audio_analyzer_badge(ui: &mut Ui, track: &crate::library::Track, palette: &BentoPalette) {
+    if track.is_hires() {
+        pill_badge(
+            ui,
+            "HI-RES LOSSLESS",
+            Color32::from_rgba_unmultiplied(255, 178, 92, 45),
+            Color32::from_rgb(255, 178, 92),
+        );
+    } else if track.is_lossless() {
+        pill_badge(
+            ui,
+            "LOSSLESS",
+            palette.accent_soft,
+            palette.accent,
+        );
+    } else {
+        pill_badge(
+            ui,
+            &track.format.to_uppercase(),
+            palette.bg_center,
+            palette.text_secondary,
+        );
+    }
+}
+
 /// Subtle 1.0px dark seam divider line
 fn seam_divider(ui: &mut Ui, palette: &BentoPalette) {
     ui.add_space(3.0);
@@ -908,19 +1062,17 @@ fn seam_divider(ui: &mut Ui, palette: &BentoPalette) {
 
 /// Borderless pill badge helper matching matte-slate design
 fn pill_badge(ui: &mut Ui, text: &str, fill: Color32, text_color: Color32) {
-    ui.scope(|ui| {
-        let padding = vec2(7.5, 2.5);
-        let galley = ui.painter().layout_no_wrap(
-            text.to_string(),
-            egui::FontId::proportional(11.0),
-            text_color,
-        );
-        let desired_size = galley.size() + padding * 2.0;
-        let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+    let padding = vec2(7.5, 2.5);
+    let galley = ui.painter().layout_no_wrap(
+        text.to_string(),
+        egui::FontId::proportional(11.0),
+        text_color,
+    );
+    let desired_size = galley.size() + padding * 2.0;
+    let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
-        ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
-        ui.painter().galley(rect.min + padding, galley, text_color);
-    });
+    ui.painter().rect_filled(rect, Rounding::same(6.0), fill);
+    ui.painter().galley(rect.min + padding, galley, text_color);
 }
 
 /// Borderless format badge (e.g. FLAC, MP3, AAC)
@@ -938,19 +1090,17 @@ fn format_badge(ui: &mut Ui, format: &str, is_lossless: bool, palette: &BentoPal
         palette.text_muted
     };
 
-    ui.scope(|ui| {
-        let padding = vec2(6.0, 2.0);
-        let galley = ui.painter().layout_no_wrap(
-            fmt_str,
-            egui::FontId::proportional(10.5),
-            text_color,
-        );
-        let desired_size = galley.size() + padding * 2.0;
-        let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+    let padding = vec2(6.0, 2.0);
+    let galley = ui.painter().layout_no_wrap(
+        fmt_str,
+        egui::FontId::proportional(10.5),
+        text_color,
+    );
+    let desired_size = galley.size() + padding * 2.0;
+    let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
 
-        ui.painter().rect_filled(rect, Rounding::same(4.0), palette.bg_center);
-        ui.painter().galley(rect.min + padding, galley, text_color);
-    });
+    ui.painter().rect_filled(rect, Rounding::same(4.0), palette.bg_center);
+    ui.painter().galley(rect.min + padding, galley, text_color);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1417,340 +1567,448 @@ fn render_stream_now_playing(
         .unwrap_or(0.0);
     let pos_ms = (pos_secs * 1000.0) as u64;
 
-    let mut col_rects: [Option<Rect>; 3] = [None, None, None];
+    let total_width = ui.available_width();
 
-    ui.columns(3, |cols| {
-        // =================================================================
-        // COLUMN 1 (LEFT): Stream Provider Artwork, Track Info, Badges
-        // =================================================================
-        cols[0].vertical(|ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
+    if total_width < 860.0 {
+        ScrollArea::vertical()
+            .id_salt("stream_now_playing_responsive_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
 
-            let panel_frame = egui::Frame::none()
-                .fill(palette.bg_card)
-                .rounding(Rounding::same(12.0))
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::same(16.0));
+                let mut top_rects: [Option<Rect>; 2] = [None, None];
 
-            let resp = panel_frame.show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    let card_width = (ui.available_width() - 10.0).clamp(180.0, 260.0);
-                    let art_size = vec2(card_width, card_width);
+                ui.columns(2, |cols| {
+                    cols[0].set_clip_rect(cols[0].clip_rect().intersect(cols[0].max_rect()));
+                    top_rects[0] = render_stream_info_card(&mut cols[0], track, palette);
 
-                    let (rect, _) = ui.allocate_exact_size(art_size, egui::Sense::hover());
-
-                    let prov_color = match track.provider.to_lowercase().as_str() {
-                        "spotify" => Color32::from_rgb(30, 215, 96),
-                        "youtube" | "youtube music" => Color32::from_rgb(255, 60, 60),
-                        _ => palette.accent,
-                    };
-
-                    let prov_icon = match track.provider.to_lowercase().as_str() {
-                        "spotify" => Icon::Spotify,
-                        "youtube" | "youtube music" => Icon::YouTube,
-                        _ => Icon::Disc,
-                    };
-
-                    // Multi-layered specular halo with Stroke::NONE
-                    ui.painter().rect_filled(
-                        rect.expand(10.0),
-                        Rounding::same(18.0),
-                        Color32::from_rgba_premultiplied(
-                            prov_color.r(),
-                            prov_color.g(),
-                            prov_color.b(),
-                            18,
-                        ),
-                    );
-                    ui.painter().rect_filled(
-                        rect.expand(4.0),
-                        Rounding::same(16.0),
-                        Color32::from_rgba_premultiplied(
-                            prov_color.r(),
-                            prov_color.g(),
-                            prov_color.b(),
-                            32,
-                        ),
-                    );
-
-                    // Provider icon inside borderless card with Stroke::NONE
-                    ui.painter().rect_filled(rect, Rounding::same(14.0), palette.bg_center);
-                    let icon_box = Rect::from_center_size(rect.center(), vec2(art_size.x * 0.38, art_size.x * 0.38));
-                    paint_icon(ui.painter(), prov_icon, icon_box, prov_color);
-
-                    ui.add_space(14.0);
-
-                    // Track Title
-                    ui.label(
-                        RichText::new(track.display_title())
-                            .size(19.0)
-                            .color(palette.text_primary)
-                            .strong(),
-                    );
-                    ui.add_space(2.0);
-
-                    // Artist
-                    ui.label(
-                        RichText::new(track.display_artist())
-                            .size(14.5)
-                            .color(palette.text_secondary),
-                    );
-                    ui.add_space(2.0);
-
-                    // Album
-                    ui.label(
-                        RichText::new(track.display_album())
-                            .size(12.5)
-                            .color(palette.text_muted),
-                    );
-
-                    ui.add_space(10.0);
-
-                    // Stream Badges with Stroke::NONE
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-
-                        let badge_label = match track.provider.to_lowercase().as_str() {
-                            "spotify" => "SPOTIFY CONNECT",
-                            "youtube" | "youtube music" => "YOUTUBE MUSIC",
-                            _ => "STREAMING",
-                        };
-                        pill_badge(
-                            ui,
-                            badge_label,
-                            Color32::from_rgba_unmultiplied(prov_color.r(), prov_color.g(), prov_color.b(), 45),
-                            prov_color,
-                        );
-
-                        pill_badge(
-                            ui,
-                            "REMOTE STREAM",
-                            palette.accent_soft,
-                            palette.accent,
-                        );
-
-                        pill_badge(
-                            ui,
-                            &track.formatted_duration(),
-                            palette.bg_center,
-                            palette.text_secondary,
-                        );
-                    });
-                });
-            });
-            col_rects[0] = Some(resp.response.rect);
-        });
-
-        // =================================================================
-        // COLUMN 2 (CENTER): Synced Lyrics via LRCLIB for Streams
-        // =================================================================
-        cols[1].vertical(|ui| {
-            let search_open_id = egui::Id::new("now_playing_stream_lyrics_search_open");
-            let search_query_id = egui::Id::new("now_playing_stream_lyrics_search_query");
-            let track_id_key = egui::Id::new("now_playing_stream_lyrics_track_id");
-
-            let mut is_search_open: bool = ui.data(|d| d.get_temp(search_open_id)).unwrap_or(false);
-            let mut search_query: String = ui.data(|d| d.get_temp(search_query_id)).unwrap_or_default();
-            let last_track_id: Option<String> = ui.data(|d| d.get_temp(track_id_key));
-
-            if last_track_id.as_deref() != Some(&track.id) {
-                search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
-                ui.data_mut(|d| d.insert_temp(track_id_key, track.id.clone()));
-            }
-
-            if search_query.trim().is_empty() {
-                search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
-            }
-
-            let panel_frame = egui::Frame::none()
-                .fill(palette.bg_card)
-                .rounding(Rounding::same(12.0))
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::same(16.0));
-
-            let resp = panel_frame.show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let (icon_box, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
-                    paint_icon(ui.painter(), Icon::Mic, icon_box, palette.accent);
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("SYNCED LYRICS (LRCLIB)")
-                            .size(13.0)
-                            .color(palette.text_primary)
-                            .strong(),
-                    );
-
-                    let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, palette);
-                    ui.add_space(6.0);
-                    pill_badge(ui, badge_text, badge_fill, badge_color);
-
-                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        let btn_resp = search_online_header_button(ui, is_search_open, palette);
-                        if btn_resp.clicked() {
-                            is_search_open = !is_search_open;
-                        }
-                    });
+                    cols[1].set_clip_rect(cols[1].clip_rect().intersect(cols[1].max_rect()));
+                    top_rects[1] = render_stream_lyrics_card(&mut cols[1], player, track, pos_ms, palette, stream_controller);
                 });
 
-                seam_divider(ui, palette);
-
-                if let Some(ref lyrics) = player.lyrics {
-                    if lyrics.lines.is_empty() {
-                        render_stream_lyrics_empty_state(ui, palette, &mut is_search_open);
-                    } else if lyrics.is_synced {
-                        if let Some(target) = render_synced_lyrics_list(
-                            ui,
-                            "stream_synced_lyrics_scroll",
-                            &lyrics.lines,
-                            pos_ms,
-                            palette,
-                        ) {
-                            seek_to(player, stream_controller, target);
-                        }
-                    } else {
-                        // Plain lyrics
-                        ScrollArea::vertical()
-                            .id_salt("stream_plain_lyrics_scroll")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
-
-                                for line in &lyrics.lines {
-                                    if line.text.trim().is_empty() {
-                                        ui.add_space(10.0);
-                                    } else {
-                                        ui.label(
-                                            RichText::new(&line.text)
-                                                .color(palette.text_primary)
-                                                .size(14.5)
-                                                .line_height(Some(22.0)),
-                                        );
-                                    }
-                                }
-                            });
-                    }
-                } else {
-                    render_stream_lyrics_empty_state(ui, palette, &mut is_search_open);
+                if let (Some(r0), Some(r1)) = (top_rects[0], top_rects[1]) {
+                    let y_min = r0.min.y.min(r1.min.y);
+                    let y_max = r0.max.y.max(r1.max.y);
+                    let seam_x = (r0.max.x + r1.min.x) * 0.5;
+                    let seam_rect = Rect::from_min_max(pos2(seam_x - 0.5, y_min), pos2(seam_x + 0.5, y_max));
+                    ui.painter().rect_filled(seam_rect, Rounding::ZERO, palette.seam);
                 }
-            });
-            col_rects[1] = Some(resp.response.rect);
 
-            ui.data_mut(|d| {
-                d.insert_temp(search_open_id, is_search_open);
-                d.insert_temp(search_query_id, search_query);
+                ui.vertical(|ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                    render_stream_analyzer_notice_card(ui, track, palette, stream_controller);
+                });
             });
+    } else {
+        let mut col_rects: [Option<Rect>; 3] = [None, None, None];
+
+        ui.columns(3, |cols| {
+            cols[0].set_clip_rect(cols[0].clip_rect().intersect(cols[0].max_rect()));
+            col_rects[0] = render_stream_info_card(&mut cols[0], track, palette);
+
+            cols[1].set_clip_rect(cols[1].clip_rect().intersect(cols[1].max_rect()));
+            col_rects[1] = render_stream_lyrics_card(&mut cols[1], player, track, pos_ms, palette, stream_controller);
+
+            cols[2].set_clip_rect(cols[2].clip_rect().intersect(cols[2].max_rect()));
+            col_rects[2] = render_stream_analyzer_notice_card(&mut cols[2], track, palette, stream_controller);
         });
 
-        // =================================================================
-        // COLUMN 3 (RIGHT): Audio Analyzer Notice Card (Not available for streams)
-        // =================================================================
-        cols[2].vertical(|ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 10.0);
+        if let (Some(r0), Some(r1), Some(r2)) = (col_rects[0], col_rects[1], col_rects[2]) {
+            let y_min = r0.min.y.min(r1.min.y).min(r2.min.y);
+            let y_max = r0.max.y.max(r1.max.y).max(r2.max.y);
 
-            let panel_frame = egui::Frame::none()
-                .fill(palette.bg_card)
-                .rounding(Rounding::same(12.0))
-                .stroke(Stroke::NONE)
-                .inner_margin(egui::Margin::same(14.0));
+            let seam1_x = (r0.max.x + r1.min.x) * 0.5;
+            let seam1_rect = Rect::from_min_max(pos2(seam1_x - 0.5, y_min), pos2(seam1_x + 0.5, y_max));
+            ui.painter().rect_filled(seam1_rect, Rounding::ZERO, palette.seam);
 
-            let resp = panel_frame.show(ui, |ui| {
-                // Header with Notice Badge
-                ui.horizontal(|ui| {
-                    render_icon(ui, Icon::Info, 14.0, palette.text_muted);
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("AUDIO ANALYZER")
-                            .size(12.5)
-                            .color(palette.text_secondary)
-                            .strong(),
-                    );
+            let seam2_x = (r1.max.x + r2.min.x) * 0.5;
+            let seam2_rect = Rect::from_min_max(pos2(seam2_x - 0.5, y_min), pos2(seam2_x + 0.5, y_max));
+            ui.painter().rect_filled(seam2_rect, Rounding::ZERO, palette.seam);
+        }
+    }
+}
 
-                    ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
-                        pill_badge(
-                            ui,
-                            "NOT AVAILABLE FOR STREAMS",
-                            Color32::from_rgba_unmultiplied(234, 179, 8, 35),
-                            Color32::from_rgb(250, 204, 21),
-                        );
-                    });
-                });
+fn render_stream_info_card(
+    ui: &mut Ui,
+    track: &StreamTrack,
+    palette: &BentoPalette,
+) -> Option<Rect> {
+    ui.spacing_mut().item_spacing = vec2(0.0, 12.0);
 
-                ui.add_space(8.0);
+    let panel_frame = egui::Frame::none()
+        .fill(palette.bg_card)
+        .rounding(Rounding::same(12.0))
+        .stroke(Stroke::NONE)
+        .inner_margin(egui::Margin::same(16.0));
 
-                // Informative explanation card with Stroke::NONE
-                let notice_card = egui::Frame::none()
-                    .fill(palette.bg_center)
-                    .rounding(Rounding::same(10.0))
-                    .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin::same(10.0));
+    let resp = panel_frame.show(ui, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
 
-                notice_card.show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+        ui.vertical_centered(|ui| {
+            let card_width = (ui.available_width() - 10.0).clamp(180.0, 260.0);
+            let art_size = vec2(card_width, card_width);
 
-                        ui.label(
-                            RichText::new("Audio Analyzer not available for streams")
-                                .size(13.0)
-                                .color(palette.text_primary)
-                                .strong(),
-                        );
+            let (rect, _) = ui.allocate_exact_size(art_size, egui::Sense::hover());
 
-                        ui.label(
-                            RichText::new(
-                                "Real-time 20Hz - 20kHz FFT spectrum visualizers, peak dBFS meters, \
-                                 LUFS loudness analysis, and stereo meters require local raw audio frames \
-                                 decoded by the Eclipse Rodio engine (Local lossless PCM decoding only).",
-                            )
-                            .size(11.5)
-                            .color(palette.text_secondary),
-                        );
-                    });
-                });
+            let prov_color = match track.provider.to_lowercase().as_str() {
+                "spotify" => Color32::from_rgb(30, 215, 96),
+                "youtube" | "youtube music" => Color32::from_rgb(255, 60, 60),
+                _ => palette.accent,
+            };
 
-                ui.add_space(8.0);
+            let prov_icon = match track.provider.to_lowercase().as_str() {
+                "spotify" => Icon::Spotify,
+                "youtube" | "youtube music" => Icon::YouTube,
+                _ => Icon::Disc,
+            };
 
-                // Technical Stream Info Sub-Card with Stroke::NONE
-                let specs_card = egui::Frame::none()
-                    .fill(palette.bg_center)
-                    .rounding(Rounding::same(8.0))
-                    .stroke(Stroke::NONE)
-                    .inner_margin(egui::Margin::same(8.0));
+            // Multi-layered specular halo with Stroke::NONE
+            ui.painter().rect_filled(
+                rect.expand(10.0),
+                Rounding::same(18.0),
+                Color32::from_rgba_premultiplied(
+                    prov_color.r(),
+                    prov_color.g(),
+                    prov_color.b(),
+                    18,
+                ),
+            );
+            ui.painter().rect_filled(
+                rect.expand(4.0),
+                Rounding::same(16.0),
+                Color32::from_rgba_premultiplied(
+                    prov_color.r(),
+                    prov_color.g(),
+                    prov_color.b(),
+                    32,
+                ),
+            );
 
-                specs_card.show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+            // Provider icon inside borderless card with Stroke::NONE
+            ui.painter().rect_filled(rect, Rounding::same(14.0), palette.bg_center);
+            let icon_box = Rect::from_center_size(rect.center(), vec2(art_size.x * 0.38, art_size.x * 0.38));
+            paint_icon(ui.painter(), prov_icon, icon_box, prov_color);
 
-                        stat_row(ui, "Source Provider", &track.provider.to_uppercase(), palette);
-                        stat_row(ui, "Playback Engine", "Remote Session (Official API)", palette);
+            ui.add_space(14.0);
 
-                        let dev_name = stream_controller
-                            .and_then(|sc| sc.active_state.as_ref())
-                            .and_then(|s| s.device_name.as_deref())
-                            .unwrap_or("Active Device");
-                        stat_row(ui, "Connect Device", dev_name, palette);
+            // Track Title
+            ui.label(
+                RichText::new(track.display_title())
+                    .size(19.0)
+                    .color(palette.text_primary)
+                    .strong(),
+            );
+            ui.add_space(2.0);
 
-                        stat_row(ui, "Spectrum Tap", "Local Decoders Only (FLAC/WAV/MP3)", palette);
-                        stat_row(ui, "Lyrics Engine", "LRCLIB Synced (Title/Artist Match)", palette);
-                    });
-                });
+            // Artist
+            ui.label(
+                RichText::new(track.display_artist())
+                    .size(14.5)
+                    .color(palette.text_secondary),
+            );
+            ui.add_space(2.0);
+
+            // Album
+            ui.label(
+                RichText::new(track.display_album())
+                    .size(12.5)
+                    .color(palette.text_muted),
+            );
+
+            ui.add_space(10.0);
+
+            // Stream Badges with Stroke::NONE
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+
+                let badge_label = match track.provider.to_lowercase().as_str() {
+                    "spotify" => "SPOTIFY CONNECT",
+                    "youtube" | "youtube music" => "YOUTUBE MUSIC",
+                    _ => "STREAMING",
+                };
+                pill_badge(
+                    ui,
+                    badge_label,
+                    Color32::from_rgba_unmultiplied(prov_color.r(), prov_color.g(), prov_color.b(), 45),
+                    prov_color,
+                );
+
+                pill_badge(
+                    ui,
+                    "REMOTE STREAM",
+                    palette.accent_soft,
+                    palette.accent,
+                );
+
+                pill_badge(
+                    ui,
+                    &track.formatted_duration(),
+                    palette.bg_center,
+                    palette.text_secondary,
+                );
             });
-            col_rects[2] = Some(resp.response.rect);
         });
     });
 
-    // Subtle 1px vertical dark seam dividers between the 3 panels
-    if let (Some(r0), Some(r1), Some(r2)) = (col_rects[0], col_rects[1], col_rects[2]) {
-        let y_min = r0.min.y.min(r1.min.y).min(r2.min.y);
-        let y_max = r0.max.y.max(r1.max.y).max(r2.max.y);
+    Some(resp.response.rect)
+}
 
-        let seam1_x = (r0.max.x + r1.min.x) * 0.5;
-        let seam1_rect = Rect::from_min_max(pos2(seam1_x - 0.5, y_min), pos2(seam1_x + 0.5, y_max));
-        ui.painter().rect_filled(seam1_rect, Rounding::ZERO, palette.seam);
+fn render_stream_lyrics_card(
+    ui: &mut Ui,
+    player: &mut PlayerController,
+    track: &StreamTrack,
+    pos_ms: u64,
+    palette: &BentoPalette,
+    stream_controller: Option<&StreamController>,
+) -> Option<Rect> {
+    let search_open_id = egui::Id::new("now_playing_stream_lyrics_search_open");
+    let search_query_id = egui::Id::new("now_playing_stream_lyrics_search_query");
+    let track_id_key = egui::Id::new("now_playing_stream_lyrics_track_id");
 
-        let seam2_x = (r1.max.x + r2.min.x) * 0.5;
-        let seam2_rect = Rect::from_min_max(pos2(seam2_x - 0.5, y_min), pos2(seam2_x + 0.5, y_max));
-        ui.painter().rect_filled(seam2_rect, Rounding::ZERO, palette.seam);
+    let mut is_search_open: bool = ui.data(|d| d.get_temp(search_open_id)).unwrap_or(false);
+    let mut search_query: String = ui.data(|d| d.get_temp(search_query_id)).unwrap_or_default();
+    let last_track_id: Option<String> = ui.data(|d| d.get_temp(track_id_key));
+
+    if last_track_id.as_deref() != Some(&track.id) {
+        search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+        ui.data_mut(|d| d.insert_temp(track_id_key, track.id.clone()));
     }
+
+    if search_query.trim().is_empty() {
+        search_query = format!("{} {}", track.display_title(), track.display_artist()).trim().to_string();
+    }
+
+    let panel_frame = egui::Frame::none()
+        .fill(palette.bg_card)
+        .rounding(Rounding::same(12.0))
+        .stroke(Stroke::NONE)
+        .inner_margin(egui::Margin::same(16.0));
+
+    let resp = panel_frame.show(ui, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+
+        let lyrics_width = ui.available_width();
+        if lyrics_width < 310.0 {
+            ui.horizontal(|ui| {
+                let (icon_box, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                paint_icon(ui.painter(), Icon::Mic, icon_box, palette.accent);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("SYNCED LYRICS (LRCLIB)")
+                        .size(13.0)
+                        .color(palette.text_primary)
+                        .strong(),
+                );
+            });
+
+            ui.add_space(4.0);
+
+            ui.horizontal(|ui| {
+                let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, palette);
+                pill_badge(ui, badge_text, badge_fill, badge_color);
+
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn_resp = search_online_header_button(ui, is_search_open, palette);
+                    if btn_resp.clicked() {
+                        is_search_open = !is_search_open;
+                    }
+                });
+            });
+        } else {
+            ui.horizontal(|ui| {
+                let (icon_box, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                paint_icon(ui.painter(), Icon::Mic, icon_box, palette.accent);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("SYNCED LYRICS (LRCLIB)")
+                        .size(13.0)
+                        .color(palette.text_primary)
+                        .strong(),
+                );
+
+                let (badge_text, badge_fill, badge_color) = get_lyrics_badge(player, palette);
+                ui.add_space(6.0);
+                pill_badge(ui, badge_text, badge_fill, badge_color);
+
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    let btn_resp = search_online_header_button(ui, is_search_open, palette);
+                    if btn_resp.clicked() {
+                        is_search_open = !is_search_open;
+                    }
+                });
+            });
+        }
+
+        seam_divider(ui, palette);
+
+        if let Some(ref lyrics) = player.lyrics {
+            if lyrics.lines.is_empty() {
+                render_stream_lyrics_empty_state(ui, palette, &mut is_search_open);
+            } else if lyrics.is_synced {
+                if let Some(target) = render_synced_lyrics_list(
+                    ui,
+                    "stream_synced_lyrics_scroll",
+                    &lyrics.lines,
+                    pos_ms,
+                    palette,
+                ) {
+                    seek_to(player, stream_controller, target);
+                }
+            } else {
+                // Plain lyrics
+                ScrollArea::vertical()
+                    .id_salt("stream_plain_lyrics_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+
+                        for line in &lyrics.lines {
+                            if line.text.trim().is_empty() {
+                                ui.add_space(10.0);
+                            } else {
+                                ui.label(
+                                    RichText::new(&line.text)
+                                        .color(palette.text_primary)
+                                        .size(14.5)
+                                        .line_height(Some(22.0)),
+                                );
+                            }
+                        }
+                    });
+            }
+        } else {
+            render_stream_lyrics_empty_state(ui, palette, &mut is_search_open);
+        }
+    });
+
+    ui.data_mut(|d| {
+        d.insert_temp(search_open_id, is_search_open);
+        d.insert_temp(search_query_id, search_query);
+    });
+
+    Some(resp.response.rect)
+}
+
+fn render_stream_analyzer_notice_card(
+    ui: &mut Ui,
+    track: &StreamTrack,
+    palette: &BentoPalette,
+    stream_controller: Option<&StreamController>,
+) -> Option<Rect> {
+    ui.spacing_mut().item_spacing = vec2(0.0, 10.0);
+
+    let panel_frame = egui::Frame::none()
+        .fill(palette.bg_card)
+        .rounding(Rounding::same(12.0))
+        .stroke(Stroke::NONE)
+        .inner_margin(egui::Margin::same(14.0));
+
+    let resp = panel_frame.show(ui, |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+
+        // Header with Notice Badge
+        let card_w = ui.available_width();
+        if card_w < 300.0 {
+            ui.horizontal(|ui| {
+                render_icon(ui, Icon::Info, 14.0, palette.text_muted);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("AUDIO ANALYZER")
+                        .size(12.5)
+                        .color(palette.text_secondary)
+                        .strong(),
+                );
+            });
+            ui.add_space(4.0);
+            pill_badge(
+                ui,
+                "NOT AVAILABLE FOR STREAMS",
+                Color32::from_rgba_unmultiplied(234, 179, 8, 35),
+                Color32::from_rgb(250, 204, 21),
+            );
+        } else {
+            ui.horizontal(|ui| {
+                render_icon(ui, Icon::Info, 14.0, palette.text_muted);
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("AUDIO ANALYZER")
+                        .size(12.5)
+                        .color(palette.text_secondary)
+                        .strong(),
+                );
+
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                    pill_badge(
+                        ui,
+                        "NOT AVAILABLE FOR STREAMS",
+                        Color32::from_rgba_unmultiplied(234, 179, 8, 35),
+                        Color32::from_rgb(250, 204, 21),
+                    );
+                });
+            });
+        }
+
+        ui.add_space(8.0);
+
+        // Informative explanation card with Stroke::NONE
+        let notice_card = egui::Frame::none()
+            .fill(palette.bg_center)
+            .rounding(Rounding::same(10.0))
+            .stroke(Stroke::NONE)
+            .inner_margin(egui::Margin::same(10.0));
+
+        notice_card.show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+
+                ui.label(
+                    RichText::new("Audio Analyzer not available for streams")
+                        .size(13.0)
+                        .color(palette.text_primary)
+                        .strong(),
+                );
+
+                ui.label(
+                    RichText::new(
+                        "Real-time 20Hz - 20kHz FFT spectrum visualizers, peak dBFS meters, \
+                         LUFS loudness analysis, and stereo meters require local raw audio frames \
+                         decoded by the Eclipse Rodio engine (Local lossless PCM decoding only).",
+                    )
+                    .size(11.5)
+                    .color(palette.text_secondary),
+                );
+            });
+        });
+
+        ui.add_space(8.0);
+
+        // Technical Stream Info Sub-Card with Stroke::NONE
+        let specs_card = egui::Frame::none()
+            .fill(palette.bg_center)
+            .rounding(Rounding::same(8.0))
+            .stroke(Stroke::NONE)
+            .inner_margin(egui::Margin::same(8.0));
+
+        specs_card.show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+
+                stat_row(ui, "Source Provider", &track.provider.to_uppercase(), palette);
+                stat_row(ui, "Playback Engine", "Remote Session (Official API)", palette);
+
+                let dev_name = stream_controller
+                    .and_then(|sc| sc.active_state.as_ref())
+                    .and_then(|s| s.device_name.as_deref())
+                    .unwrap_or("Active Device");
+                stat_row(ui, "Connect Device", dev_name, palette);
+
+                stat_row(ui, "Spectrum Tap", "Local Decoders Only (FLAC/WAV/MP3)", palette);
+                stat_row(ui, "Lyrics Engine", "LRCLIB Synced (Title/Artist Match)", palette);
+            });
+        });
+    });
+
+    Some(resp.response.rect)
 }
 
 fn render_stream_lyrics_empty_state(ui: &mut Ui, palette: &BentoPalette, is_search_open: &mut bool) {
@@ -1795,6 +2053,26 @@ mod tests {
     use crate::config::AppConfig;
     use crate::library::model::Track;
     use crate::lyrics::{LyricLine, Lyrics, LrclibRecord};
+
+    #[test]
+    fn test_frequency_axis_markers_adaptive_thinning() {
+        let wide_markers = frequency_axis_markers(300.0);
+        assert_eq!(wide_markers.len(), 7);
+        assert_eq!(wide_markers[0].0, "20Hz");
+        assert_eq!(wide_markers[1].0, "100Hz");
+        assert_eq!(wide_markers[2].0, "500Hz");
+        assert_eq!(wide_markers[3].0, "1kHz");
+        assert_eq!(wide_markers[4].0, "5kHz");
+        assert_eq!(wide_markers[5].0, "10kHz");
+        assert_eq!(wide_markers[6].0, "20kHz");
+
+        let narrow_markers = frequency_axis_markers(250.0);
+        assert_eq!(narrow_markers.len(), 4);
+        assert_eq!(narrow_markers[0].0, "20Hz");
+        assert_eq!(narrow_markers[1].0, "500Hz");
+        assert_eq!(narrow_markers[2].0, "2kHz");
+        assert_eq!(narrow_markers[3].0, "20kHz");
+    }
 
     #[test]
     fn test_lyrics_source_badge_mapping() {
@@ -1910,6 +2188,46 @@ mod tests {
     }
 
     #[test]
+    fn test_now_playing_narrow_width_responsive_layout() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.allocate_ui(vec2(600.0, 800.0), |ui| {
+                    let theme = Theme::from_name("Eclipse", None);
+                    let cfg = AppConfig::default();
+                    let mut player = PlayerController::new(&cfg);
+                    let mut art_manager = AlbumArtManager::new();
+
+                    let track = Track {
+                        id: 1,
+                        path: "test.flac".into(),
+                        title: "Narrow Song Title That Is Long".into(),
+                        artist: "Narrow Artist That Is Long".into(),
+                        album: "Narrow Album".into(),
+                        genre: "Rock".into(),
+                        year: 2024,
+                        track_number: 1,
+                        duration_secs: 200.0,
+                        format: "FLAC".into(),
+                        bitrate_kbps: 1411,
+                        sample_rate: 48000,
+                        channels: 2,
+                        favorite: false,
+                        has_art: false,
+                        folder: "".into(),
+                        album_artist: "".into(),
+                        play_count: 5,
+                        file_size: 1024,
+                    };
+                    player.load_queue(vec![track], 0);
+
+                    render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
+                });
+            });
+        });
+    }
+
+    #[test]
     fn test_search_drawer_rendering_and_interaction() {
         let ctx = egui::Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
@@ -1986,13 +2304,18 @@ mod tests {
                 // Render Now Playing view with Search Drawer and Results
                 render_now_playing(ui, &mut player, &theme, &mut art_manager, None);
 
-                // Apply custom lyrics test
-                let selected = player.manual_search_results.as_ref().expect("mock results present")[0].clone();
-                player.apply_custom_lyrics(&selected);
+                // Apply custom lyrics test without unwrap or expect
+                if let Some(ref results) = player.manual_search_results {
+                    if let Some(first) = results.first() {
+                        let selected = first.clone();
+                        player.apply_custom_lyrics(&selected);
+                    }
+                }
                 assert!(player.lyrics.is_some());
-                let lyrics = player.lyrics.as_ref().expect("lyrics applied");
-                assert!(lyrics.is_synced);
-                assert_eq!(lyrics.lines.len(), 1);
+                if let Some(ref lyrics) = player.lyrics {
+                    assert!(lyrics.is_synced);
+                    assert_eq!(lyrics.lines.len(), 1);
+                }
             });
         });
     }

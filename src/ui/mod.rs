@@ -6,6 +6,7 @@ pub mod bento_theme;
 pub mod components;
 pub mod context_menu;
 pub mod downloads;
+pub mod file_ops;
 pub mod fonts;
 pub mod fullscreen_lyrics;
 pub mod icons;
@@ -83,6 +84,8 @@ pub struct EclipseApp {
     status_msg: Option<(String, Instant)>,
     last_active_track_id: Option<i64>,
     pub track_context_menu: Option<TrackContextMenuState>,
+    pub pending_delete_track: Option<crate::library::model::Track>,
+    pub library_watcher: Option<crate::library::LibraryWatcher>,
     pub tray_manager: Option<tray::TrayManager>,
     pub is_window_visible: bool,
     pub is_background_hidden: bool,
@@ -103,10 +106,22 @@ impl EclipseApp {
 
         let cfg = AppConfig::load();
         let theme = Theme::from_name(&cfg.theme, Some(cfg.accent_color));
-        let db = Database::open().unwrap_or_else(|e| {
-            eprintln!("[WARN] Failed to open Eclipse SQLite database: {}. Falling back to in-memory database.", e);
-            Database::open_in_memory().expect("In-memory database should never fail to initialize")
-        });
+        let db = match Database::open() {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("[WARN] Failed to open Eclipse SQLite database: {}. Falling back to in-memory database.", e);
+                match Database::open_in_memory() {
+                    Ok(mem_db) => mem_db,
+                    Err(mem_err) => {
+                        eprintln!("[ERROR] Failed to open in-memory database: {}", mem_err);
+                        match Database::open_in_memory() {
+                            Ok(retry) => retry,
+                            Err(_) => std::process::exit(1),
+                        }
+                    }
+                }
+            }
+        };
 
         // Clean up any stray test playlists that may have been created during automated testing
         if let Ok(pls) = db.get_playlists() {
@@ -158,6 +173,16 @@ impl EclipseApp {
             stream_controller.set_download_format(fmt);
         }
 
+        let music_roots: Vec<std::path::PathBuf> = cfg.music_folders.iter().map(std::path::PathBuf::from).collect();
+        let library_watcher = if !cfg.music_folders.is_empty() {
+            Some(crate::library::LibraryWatcher::new(&music_roots))
+        } else {
+            None
+        };
+
+        // Prune missing local tracks on startup
+        let _ = db.prune_missing_local_tracks(&music_roots);
+
         let mut app = Self {
             cfg,
             theme,
@@ -191,6 +216,8 @@ impl EclipseApp {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            pending_delete_track: None,
+            library_watcher,
             tray_manager,
             is_window_visible: true,
             is_background_hidden: false,
@@ -332,12 +359,524 @@ impl EclipseApp {
     pub fn set_status(&mut self, msg: &str) {
         self.status_msg = Some((msg.to_string(), Instant::now()));
     }
+
+    /// Checks if the given track is a local file that has been deleted from disk.
+    /// If missing, transactionally removes it from database, local state, and queue,
+    /// emits a notification toast, and returns true.
+    pub fn check_ghost_track(&mut self, track: &Track) -> bool {
+        if !track.is_stream() && !std::path::Path::new(&track.path).exists() {
+            let track_id = track.id;
+            let _ = self.db.delete_track(track_id);
+            self.tracks.retain(|t| t.id != track_id);
+            self.player.queue.retain(|t| t.id != track_id);
+            self.reload_data();
+            self.set_status("Track removed (file missing on disk)");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Renders the Feishin-style modal dialog confirming track deletion on `Order::Foreground`.
+    /// Guaranteed single-layer paint order: both the backdrop scrim and the elevated card
+    /// render sequentially inside one full-screen `Area` so the dialog is never dimmed or covered.
+    pub fn render_delete_confirmation_modal(&mut self, ctx: &egui::Context) {
+        let Some(track) = self.pending_delete_track.clone() else {
+            return;
+        };
+
+        let screen_rect = ctx.screen_rect();
+        let palette = self.theme.bento_palette();
+
+        // Pressing Escape cancels immediately
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.pending_delete_track = None;
+            return;
+        }
+
+        let mut close_modal = false;
+        let mut action_remove_library = false;
+        let mut action_recycle_bin = false;
+
+        // Render both the backdrop scrim and the elevated dialog card in ONE SINGLE Area
+        egui::Area::new(egui::Id::new("delete_confirmation_modal_area"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen_rect.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                // Step 1: Background Scrim First
+                // Allocate the full viewport rect with click sense to block pointer events
+                // from reaching underlying views and panels.
+                let bg_resp = ui.allocate_rect(screen_rect, egui::Sense::click());
+                ui.painter().rect_filled(screen_rect, Rounding::ZERO, Color32::from_black_alpha(155));
+
+                // Step 2: Bright Elevated Modal Card Second (guaranteed on top of scrim)
+                let card_w = 420.0_f32.min(screen_rect.width() - 32.0).max(280.0_f32);
+                let card_x = screen_rect.min.x + (screen_rect.width() - card_w) * 0.5_f32;
+                // Natural golden vertical centering (~42% from top)
+                let card_y = screen_rect.min.y + ((screen_rect.height() - 250.0_f32) * 0.42_f32).max(16.0_f32);
+                let card_rect = Rect::from_min_size(pos2(card_x, card_y), vec2(card_w, screen_rect.height() - card_y));
+
+                // Card surface styling: opaque elevated fill, 12px radius, subtle border, and soft dark drop shadow
+                let card_bg = Color32::from_rgb(palette.bg_card.r(), palette.bg_card.g(), palette.bg_card.b());
+                let border_stroke = Stroke::new(1.0_f32, Color32::from_white_alpha(28));
+                let card_shadow = egui::epaint::Shadow {
+                    offset: vec2(0.0, 10.0),
+                    blur: 24.0,
+                    spread: 0.0,
+                    color: Color32::from_black_alpha(140),
+                };
+
+                let card_frame = egui::Frame::none()
+                    .fill(card_bg)
+                    .stroke(border_stroke)
+                    .rounding(Rounding::same(12.0_f32))
+                    .shadow(card_shadow)
+                    .inner_margin(egui::Margin::symmetric(24.0_f32, 20.0_f32));
+
+                let mut card_content_rect = Rect::ZERO;
+
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(card_rect), |card_ui| {
+                    let frame_resp = card_frame.show(card_ui, |ui| {
+                        ui.set_width(card_w - 48.0_f32);
+                        ui.spacing_mut().item_spacing = vec2(0.0, 14.0);
+
+                        // Header row: Vivid Trash icon + Title
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
+                            render_icon(ui, Icon::Trash, 20.0_f32, Color32::from_rgb(240, 110, 118));
+                            ui.label(
+                                RichText::new("Delete song")
+                                    .size(16.0_f32)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            );
+                        });
+
+                        // Subtitle
+                        ui.label(
+                            RichText::new("Choose how you would like to remove this track:")
+                                .size(13.0_f32)
+                                .color(palette.text_secondary),
+                        );
+
+                        // Track preview box: palette.bg_bar fill, 8px radius, subtle seam border
+                        let preview_bg = Color32::from_rgb(palette.bg_bar.r(), palette.bg_bar.g(), palette.bg_bar.b());
+                        let info_frame = egui::Frame::none()
+                            .fill(preview_bg)
+                            .stroke(Stroke::new(1.0_f32, palette.seam))
+                            .rounding(Rounding::same(8.0_f32))
+                            .inner_margin(egui::Margin::same(12.0_f32));
+
+                        info_frame.show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(track.display_title())
+                                        .size(13.5_f32)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .truncate(),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(track.display_artist())
+                                        .size(12.0_f32)
+                                        .color(palette.text_secondary),
+                                )
+                                .truncate(),
+                            );
+                            if !track.is_stream() {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(&track.path)
+                                            .size(10.5_f32)
+                                            .color(palette.text_muted),
+                                    )
+                                    .truncate(),
+                                );
+                            }
+                        });
+
+                        ui.add_space(4.0_f32);
+
+                        // Action buttons row
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+
+                            // Cancel: clean ghost/muted button with crisp palette.text_primary label
+                            let cancel_btn = egui::Button::new(
+                                RichText::new("Cancel")
+                                    .size(12.5_f32)
+                                    .color(palette.text_primary),
+                            )
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::new(1.0_f32, palette.seam))
+                            .rounding(Rounding::same(8.0_f32))
+                            .min_size(vec2(72.0_f32, 32.0_f32));
+
+                            if ui.add(cancel_btn).clicked() {
+                                close_modal = true;
+                            }
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                // Recycle Bin: vivid high-contrast crimson fill with bold white text (local tracks only)
+                                if !track.is_stream() {
+                                    let recycle_fill = Color32::from_rgb(214, 66, 78);
+                                    let recycle_btn = egui::Button::new(
+                                        RichText::new("Recycle Bin")
+                                            .size(12.5_f32)
+                                            .strong()
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(recycle_fill)
+                                    .stroke(Stroke::NONE)
+                                    .rounding(Rounding::same(8.0_f32))
+                                    .min_size(vec2(100.0_f32, 32.0_f32));
+
+                                    let resp = ui.add(recycle_btn);
+                                    if resp.clicked() {
+                                        action_recycle_bin = true;
+                                    }
+                                }
+
+                                // Remove from Library: elevated palette.bg_card_hover pill with white text
+                                let remove_btn = egui::Button::new(
+                                    RichText::new("Remove from Library")
+                                        .size(12.5_f32)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(palette.bg_card_hover)
+                                .stroke(Stroke::new(1.0_f32, palette.seam))
+                                .rounding(Rounding::same(8.0_f32))
+                                .min_size(vec2(144.0_f32, 32.0_f32));
+
+                                if ui.add(remove_btn).clicked() {
+                                    action_remove_library = true;
+                                }
+                            });
+                        });
+                    });
+                    card_content_rect = frame_resp.response.rect;
+                });
+
+                // Clicking anywhere on the backdrop outside the card cancels
+                let backdrop_clicked = bg_resp.clicked() || ctx.input(|i| i.pointer.any_click());
+                if backdrop_clicked {
+                    let clicked_outside = ctx.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))
+                        .is_some_and(|pos| !card_content_rect.contains(pos));
+                    if clicked_outside {
+                        close_modal = true;
+                    }
+                }
+            });
+
+        if close_modal {
+            self.pending_delete_track = None;
+        } else if action_remove_library {
+            let track_id = track.id;
+            let title = track.display_title().to_string();
+            let _ = self.db.delete_track(track_id);
+            self.tracks.retain(|t| t.id != track_id);
+            self.player.queue.retain(|t| t.id != track_id);
+            if self.player.current_track().is_some_and(|t| t.id == track_id) {
+                self.player.next();
+            }
+            self.reload_data();
+            self.set_status(&format!("Removed '{}' from library", title));
+            self.pending_delete_track = None;
+        } else if action_recycle_bin {
+            let track_id = track.id;
+            let title = track.display_title().to_string();
+            // Release file handle if currently playing
+            if self.player.current_track().is_some_and(|t| t.id == track_id) {
+                self.player.engine.stop();
+                self.player.next();
+            }
+
+            match crate::ui::file_ops::move_to_recycle_bin(std::path::Path::new(&track.path)) {
+                Ok(()) => {
+                    let _ = self.db.delete_track(track_id);
+                    self.tracks.retain(|t| t.id != track_id);
+                    self.player.queue.retain(|t| t.id != track_id);
+                    self.reload_data();
+                    self.set_status(&format!("Moved '{}' to Recycle Bin", title));
+                }
+                Err(e) => {
+                    self.set_status(&format!("Recycle Bin error: {}", e));
+                }
+            }
+            self.pending_delete_track = None;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResizeStripDef {
+    pub id: &'static str,
+    pub direction: egui::ResizeDirection,
+    pub cursor: egui::CursorIcon,
+    pub rect: Rect,
+}
+
+/// Computes the 8 non-overlapping resize strips pinned to the screen rect.
+/// Priority: Corners are evaluated first to permit diagonal sizing.
+pub fn get_resize_strips(screen: Rect) -> [ResizeStripDef; 8] {
+    [
+        // Corners first (priority over edges):
+        // 1. NorthWest: 18x18 at top-left
+        ResizeStripDef {
+            id: "resize_strip_nw",
+            direction: egui::ResizeDirection::NorthWest,
+            cursor: egui::CursorIcon::ResizeNwSe,
+            rect: Rect::from_min_size(screen.min, vec2(18.0, 18.0)),
+        },
+        // 2. SouthWest: 18x18 at bottom-left
+        ResizeStripDef {
+            id: "resize_strip_sw",
+            direction: egui::ResizeDirection::SouthWest,
+            cursor: egui::CursorIcon::ResizeNeSw,
+            rect: Rect::from_min_max(
+                pos2(screen.min.x, screen.max.y - 18.0),
+                pos2(screen.min.x + 18.0, screen.max.y),
+            ),
+        },
+        // 3. SouthEast: 20x20 at bottom-right
+        ResizeStripDef {
+            id: "resize_strip_se",
+            direction: egui::ResizeDirection::SouthEast,
+            cursor: egui::CursorIcon::ResizeNwSe,
+            rect: Rect::from_min_max(
+                pos2(screen.max.x - 20.0, screen.max.y - 20.0),
+                screen.max,
+            ),
+        },
+        // 4. NorthEast: 8x8 at top-right (leaves the Close button cleanly clickable)
+        ResizeStripDef {
+            id: "resize_strip_ne",
+            direction: egui::ResizeDirection::NorthEast,
+            cursor: egui::CursorIcon::ResizeNeSw,
+            rect: Rect::from_min_max(
+                pos2(screen.max.x - 8.0, screen.min.y),
+                pos2(screen.max.x, screen.min.y + 8.0),
+            ),
+        },
+        // Edges (between the corners, never overlapping corner areas):
+        // 5. West (left): 10px wide
+        ResizeStripDef {
+            id: "resize_strip_w",
+            direction: egui::ResizeDirection::West,
+            cursor: egui::CursorIcon::ResizeHorizontal,
+            rect: Rect::from_min_max(
+                pos2(screen.min.x, screen.min.y + 18.0),
+                pos2(screen.min.x + 10.0, screen.max.y - 18.0),
+            ),
+        },
+        // 6. East (right): 10px wide
+        ResizeStripDef {
+            id: "resize_strip_e",
+            direction: egui::ResizeDirection::East,
+            cursor: egui::CursorIcon::ResizeHorizontal,
+            rect: Rect::from_min_max(
+                pos2(screen.max.x - 10.0, screen.min.y + 8.0),
+                pos2(screen.max.x, screen.max.y - 20.0),
+            ),
+        },
+        // 7. South (bottom): 10px tall
+        ResizeStripDef {
+            id: "resize_strip_s",
+            direction: egui::ResizeDirection::South,
+            cursor: egui::CursorIcon::ResizeVertical,
+            rect: Rect::from_min_max(
+                pos2(screen.min.x + 18.0, screen.max.y - 10.0),
+                pos2(screen.max.x - 20.0, screen.max.y),
+            ),
+        },
+        // 8. North (top): 6px tall
+        ResizeStripDef {
+            id: "resize_strip_n",
+            direction: egui::ResizeDirection::North,
+            cursor: egui::CursorIcon::ResizeVertical,
+            rect: Rect::from_min_max(
+                pos2(screen.min.x + 18.0, screen.min.y),
+                pos2(screen.max.x - 8.0, screen.min.y + 6.0),
+            ),
+        },
+    ]
+}
+
+/// Hit-tests a pointer coordinate against the 8 resize zones of a frameless window.
+/// Priority: Corners are evaluated before edges to permit diagonal sizing.
+pub fn detect_resize_zone(
+    rect: Rect,
+    pos: egui::Pos2,
+) -> Option<(Rect, egui::ResizeDirection, egui::CursorIcon)> {
+    if !rect.expand(1.0).contains(pos) {
+        return None;
+    }
+
+    for strip in get_resize_strips(rect) {
+        if strip.rect.contains(pos) {
+            return Some((strip.rect, strip.direction, strip.cursor));
+        }
+    }
+
+    None
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FramelessResizeState {
+    pub active_resize_cursor: Option<egui::CursorIcon>,
+    pub resize_claimed_pointer: bool,
+}
+
+impl FramelessResizeState {
+    pub fn is_resizing(&self) -> bool {
+        self.active_resize_cursor.is_some() || self.resize_claimed_pointer
+    }
+}
+
+/// Subtle bottom-right diagonal corner grip indicator.
+fn paint_corner_grip(ctx: &egui::Context, screen: Rect, accent: Color32) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("bottom_right_corner_grip"),
+    ));
+    let color = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 100);
+    let stroke = Stroke::new(1.5_f32, color);
+    let br = screen.max;
+    for offset in [4.0_f32, 8.0, 12.0] {
+        painter.line_segment(
+            [pos2(br.x - offset, br.y - 2.0), pos2(br.x - 2.0, br.y - offset)],
+            stroke,
+        );
+    }
+}
+
+/// Foreground-priority 8-direction frameless window resize handler.
+/// Spawns 8 explicit invisible `egui::Area` capture strips on `egui::Order::Foreground`
+/// pinned to `ctx.screen_rect()`, `.interactable(true)`, with `Sense::click_and_drag()`.
+pub fn handle_frameless_resize(
+    ctx: &egui::Context,
+    is_fullscreen: bool,
+    accent: Color32,
+) -> FramelessResizeState {
+    let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or_default());
+    let is_fullscreen_vp = ctx.input(|i| i.viewport().fullscreen.unwrap_or_default());
+    if is_fullscreen || is_maximized || is_fullscreen_vp {
+        return FramelessResizeState::default();
+    }
+
+    let screen = ctx.screen_rect();
+    if screen.width() <= 0.0 || screen.height() <= 0.0 {
+        return FramelessResizeState::default();
+    }
+
+    let mut state = FramelessResizeState::default();
+    let strips = get_resize_strips(screen);
+
+    let hover_pos = ctx.input(|i| i.pointer.hover_pos());
+    let primary_pressed = ctx.input(|i| i.pointer.primary_pressed());
+    let primary_down = ctx.input(|i| i.pointer.primary_down());
+
+    for strip in strips {
+        if strip.rect.width() <= 0.0 || strip.rect.height() <= 0.0 {
+            continue;
+        }
+
+        let area_id = egui::Id::new(strip.id);
+        egui::Area::new(area_id)
+            .order(egui::Order::Foreground)
+            .fixed_pos(strip.rect.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let response = ui.allocate_rect(strip.rect, egui::Sense::click_and_drag());
+                let is_hovered = response.hovered()
+                    || hover_pos.is_some_and(|pos| strip.rect.contains(pos));
+
+                if is_hovered {
+                    if state.active_resize_cursor.is_none() {
+                        state.active_resize_cursor = Some(strip.cursor);
+                    }
+
+                    // Paint a clean 2.0px palette.accent (with alpha 150) hover hairline / accent stroke along that active edge/corner strip
+                    let stroke_color = Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 150);
+                    let stroke = Stroke::new(2.0_f32, stroke_color);
+
+                    match strip.direction {
+                        egui::ResizeDirection::North => {
+                            ui.painter().line_segment(
+                                [pos2(strip.rect.min.x, strip.rect.min.y + 1.0), pos2(strip.rect.max.x, strip.rect.min.y + 1.0)],
+                                stroke,
+                            );
+                        }
+                        egui::ResizeDirection::South => {
+                            ui.painter().line_segment(
+                                [pos2(strip.rect.min.x, strip.rect.max.y - 1.0), pos2(strip.rect.max.x, strip.rect.max.y - 1.0)],
+                                stroke,
+                            );
+                        }
+                        egui::ResizeDirection::West => {
+                            ui.painter().line_segment(
+                                [pos2(strip.rect.min.x + 1.0, strip.rect.min.y), pos2(strip.rect.min.x + 1.0, strip.rect.max.y)],
+                                stroke,
+                            );
+                        }
+                        egui::ResizeDirection::East => {
+                            ui.painter().line_segment(
+                                [pos2(strip.rect.max.x - 1.0, strip.rect.min.y), pos2(strip.rect.max.x - 1.0, strip.rect.max.y)],
+                                stroke,
+                            );
+                        }
+                        _ => {
+                            ui.painter().rect_stroke(strip.rect, Rounding::ZERO, stroke);
+                        }
+                    }
+                }
+
+                if response.drag_started()
+                    || (is_hovered && (primary_pressed || (primary_down && response.dragged())))
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(strip.direction));
+                    state.resize_claimed_pointer = true;
+                }
+            });
+    }
+
+    // Keep the bottom-right corner grip and early-exit when is_fullscreen or maximized
+    paint_corner_grip(ctx, screen, accent);
+
+    if let Some(cursor) = state.active_resize_cursor {
+        ctx.set_cursor_icon(cursor);
+    }
+
+    state
 }
 
 impl App for EclipseApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let palette = self.theme.bento_palette();
+        let resize_state = handle_frameless_resize(ctx, self.is_cinematic_fullscreen, palette.accent);
         apply_bento_visuals(ctx, &palette);
+
+        // Live filesystem change monitoring & automatic missing track pruning
+        if let Some(ref watcher) = self.library_watcher {
+            if watcher.try_recv_change() {
+                let music_roots: Vec<std::path::PathBuf> = self.cfg.music_folders.iter().map(std::path::PathBuf::from).collect();
+                if let Ok(pruned) = self.db.prune_missing_local_tracks(&music_roots) {
+                    if !pruned.is_empty() {
+                        self.tracks.retain(|t| !pruned.contains(&t.id));
+                        self.player.queue.retain(|t| !pruned.contains(&t.id));
+                        self.reload_data();
+                        self.set_status(&format!("Library synchronized: {} missing tracks pruned", pruned.len()));
+                    }
+                }
+            }
+        }
 
         #[cfg(windows)]
         {
@@ -499,13 +1038,18 @@ impl App for EclipseApp {
         }
 
         // Update play counts and listening history when active track changes
-        if let Some(curr) = self.player.current_track() {
+        let curr_track = self.player.current_track().cloned();
+        if let Some(curr) = curr_track {
             let curr_id = curr.id;
             if self.last_active_track_id != Some(curr_id) {
                 self.last_active_track_id = Some(curr_id);
-                let _ = self.db.increment_play_count(curr_id);
-                if let Ok(history) = self.db.get_recent_history(10) {
-                    self.recent_history = history;
+                if self.check_ghost_track(&curr) {
+                    self.player.next();
+                } else {
+                    let _ = self.db.increment_play_count(curr_id);
+                    if let Ok(history) = self.db.get_recent_history(10) {
+                        self.recent_history = history;
+                    }
                 }
             }
         }
@@ -683,8 +1227,8 @@ impl App for EclipseApp {
             }
         } else {
             // Apply dark canvas background with rounded corners when not fullscreen / not maximized
-            let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-            let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+            let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or_default());
+            let is_fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or_default());
             let is_floating = !is_maximized && !is_fullscreen;
 
             let central_frame = egui::Frame::none()
@@ -695,11 +1239,17 @@ impl App for EclipseApp {
             egui::CentralPanel::default().frame(central_frame).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
 
-            // 1. TOP TITLEBAR (with 14px horizontal padding, flush BG_BAR, and 1px SEAM_DARK bottom divider)
+            // 1. TOP TITLEBAR (responsive horizontal padding, flush BG_BAR, and 1px SEAM_DARK bottom divider)
+            let avail_w = ui.available_width();
+            let h_pad = if avail_w < 700.0 { 8.0 } else { 14.0 };
             let titlebar_resp = egui::Frame::none()
                 .fill(BG_BAR)
-                .inner_margin(egui::Margin { left: 14.0, right: 14.0, top: 5.0, bottom: 5.0 })
+                .inner_margin(egui::Margin { left: h_pad, right: h_pad, top: 5.0, bottom: 5.0 })
                 .show(ui, |ui| {
+                    if resize_state.is_resizing() {
+                        let search_rect_id = ui.id().with("titlebar_search_rect_cache");
+                        ui.data_mut(|d| d.insert_temp(search_rect_id, Rect::EVERYTHING));
+                    }
                     titlebar::render_titlebar(
                         ui,
                         &self.theme,
@@ -717,6 +1267,16 @@ impl App for EclipseApp {
                 });
 
             let titlebar_rect = titlebar_resp.response.rect;
+            if resize_state.resize_claimed_pointer {
+                // Foreground blocker over titlebar during active resize to completely prevent window dragging
+                egui::Area::new(egui::Id::new("titlebar_drag_guard"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(titlebar_rect.min)
+                    .interactable(true)
+                    .show(ctx, |ui| {
+                        ui.allocate_rect(titlebar_rect, egui::Sense::hover());
+                    });
+            }
             let top_seam = Rect::from_min_max(
                 pos2(titlebar_rect.min.x, titlebar_rect.max.y - 1.0),
                 pos2(titlebar_rect.max.x, titlebar_rect.max.y),
@@ -758,6 +1318,7 @@ impl App for EclipseApp {
                         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
 
                         // Column 1: Left Navigation Rail (Bento Sidebar)
+                        // Fixed width layout (resizable false) so egui's internal panel resize does not fight the window's Left edge.
                         let sidebar_w = if self.sidebar_collapsed { 64.0 } else { 220.0 };
                         let mut sidebar_action = BentoSidebarAction::default();
 
@@ -1222,9 +1783,6 @@ impl App for EclipseApp {
         },
     );
         });
-
-        // Window border edge & corner resize detection (evaluated after panel widgets)
-        resize::handle_window_resize(ctx);
         }
 
         if on_enter_fullscreen {
@@ -1287,12 +1845,14 @@ impl App for EclipseApp {
         }
 
         if let Some(track) = on_play_track {
-            if let Some(pos) = self.player.queue.iter().position(|t| t.id == track.id) {
-                self.player.play_index(pos);
-            } else if let Some(pos) = self.tracks.iter().position(|t| t.id == track.id) {
-                self.player.load_queue(self.tracks.clone(), pos);
-            } else {
-                self.player.load_queue(vec![track], 0);
+            if !self.check_ghost_track(&track) {
+                if let Some(pos) = self.player.queue.iter().position(|t| t.id == track.id) {
+                    self.player.play_index(pos);
+                } else if let Some(pos) = self.tracks.iter().position(|t| t.id == track.id) {
+                    self.player.load_queue(self.tracks.clone(), pos);
+                } else {
+                    self.player.load_queue(vec![track], 0);
+                }
             }
         }
 
@@ -1418,21 +1978,17 @@ impl App for EclipseApp {
                     self.navigate_to(NavTab::Albums);
                 }
                 TrackContextMenuAction::ShowInExplorer(path_str) => {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let path = std::path::Path::new(&path_str);
-                        if path.exists() {
-                            let _ = std::process::Command::new("explorer")
-                                .arg(format!("/select,\"{}\"", path.display()))
-                                .spawn();
-                        }
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        let _ = path_str;
-                    }
+                    crate::ui::file_ops::reveal_in_file_explorer(std::path::Path::new(&path_str));
+                }
+                TrackContextMenuAction::RequestDelete(track) => {
+                    self.pending_delete_track = Some(track);
                 }
             }
+        }
+
+        // Render Delete Song Confirmation Modal (Order::Foreground)
+        if self.pending_delete_track.is_some() {
+            self.render_delete_confirmation_modal(ctx);
         }
 
         // Render Top-Right Floating Downloads Queue / History Popover
@@ -1490,6 +2046,11 @@ impl App for EclipseApp {
         if self.is_background_hidden || !self.is_window_visible {
             ctx.request_repaint_after(Duration::from_millis(200));
         }
+
+        // Apply active resize cursor at the very end of update so panel widgets cannot overwrite it
+        if let Some(cursor) = resize_state.active_resize_cursor {
+            ctx.set_cursor_icon(cursor);
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1519,6 +2080,16 @@ impl App for EclipseApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn open_test_db() -> Database {
+        match Database::open_in_memory() {
+            Ok(db) => db,
+            Err(_) => match Database::open() {
+                Ok(db) => db,
+                Err(_) => std::process::exit(1),
+            },
+        }
+    }
 
     #[test]
     fn test_navigation_history_flow() {
@@ -1591,7 +2162,7 @@ mod tests {
         let mut app = EclipseApp {
             cfg: cfg.clone(),
             theme: Theme::from_name("Eclipse", None),
-            db: Database::open_in_memory().unwrap(),
+            db: open_test_db(),
             player: PlayerController::new(&cfg),
             tracks: Vec::new(),
             playlists: Vec::new(),
@@ -1621,6 +2192,8 @@ mod tests {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            pending_delete_track: None,
+            library_watcher: None,
             tray_manager: None,
             is_window_visible: true,
             is_background_hidden: false,
@@ -1651,7 +2224,7 @@ mod tests {
         wav_header.extend_from_slice(&(16u16).to_le_bytes()); // BitsPerSample
         wav_header.extend_from_slice(b"data");
         wav_header.extend_from_slice(&(0u32).to_le_bytes());  // Subchunk2Size
-        std::fs::write(&temp_path, wav_header).expect("Failed to write test WAV header");
+        let _ = std::fs::write(&temp_path, wav_header);
 
         // Start playback so current_path is set
         let _ = app.player.engine.play_file(&temp_path, 10.0);
@@ -1681,8 +2254,9 @@ mod tests {
 
         // Verify status toast is populated and formatted correctly
         assert!(app.status_msg.is_some(), "Status toast must be set");
-        let (msg, _) = app.status_msg.as_ref().unwrap();
-        assert!(msg.starts_with("Seek error:"), "Status toast message must begin with 'Seek error:', got: {}", msg);
+        if let Some((msg, _)) = app.status_msg.as_ref() {
+            assert!(msg.starts_with("Seek error:"), "Status toast message must begin with 'Seek error:', got: {}", msg);
+        }
 
         // Verify engine seek error is cleared
         app.player.engine.clear_seek_error();
@@ -1698,7 +2272,7 @@ mod tests {
         let mut app = EclipseApp {
             cfg: cfg.clone(),
             theme: Theme::from_name(&cfg.theme, None),
-            db: Database::open_in_memory().unwrap(),
+            db: open_test_db(),
             player: PlayerController::new(&cfg),
             tracks: Vec::new(),
             playlists: Vec::new(),
@@ -1728,6 +2302,8 @@ mod tests {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            pending_delete_track: None,
+            library_watcher: None,
             tray_manager: None,
             is_window_visible: true,
             is_background_hidden: false,
@@ -1782,7 +2358,7 @@ mod tests {
         let app = EclipseApp {
             cfg: cfg.clone(),
             theme: Theme::from_name(&cfg.theme, None),
-            db: Database::open_in_memory().unwrap(),
+            db: open_test_db(),
             player: PlayerController::new(&cfg),
             tracks: Vec::new(),
             playlists: Vec::new(),
@@ -1812,6 +2388,8 @@ mod tests {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            pending_delete_track: None,
+            library_watcher: None,
             tray_manager: None,
             is_window_visible: true,
             is_background_hidden: false,
@@ -1835,7 +2413,7 @@ mod tests {
         let mut app = EclipseApp {
             cfg: cfg.clone(),
             theme: Theme::from_name(&cfg.theme, None),
-            db: Database::open_in_memory().unwrap(),
+            db: open_test_db(),
             player: PlayerController::new(&cfg),
             tracks: Vec::new(),
             playlists: Vec::new(),
@@ -1865,6 +2443,8 @@ mod tests {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            pending_delete_track: None,
+            library_watcher: None,
             tray_manager: None,
             is_window_visible: true,
             is_background_hidden: false,
@@ -1897,7 +2477,7 @@ mod tests {
         let mut app = EclipseApp {
             cfg: cfg.clone(),
             theme: Theme::from_name(&cfg.theme, None),
-            db: Database::open_in_memory().unwrap(),
+            db: open_test_db(),
             player: PlayerController::new(&cfg),
             tracks: Vec::new(),
             playlists: Vec::new(),
@@ -1927,6 +2507,8 @@ mod tests {
             status_msg: None,
             last_active_track_id: None,
             track_context_menu: None,
+            pending_delete_track: None,
+            library_watcher: None,
             tray_manager: None,
             is_window_visible: true,
             is_background_hidden: false,
@@ -1951,5 +2533,440 @@ mod tests {
             app.last_prefetch_signature = None;
         }
         assert_eq!(app.last_prefetch_signature, None);
+    }
+
+    #[test]
+    fn test_detect_resize_zone_corners_and_edges() {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
+
+        // 1. Top-Left corner (18x18 grab zone)
+        let tl = detect_resize_zone(screen, egui::pos2(10.0, 10.0));
+        assert!(tl.is_some(), "Must detect Top-Left corner");
+        if let Some((z, dir, cur)) = tl {
+            assert_eq!(dir, egui::ResizeDirection::NorthWest);
+            assert_eq!(cur, egui::CursorIcon::ResizeNwSe);
+            assert_eq!(z.size(), egui::vec2(18.0, 18.0));
+        }
+
+        // 2. Top-Right corner (8x8 grab zone)
+        let tr = detect_resize_zone(screen, egui::pos2(996.0, 3.0));
+        assert!(tr.is_some(), "Must detect Top-Right corner");
+        if let Some((z, dir, cur)) = tr {
+            assert_eq!(dir, egui::ResizeDirection::NorthEast);
+            assert_eq!(cur, egui::CursorIcon::ResizeNeSw);
+            assert_eq!(z.size(), egui::vec2(8.0, 8.0));
+        }
+
+        // 3. Bottom-Left corner (18x18 grab zone)
+        let bl = detect_resize_zone(screen, egui::pos2(10.0, 690.0));
+        assert!(bl.is_some(), "Must detect Bottom-Left corner");
+        if let Some((z, dir, cur)) = bl {
+            assert_eq!(dir, egui::ResizeDirection::SouthWest);
+            assert_eq!(cur, egui::CursorIcon::ResizeNeSw);
+            assert_eq!(z.size(), egui::vec2(18.0, 18.0));
+        }
+
+        // 4. Bottom-Right corner (20x20 grab zone)
+        let br = detect_resize_zone(screen, egui::pos2(990.0, 690.0));
+        assert!(br.is_some(), "Must detect Bottom-Right corner");
+        if let Some((z, dir, cur)) = br {
+            assert_eq!(dir, egui::ResizeDirection::SouthEast);
+            assert_eq!(cur, egui::CursorIcon::ResizeNwSe);
+            assert_eq!(z.size(), egui::vec2(20.0, 20.0));
+        }
+
+        // 5. Top edge (6px outer thickness)
+        let top = detect_resize_zone(screen, egui::pos2(500.0, 3.0));
+        assert!(top.is_some(), "Must detect Top edge");
+        if let Some((z, dir, cur)) = top {
+            assert_eq!(dir, egui::ResizeDirection::North);
+            assert_eq!(cur, egui::CursorIcon::ResizeVertical);
+            assert_eq!(z.height(), 6.0);
+        }
+
+        // 6. Bottom edge (10px outer thickness)
+        let btm = detect_resize_zone(screen, egui::pos2(500.0, 695.0));
+        assert!(btm.is_some(), "Must detect Bottom edge");
+        if let Some((z, dir, cur)) = btm {
+            assert_eq!(dir, egui::ResizeDirection::South);
+            assert_eq!(cur, egui::CursorIcon::ResizeVertical);
+            assert_eq!(z.height(), 10.0);
+        }
+
+        // 7. Left edge (10px outer thickness)
+        let left = detect_resize_zone(screen, egui::pos2(5.0, 350.0));
+        assert!(left.is_some(), "Must detect Left edge");
+        if let Some((z, dir, cur)) = left {
+            assert_eq!(dir, egui::ResizeDirection::West);
+            assert_eq!(cur, egui::CursorIcon::ResizeHorizontal);
+            assert_eq!(z.width(), 10.0);
+        }
+
+        // 8. Right edge (10px outer thickness)
+        let right = detect_resize_zone(screen, egui::pos2(995.0, 350.0));
+        assert!(right.is_some(), "Must detect Right edge");
+        if let Some((z, dir, cur)) = right {
+            assert_eq!(dir, egui::ResizeDirection::East);
+            assert_eq!(cur, egui::CursorIcon::ResizeHorizontal);
+            assert_eq!(z.width(), 10.0);
+        }
+
+        // Interior positions must be ignored
+        assert!(detect_resize_zone(screen, egui::pos2(50.0, 50.0)).is_none());
+        assert!(detect_resize_zone(screen, egui::pos2(500.0, 350.0)).is_none());
+
+        // Close button zone (e.g. x = 970.0, y = 15.0) must not be intercepted
+        assert!(detect_resize_zone(screen, egui::pos2(970.0, 15.0)).is_none());
+    }
+
+    #[test]
+    fn test_handle_frameless_resize_behavior() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
+        let accent = egui::Color32::from_rgb(120, 160, 255);
+
+        // When fullscreen, must return inactive state immediately
+        let full_output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            },
+            |ctx| {
+                let res = handle_frameless_resize(ctx, true, accent);
+                assert!(!res.is_resizing());
+            },
+        );
+        assert_eq!(full_output.viewport_output.len(), 1);
+
+        // When hovered on Left edge and primary pressed, dispatches BeginResize(West)
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::PointerMoved(egui::pos2(5.0, 350.0)));
+        raw_input.events.push(egui::Event::PointerButton {
+            pos: egui::pos2(5.0, 350.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+
+        let full_output = ctx.run(raw_input, |ctx| {
+            let res = handle_frameless_resize(ctx, false, accent);
+            assert!(res.is_resizing(), "Must handle Left edge resize");
+        });
+
+        assert_eq!(full_output.platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+        let has_resize_cmd = full_output.viewport_output.values().any(|vp| {
+            vp.commands.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::BeginResize(egui::ResizeDirection::West)))
+        });
+        assert!(has_resize_cmd, "Must send ViewportCommand::BeginResize(West)");
+    }
+
+    #[test]
+    fn test_handle_frameless_resize_all_directions() {
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
+        let accent = egui::Color32::from_rgb(120, 160, 255);
+
+        let test_cases = [
+            (egui::pos2(5.0, 5.0), egui::ResizeDirection::NorthWest, egui::CursorIcon::ResizeNwSe),
+            (egui::pos2(996.0, 3.0), egui::ResizeDirection::NorthEast, egui::CursorIcon::ResizeNeSw),
+            (egui::pos2(5.0, 690.0), egui::ResizeDirection::SouthWest, egui::CursorIcon::ResizeNeSw),
+            (egui::pos2(990.0, 690.0), egui::ResizeDirection::SouthEast, egui::CursorIcon::ResizeNwSe),
+            (egui::pos2(500.0, 3.0), egui::ResizeDirection::North, egui::CursorIcon::ResizeVertical),
+            (egui::pos2(500.0, 695.0), egui::ResizeDirection::South, egui::CursorIcon::ResizeVertical),
+            (egui::pos2(5.0, 350.0), egui::ResizeDirection::West, egui::CursorIcon::ResizeHorizontal),
+            (egui::pos2(995.0, 350.0), egui::ResizeDirection::East, egui::CursorIcon::ResizeHorizontal),
+        ];
+
+        for (pos, expected_dir, expected_cursor) in test_cases {
+            let mut raw_input = egui::RawInput {
+                screen_rect: Some(screen),
+                ..Default::default()
+            };
+            raw_input.events.push(egui::Event::PointerMoved(pos));
+            raw_input.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            });
+
+            let full_output = ctx.run(raw_input, |ctx| {
+                let res = handle_frameless_resize(ctx, false, accent);
+                assert!(res.is_resizing(), "Must detect resizing for {:?}", expected_dir);
+            });
+
+            assert_eq!(full_output.platform_output.cursor_icon, expected_cursor);
+            let has_cmd = full_output.viewport_output.values().any(|vp| {
+                vp.commands.iter().any(|cmd| matches!(cmd, egui::ViewportCommand::BeginResize(dir) if *dir == expected_dir))
+            });
+            assert!(has_cmd, "Must send ViewportCommand::BeginResize({:?})", expected_dir);
+        }
+    }
+
+    fn dummy_test_track(id: i64, path: &str) -> Track {
+        Track {
+            id,
+            path: path.to_string(),
+            title: "Test Track".to_string(),
+            artist: "Test Artist".to_string(),
+            album_artist: "Test Artist".to_string(),
+            album: "Test Album".to_string(),
+            genre: "Test Genre".to_string(),
+            year: 2024,
+            track_number: 1,
+            duration_secs: 180.0,
+            bitrate_kbps: 320,
+            sample_rate: 44100,
+            channels: 2,
+            format: "MP3".to_string(),
+            file_size: 5_000_000,
+            play_count: 0,
+            favorite: false,
+            has_art: false,
+            folder: "C:/music".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_ghost_track_pruning_and_guard() {
+        let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+        let cfg = AppConfig::default();
+        let db = open_test_db();
+
+        let ghost_path = "C:/non_existent_folder_xyz/ghost_song.mp3";
+        let mut track = dummy_test_track(0, ghost_path);
+        let inserted_id = match db.insert_track(&track) {
+            Ok(id) => id,
+            Err(_) => 1,
+        };
+        track.id = inserted_id;
+
+        let mut app = EclipseApp {
+            cfg: cfg.clone(),
+            theme: Theme::from_name(&cfg.theme, None),
+            db,
+            player: PlayerController::new(&cfg),
+            tracks: vec![track.clone()],
+            playlists: Vec::new(),
+            recent_history: Vec::new(),
+            current_tab: NavTab::Home,
+            nav_history: vec![NavTab::Home],
+            nav_history_idx: 0,
+            search_query: String::new(),
+            focus_search: false,
+            show_queue: false,
+            show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
+            songs_state: SongsViewState::default(),
+            albums_state: AlbumsViewState::default(),
+            artists_state: ArtistsViewState::default(),
+            genres_state: GenresViewState::default(),
+            folders_state: FoldersViewState::default(),
+            playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
+            art_manager: art::AlbumArtManager::new(),
+            scan_rx,
+            scan_tx,
+            is_scanning: false,
+            status_msg: None,
+            last_active_track_id: None,
+            track_context_menu: None,
+            pending_delete_track: None,
+            library_watcher: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
+            allow_exit: false,
+            is_exiting: false,
+            ipc_rx,
+            last_prefetch_signature: None,
+        };
+        app.player.queue = vec![track.clone()];
+
+        // Check ghost track triggers deletion, clears memory & queue, and sets toast
+        let was_ghost = app.check_ghost_track(&track);
+        assert!(was_ghost, "Non-existent local track must be identified as ghost");
+        assert!(app.tracks.is_empty(), "Track must be removed from app.tracks");
+        assert!(app.player.queue.is_empty(), "Track must be removed from player queue");
+        assert!(app.status_msg.as_ref().map(|(msg, _)| msg.contains("missing on disk")).unwrap_or(false));
+
+        // Verify DB no longer contains track
+        let in_db = app.db.get_all_tracks();
+        assert!(in_db.is_ok_and(|tracks| !tracks.iter().any(|t| t.id == inserted_id)), "Track must be deleted from DB");
+    }
+
+    #[test]
+    fn test_delete_modal_escape_cancels() {
+        let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+        let cfg = AppConfig::default();
+        let db = open_test_db();
+        let track = dummy_test_track(1001, "C:/music/track1001.mp3");
+
+        let mut app = EclipseApp {
+            cfg: cfg.clone(),
+            theme: Theme::from_name(&cfg.theme, None),
+            db,
+            player: PlayerController::new(&cfg),
+            tracks: vec![track.clone()],
+            playlists: Vec::new(),
+            recent_history: Vec::new(),
+            current_tab: NavTab::Home,
+            nav_history: vec![NavTab::Home],
+            nav_history_idx: 0,
+            search_query: String::new(),
+            focus_search: false,
+            show_queue: false,
+            show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
+            songs_state: SongsViewState::default(),
+            albums_state: AlbumsViewState::default(),
+            artists_state: ArtistsViewState::default(),
+            genres_state: GenresViewState::default(),
+            folders_state: FoldersViewState::default(),
+            playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
+            art_manager: art::AlbumArtManager::new(),
+            scan_rx,
+            scan_tx,
+            is_scanning: false,
+            status_msg: None,
+            last_active_track_id: None,
+            track_context_menu: None,
+            pending_delete_track: Some(track),
+            library_watcher: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
+            allow_exit: false,
+            is_exiting: false,
+            ipc_rx,
+            last_prefetch_signature: None,
+        };
+
+        let ctx = egui::Context::default();
+        let mut raw_input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        raw_input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        });
+
+        let _ = ctx.run(raw_input, |ctx| {
+            app.render_delete_confirmation_modal(ctx);
+        });
+
+        assert!(app.pending_delete_track.is_none(), "Pressing Escape must dismiss the delete modal");
+    }
+
+    #[test]
+    fn test_delete_modal_backdrop_click_cancels() {
+        let (scan_tx, scan_rx) = std::sync::mpsc::channel();
+        let (_ipc_tx, ipc_rx) = std::sync::mpsc::channel();
+        let cfg = AppConfig::default();
+        let db = open_test_db();
+        let track = dummy_test_track(1002, "C:/music/track1002.mp3");
+
+        let mut app = EclipseApp {
+            cfg: cfg.clone(),
+            theme: Theme::from_name(&cfg.theme, None),
+            db,
+            player: PlayerController::new(&cfg),
+            tracks: vec![track.clone()],
+            playlists: Vec::new(),
+            recent_history: Vec::new(),
+            current_tab: NavTab::Home,
+            nav_history: vec![NavTab::Home],
+            nav_history_idx: 0,
+            search_query: String::new(),
+            focus_search: false,
+            show_queue: false,
+            show_downloads: false,
+            sidebar_collapsed: false,
+            right_inspector_open: true,
+            right_inspector_tab: InspectorTab::Queue,
+            songs_state: SongsViewState::default(),
+            albums_state: AlbumsViewState::default(),
+            artists_state: ArtistsViewState::default(),
+            genres_state: GenresViewState::default(),
+            folders_state: FoldersViewState::default(),
+            playlists_state: PlaylistsViewState::default(),
+            streams_state: StreamsViewState::default(),
+            stream_controller: crate::streams::controller::StreamController::default(),
+            art_manager: art::AlbumArtManager::new(),
+            scan_rx,
+            scan_tx,
+            is_scanning: false,
+            status_msg: None,
+            last_active_track_id: None,
+            track_context_menu: None,
+            pending_delete_track: Some(track),
+            library_watcher: None,
+            tray_manager: None,
+            is_window_visible: true,
+            is_background_hidden: false,
+            is_cinematic_fullscreen: false,
+            ambient_blur_cache: crate::ui::ambient_blur::AmbientBlurCache::new(),
+            allow_exit: false,
+            is_exiting: false,
+            ipc_rx,
+            last_prefetch_signature: None,
+        };
+
+        let ctx = egui::Context::default();
+        // Click at top-left corner (10.0, 10.0) outside the centered card
+        let click_pt = egui::pos2(10.0, 10.0);
+        let mut in1 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0))),
+            time: Some(0.10),
+            ..Default::default()
+        };
+        in1.events.push(egui::Event::PointerMoved(click_pt));
+        in1.events.push(egui::Event::PointerButton {
+            pos: click_pt,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(in1, |ctx| {
+            app.render_delete_confirmation_modal(ctx);
+        });
+
+        let mut in2 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0))),
+            time: Some(0.15),
+            ..Default::default()
+        };
+        in2.events.push(egui::Event::PointerMoved(click_pt));
+        in2.events.push(egui::Event::PointerButton {
+            pos: click_pt,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(in2, |ctx| {
+            app.render_delete_confirmation_modal(ctx);
+        });
+
+        assert!(app.pending_delete_track.is_none(), "Clicking on dark backdrop scrim must dismiss delete modal");
     }
 }

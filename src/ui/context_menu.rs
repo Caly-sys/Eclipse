@@ -1,4 +1,5 @@
 use crate::library::model::{Playlist, Track};
+use crate::ui::bento_theme::BentoPalette;
 use crate::ui::icons::{paint_icon, Icon};
 use crate::ui::theme::Theme;
 use egui::{
@@ -48,6 +49,52 @@ pub enum TrackContextMenuAction {
     GoToArtist(String),
     GoToAlbum(String),
     ShowInExplorer(String),
+    RequestDelete(Track),
+}
+
+impl PartialEq for TrackContextMenuAction {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::PlayNext(a), Self::PlayNext(b)) => a.id == b.id,
+            (Self::AddToQueue(a), Self::AddToQueue(b)) => a.id == b.id,
+            (
+                Self::AddToPlaylist {
+                    playlist_id: p1,
+                    track_id: t1,
+                },
+                Self::AddToPlaylist {
+                    playlist_id: p2,
+                    track_id: t2,
+                },
+            ) => p1 == p2 && t1 == t2,
+            (
+                Self::CreatePlaylistAndAdd {
+                    name: n1,
+                    track_id: t1,
+                },
+                Self::CreatePlaylistAndAdd {
+                    name: n2,
+                    track_id: t2,
+                },
+            ) => n1 == n2 && t1 == t2,
+            (
+                Self::RemoveFromPlaylist {
+                    playlist_id: p1,
+                    track_id: t1,
+                },
+                Self::RemoveFromPlaylist {
+                    playlist_id: p2,
+                    track_id: t2,
+                },
+            ) => p1 == p2 && t1 == t2,
+            (Self::ToggleFavorite(a), Self::ToggleFavorite(b)) => a == b,
+            (Self::GoToArtist(a), Self::GoToArtist(b)) => a == b,
+            (Self::GoToAlbum(a), Self::GoToAlbum(b)) => a == b,
+            (Self::ShowInExplorer(a), Self::ShowInExplorer(b)) => a == b,
+            (Self::RequestDelete(a), Self::RequestDelete(b)) => a.id == b.id,
+            _ => false,
+        }
+    }
 }
 
 /// Single interactive row inside the context menu.
@@ -56,36 +103,41 @@ fn context_menu_button(
     icon: Icon,
     label: &str,
     has_submenu: bool,
-    theme: &Theme,
+    palette: &BentoPalette,
     danger: bool,
 ) -> egui::Response {
     let desired_size = vec2(ui.available_width(), 26.0);
     let (rect, resp) = ui.allocate_exact_size(desired_size, egui::Sense::click());
 
     let is_hovered = resp.hovered();
+    let coral = Color32::from_rgb(240, 110, 118);
     if is_hovered {
         let hover_bg = if danger {
-            Color32::from_rgba_premultiplied(239, 68, 68, 30)
+            Color32::from_rgba_premultiplied(240, 110, 118, 30)
         } else {
-            theme.surface_hover
+            palette.bg_card_hover
         };
         ui.painter().rect_filled(rect, Rounding::same(4.0), hover_bg);
     }
 
     let text_color = if danger {
-        Color32::from_rgb(239, 68, 68)
+        if is_hovered {
+            coral
+        } else {
+            Color32::from_rgb(220, 100, 110)
+        }
     } else if is_hovered {
-        theme.text_primary
+        palette.text_primary
     } else {
-        theme.text_secondary
+        palette.text_secondary
     };
 
     let icon_color = if danger {
-        Color32::from_rgb(239, 68, 68)
+        coral
     } else if is_hovered {
-        theme.accent
+        palette.accent
     } else {
-        theme.text_muted
+        palette.text_muted
     };
 
     // Vector Icon
@@ -104,17 +156,17 @@ fn context_menu_button(
     // Submenu indicator (Chevron Right)
     if has_submenu {
         let chev_r = Rect::from_center_size(pos2(rect.max.x - 12.0, rect.center().y), vec2(10.0, 10.0));
-        paint_icon(ui.painter(), Icon::ChevronRight, chev_r, theme.text_muted);
+        paint_icon(ui.painter(), Icon::ChevronRight, chev_r, palette.text_muted);
     }
 
     resp
 }
 
 /// Subtle hairline horizontal separator inside context menus.
-fn context_menu_divider(ui: &mut Ui, theme: &Theme) {
+fn context_menu_divider(ui: &mut Ui, seam_color: Color32) {
     ui.add_space(2.0);
     let (line_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter().rect_filled(line_rect, Rounding::ZERO, theme.border);
+    ui.painter().rect_filled(line_rect, Rounding::ZERO, seam_color);
     ui.add_space(2.0);
 }
 
@@ -212,14 +264,16 @@ pub fn render_track_context_menu(
         }
     }
 
+    let palette = BentoPalette::from_theme(theme);
+
     // Viewport geometry & boundaries
     let screen_rect = ctx.screen_rect();
 
     let main_w = 205.0;
     let main_estimated_h = if current_state.from_playlist_id.is_some() {
-        275.0
+        310.0
     } else {
-        245.0
+        280.0
     };
 
     // Calculate smart position for Main Menu
@@ -240,17 +294,18 @@ pub fn render_track_context_menu(
         .order(egui::Order::Foreground)
         .fixed_pos(pos2(menu_x, menu_y))
         .show(ctx, |ui| {
-            let mut frame = theme.card_frame(8.0);
-            frame.fill = Color32::from_rgb(18, 18, 22);
-            frame.stroke = Stroke::new(1.0_f32, theme.border_accent);
-            frame.inner_margin = egui::Margin::symmetric(6.0, 6.0);
+            let frame = egui::Frame::none()
+                .fill(palette.bg_card)
+                .stroke(Stroke::new(1.0_f32, palette.seam))
+                .rounding(Rounding::same(8.0))
+                .inner_margin(egui::Margin::symmetric(6.0, 6.0));
 
             frame.show(ui, |ui| {
                 ui.set_width(main_w - 12.0);
                 ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
 
                 // Section 1: Playlists
-                let add_pl_resp = context_menu_button(ui, Icon::Playlist, "Add to playlist", true, theme, false);
+                let add_pl_resp = context_menu_button(ui, Icon::Playlist, "Add to playlist", true, &palette, false);
                 add_to_playlist_rect = add_pl_resp.rect;
                 if add_pl_resp.hovered() || add_pl_resp.clicked() {
                     current_state.is_submenu_open = true;
@@ -262,7 +317,7 @@ pub fn render_track_context_menu(
                         Icon::Trash,
                         "Remove from playlist",
                         false,
-                        theme,
+                        &palette,
                         true,
                     );
                     if remove_pl_resp.clicked() {
@@ -282,7 +337,7 @@ pub fn render_track_context_menu(
                 } else {
                     (Icon::HeartOutline, "Add to Liked Songs")
                 };
-                let fav_resp = context_menu_button(ui, fav_icon, fav_label, false, theme, false);
+                let fav_resp = context_menu_button(ui, fav_icon, fav_label, false, &palette, false);
                 if fav_resp.clicked() {
                     action_to_emit = Some(TrackContextMenuAction::ToggleFavorite(current_state.track.id));
                 }
@@ -290,10 +345,10 @@ pub fn render_track_context_menu(
                     current_state.is_submenu_open = false;
                 }
 
-                context_menu_divider(ui, theme);
+                context_menu_divider(ui, palette.seam);
 
                 // Section 3: Queue Management
-                let play_next_resp = context_menu_button(ui, Icon::Play, "Play next", false, theme, false);
+                let play_next_resp = context_menu_button(ui, Icon::Play, "Play next", false, &palette, false);
                 if play_next_resp.clicked() {
                     action_to_emit = Some(TrackContextMenuAction::PlayNext(current_state.track.clone()));
                 }
@@ -301,7 +356,7 @@ pub fn render_track_context_menu(
                     current_state.is_submenu_open = false;
                 }
 
-                let add_queue_resp = context_menu_button(ui, Icon::Queue, "Add to queue", false, theme, false);
+                let add_queue_resp = context_menu_button(ui, Icon::Queue, "Add to queue", false, &palette, false);
                 if add_queue_resp.clicked() {
                     action_to_emit = Some(TrackContextMenuAction::AddToQueue(current_state.track.clone()));
                 }
@@ -309,11 +364,11 @@ pub fn render_track_context_menu(
                     current_state.is_submenu_open = false;
                 }
 
-                context_menu_divider(ui, theme);
+                context_menu_divider(ui, palette.seam);
 
                 // Section 4: Navigation & File Explorer
                 if !current_state.track.artist.trim().is_empty() {
-                    let artist_resp = context_menu_button(ui, Icon::Mic, "Go to artist", false, theme, false);
+                    let artist_resp = context_menu_button(ui, Icon::Mic, "Go to artist", false, &palette, false);
                     if artist_resp.clicked() {
                         action_to_emit = Some(TrackContextMenuAction::GoToArtist(current_state.track.artist.clone()));
                     }
@@ -323,7 +378,7 @@ pub fn render_track_context_menu(
                 }
 
                 if !current_state.track.album.trim().is_empty() {
-                    let album_resp = context_menu_button(ui, Icon::Disc, "Go to album", false, theme, false);
+                    let album_resp = context_menu_button(ui, Icon::Disc, "Go to album", false, &palette, false);
                     if album_resp.clicked() {
                         action_to_emit = Some(TrackContextMenuAction::GoToAlbum(current_state.track.album.clone()));
                     }
@@ -332,11 +387,22 @@ pub fn render_track_context_menu(
                     }
                 }
 
-                let explorer_resp = context_menu_button(ui, Icon::Folder, "Show in file explorer", false, theme, false);
+                let explorer_resp = context_menu_button(ui, Icon::Folder, "Show in file explorer", false, &palette, false);
                 if explorer_resp.clicked() {
                     action_to_emit = Some(TrackContextMenuAction::ShowInExplorer(current_state.track.path.clone()));
                 }
                 if explorer_resp.hovered() {
+                    current_state.is_submenu_open = false;
+                }
+
+                // Section 5: Destructive actions
+                context_menu_divider(ui, palette.seam);
+
+                let delete_resp = context_menu_button(ui, Icon::Trash, "Delete song...", false, &palette, true);
+                if delete_resp.clicked() {
+                    action_to_emit = Some(TrackContextMenuAction::RequestDelete(current_state.track.clone()));
+                }
+                if delete_resp.hovered() {
                     current_state.is_submenu_open = false;
                 }
 
@@ -367,10 +433,11 @@ pub fn render_track_context_menu(
             .order(egui::Order::Foreground)
             .fixed_pos(pos2(sub_x, sub_y))
             .show(ctx, |ui| {
-                let mut frame = theme.card_frame(8.0);
-                frame.fill = Color32::from_rgb(18, 18, 22);
-                frame.stroke = Stroke::new(1.0_f32, theme.border_accent);
-                frame.inner_margin = egui::Margin::symmetric(6.0, 6.0);
+                let frame = egui::Frame::none()
+                    .fill(palette.bg_card)
+                    .stroke(Stroke::new(1.0_f32, palette.seam))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(egui::Margin::symmetric(6.0, 6.0));
 
                 frame.show(ui, |ui| {
                     ui.set_width(sub_w - 12.0);
@@ -382,7 +449,7 @@ pub fn render_track_context_menu(
                             pos2(ui.cursor().min.x + 10.0, ui.cursor().min.y + 11.0),
                             vec2(11.0, 11.0),
                         );
-                        paint_icon(ui.painter(), Icon::Search, search_icon_r, theme.text_muted);
+                        paint_icon(ui.painter(), Icon::Search, search_icon_r, palette.text_muted);
 
                         ui.add_space(16.0);
                         let text_edit = egui::TextEdit::singleline(&mut current_state.playlist_search)
@@ -391,7 +458,7 @@ pub fn render_track_context_menu(
                         ui.add(text_edit);
                     });
 
-                    context_menu_divider(ui, theme);
+                    context_menu_divider(ui, palette.seam);
 
                     // 2. "+ New playlist" creation row
                     if current_state.is_creating_playlist {
@@ -414,7 +481,7 @@ pub fn render_track_context_menu(
                             let create_btn = egui::Button::new(
                                 RichText::new("Save").size(11.0).color(Color32::from_rgb(11, 9, 20)).strong(),
                             )
-                            .fill(theme.accent)
+                            .fill(palette.accent)
                             .rounding(Rounding::same(4.0));
                             if ui.add(create_btn).clicked() {
                                 let name = current_state.new_playlist_name.trim();
@@ -427,7 +494,7 @@ pub fn render_track_context_menu(
                             }
                         });
                     } else {
-                        let new_pl_resp = context_menu_button(ui, Icon::Plus, "New playlist", false, theme, false);
+                        let new_pl_resp = context_menu_button(ui, Icon::Plus, "New playlist", false, &palette, false);
                         if new_pl_resp.clicked() {
                             current_state.is_creating_playlist = true;
                             if current_state.new_playlist_name.is_empty() {
@@ -436,7 +503,7 @@ pub fn render_track_context_menu(
                         }
                     }
 
-                    context_menu_divider(ui, theme);
+                    context_menu_divider(ui, palette.seam);
 
                     // 3. Scrollable Playlist List
                     let query = current_state.playlist_search.trim().to_lowercase();
@@ -454,7 +521,7 @@ pub fn render_track_context_menu(
                     if matching_playlists.is_empty() {
                         ui.add_space(4.0);
                         ui.vertical_centered(|ui| {
-                            ui.label(RichText::new("No playlists found").size(11.0).color(theme.text_muted));
+                            ui.label(RichText::new("No playlists found").size(11.0).color(palette.text_muted));
                         });
                         ui.add_space(4.0);
                     } else {
@@ -475,7 +542,7 @@ pub fn render_track_context_menu(
                                         Icon::Playlist,
                                         &label,
                                         false,
-                                        theme,
+                                        &palette,
                                         false,
                                     );
                                     if pl_resp.clicked() {
@@ -585,7 +652,7 @@ mod tests {
             let _ = render_track_context_menu(ctx, &mut state, &playlists, &theme);
         });
         assert!(state.is_some(), "Menu must be rendered and populated on frame 1");
-        assert!(state.as_ref().unwrap().main_menu_rect.is_some(), "main_menu_rect must be recorded");
+        assert!(state.as_ref().is_some_and(|s| s.main_menu_rect.is_some()), "main_menu_rect must be recorded");
 
         // Frame 2: User clicks outside the menu (at pos 500, 500)
         let _ = ctx.run(
@@ -687,5 +754,80 @@ mod tests {
         let q_none = "classical".to_lowercase();
         let matches_none: Vec<_> = playlists.iter().filter(|p| p.name.to_lowercase().contains(&q_none)).collect();
         assert!(matches_none.is_empty());
+    }
+
+    #[test]
+    fn test_context_menu_request_delete_emitted() {
+        let ctx = egui::Context::default();
+        let track = dummy_track();
+        let playlists: [Playlist; 0] = [];
+        let theme = Theme::from_name("dark", None);
+
+        // Frame 1: Open menu at (100.0, 100.0)
+        let mut state = Some(TrackContextMenuState::new(track.clone(), pos2(100.0, 100.0), None));
+        let in0 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.0),
+            ..Default::default()
+        };
+        let _ = ctx.run(in0, |ctx| {
+            let _ = render_track_context_menu(ctx, &mut state, &playlists, &theme);
+        });
+
+        assert!(state.as_ref().is_some_and(|s| s.main_menu_rect.is_some()));
+        let menu_rect = state.as_ref().and_then(|s| s.main_menu_rect).unwrap_or(Rect::ZERO);
+        let click_pt = pos2(menu_rect.center().x, menu_rect.max.y - 13.0);
+
+        // Frame 2: Move pointer over "Delete song..."
+        let mut in1 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.05),
+            ..Default::default()
+        };
+        in1.events.push(egui::Event::PointerMoved(click_pt));
+        let _ = ctx.run(in1, |ctx| {
+            let _ = render_track_context_menu(ctx, &mut state, &playlists, &theme);
+        });
+
+        // Frame 3: Pointer press on "Delete song..."
+        let mut in2 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.10),
+            ..Default::default()
+        };
+        in2.events.push(egui::Event::PointerMoved(click_pt));
+        in2.events.push(egui::Event::PointerButton {
+            pos: click_pt,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(in2, |ctx| {
+            let _ = render_track_context_menu(ctx, &mut state, &playlists, &theme);
+        });
+
+        // Frame 4: Pointer release on "Delete song..."
+        let mut action = None;
+        let mut in3 = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0))),
+            time: Some(0.15),
+            ..Default::default()
+        };
+        in3.events.push(egui::Event::PointerMoved(click_pt));
+        in3.events.push(egui::Event::PointerButton {
+            pos: click_pt,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        let _ = ctx.run(in3, |ctx| {
+            action = render_track_context_menu(ctx, &mut state, &playlists, &theme);
+        });
+
+        assert_eq!(
+            action,
+            Some(TrackContextMenuAction::RequestDelete(track.clone()))
+        );
+        assert!(state.is_none(), "Context menu must close after action emission");
     }
 }

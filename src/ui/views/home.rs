@@ -182,6 +182,9 @@ pub fn render_home(
     // 1. Full-Bleed Edge-to-Edge Top Ambient Gradient (Zero Dark Gutters)
     // Painted FIRST on the background layer across the entire width of the center pane.
     let full_rect = ui.max_rect();
+    let home_clip = ui.clip_rect().intersect(full_rect);
+    ui.set_clip_rect(home_clip);
+
     let gradient_h = 300.0_f32.min(full_rect.height());
     let gradient_rect = Rect::from_min_max(
         pos2(full_rect.left(), full_rect.top()),
@@ -1362,98 +1365,112 @@ fn render_row3_jump_back_in(
             });
         });
     } else {
-        ScrollArea::horizontal()
-            .id_salt("jump_back_in_horizontal_shelf")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.spacing_mut().item_spacing = vec2(14.0, 0.0);
+        let avail_w = ui.available_width();
+        let shelf_min = ui.cursor().min;
+        let shelf_bounds = Rect::from_min_size(shelf_min, vec2(avail_w, 205.0)).intersect(ui.clip_rect());
 
-                ui.horizontal(|ui| {
-                    for album in &jump_albums {
-                        let card_w = 140.0_f32;
-                        ui.allocate_ui_with_layout(
-                            vec2(card_w, card_w + 50.0),
-                            Layout::top_down(egui::Align::Min),
-                            |ui| {
-                                // 140x140px square Album Cover (border-radius: 8px, Stroke::NONE)
-                                let (art_box, art_resp) =
-                                    ui.allocate_exact_size(vec2(card_w, card_w), Sense::click());
-                                if art_resp.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                }
+        ui.allocate_ui_with_layout(
+            vec2(avail_w, 200.0),
+            Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_clip_rect(shelf_bounds);
+                ScrollArea::horizontal()
+                    .id_salt("jump_back_in_horizontal_shelf")
+                    .auto_shrink([false, false])
+                    .max_width(avail_w)
+                    .show(ui, |ui| {
+                        ui.set_clip_rect(shelf_bounds);
+                        ui.spacing_mut().item_spacing = vec2(14.0, 0.0);
 
-                                let mut painted = false;
-                                if let Some(tex) = art_manager.get_or_load(ui.ctx(), &album.sample_track.path) {
-                                    let img = egui::Image::new(tex).rounding(Rounding::same(8.0));
-                                    img.paint_at(ui, art_box);
-                                    painted = true;
-                                }
+                        ui.horizontal(|ui| {
+                            for album in &jump_albums {
+                                let card_w = 140.0_f32;
+                                ui.allocate_ui_with_layout(
+                                    vec2(card_w, 195.0),
+                                    Layout::top_down(egui::Align::Min),
+                                    |ui| {
+                                        ui.set_clip_rect(shelf_bounds);
+                                        // 140x140px square Album Cover (border-radius: 8px, Stroke::NONE)
+                                        let (art_box, art_resp) =
+                                            ui.allocate_exact_size(vec2(card_w, card_w), Sense::click());
+                                        if art_resp.hovered() {
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
 
-                                if !painted {
-                                    ui.painter().rect_filled(
-                                        art_box,
-                                        Rounding::same(8.0),
-                                        palette.bg_card,
-                                    );
-                                    let icon_box =
-                                        Rect::from_center_size(art_box.center(), vec2(40.0, 40.0));
-                                    paint_icon(ui.painter(), Icon::Disc, icon_box, palette.text_muted);
-                                }
+                                        let mut painted = false;
+                                        if let Some(tex) = art_manager.get_or_load(ui.ctx(), &album.sample_track.path) {
+                                            let img = egui::Image::new(tex).rounding(Rounding::same(8.0));
+                                            img.paint_at(ui, art_box);
+                                            painted = true;
+                                        }
 
-                                // Subtle play button overlay on hover (Stroke::NONE)
-                                if art_resp.hovered() {
-                                    let overlay_center =
-                                        pos2(art_box.max.x - 24.0, art_box.max.y - 24.0);
-                                    ui.painter().circle_filled(
-                                        overlay_center,
-                                        16.0,
-                                        Color32::from_rgba_premultiplied(14, 14, 18, 220),
-                                    );
-                                    let play_icon_rect = Rect::from_center_size(
-                                        pos2(overlay_center.x + 1.0, overlay_center.y),
-                                        vec2(12.0, 12.0),
-                                    );
-                                    paint_icon(ui.painter(), Icon::Play, play_icon_rect, Color32::WHITE);
-                                }
+                                        if !painted {
+                                            ui.painter().rect_filled(
+                                                art_box,
+                                                Rounding::same(8.0),
+                                                palette.bg_card,
+                                            );
+                                            let icon_box =
+                                                Rect::from_center_size(art_box.center(), vec2(40.0, 40.0));
+                                            paint_icon(ui.painter(), Icon::Disc, icon_box, palette.text_muted);
+                                        }
 
-                                ui.add_space(6.0);
+                                        // Subtle play button overlay on hover (Stroke::NONE)
+                                        if art_resp.hovered() {
+                                            let overlay_center =
+                                                pos2(art_box.max.x - 24.0, art_box.max.y - 24.0);
+                                            ui.painter().circle_filled(
+                                                overlay_center,
+                                                16.0,
+                                                Color32::from_rgba_premultiplied(14, 14, 18, 220),
+                                            );
+                                            let play_icon_rect = Rect::from_center_size(
+                                                pos2(overlay_center.x + 1.0, overlay_center.y),
+                                                vec2(12.0, 12.0),
+                                            );
+                                            paint_icon(ui.painter(), Icon::Play, play_icon_rect, Color32::WHITE);
+                                        }
 
-                                // Title below
-                                let title_str = truncate_str(&album.album, 18);
-                                let title_lbl = ui.add(
-                                    egui::Label::new(
-                                        RichText::new(title_str)
-                                            .size(13.0)
-                                            .color(if art_resp.hovered() {
-                                                Color32::WHITE
-                                            } else {
-                                                palette.text_primary
-                                            })
-                                            .strong(),
-                                    )
-                                    .sense(Sense::click()),
+                                        ui.add_space(6.0);
+
+                                        // Title below
+                                        let title_str = truncate_str(&album.album, 18);
+                                        let title_lbl = ui.add(
+                                            egui::Label::new(
+                                                RichText::new(title_str)
+                                                    .size(13.0)
+                                                    .color(if art_resp.hovered() {
+                                                        Color32::WHITE
+                                                    } else {
+                                                        palette.text_primary
+                                                    })
+                                                    .strong(),
+                                            )
+                                            .sense(Sense::click()),
+                                        );
+
+                                        // Subtitle below
+                                        let sub_str = truncate_str(
+                                            &format!("{} · {} songs", album.artist, album.tracks.len()),
+                                            22,
+                                        );
+                                        ui.label(
+                                            RichText::new(sub_str)
+                                                .size(11.5)
+                                                .color(palette.text_muted),
+                                        );
+
+                                        if art_resp.clicked() || title_lbl.clicked() {
+                                            player.load_queue(album.tracks.clone(), 0);
+                                            *on_play_track = Some(album.sample_track.clone());
+                                        }
+                                    },
                                 );
-
-                                // Subtitle below
-                                let sub_str = truncate_str(
-                                    &format!("{} · {} songs", album.artist, album.tracks.len()),
-                                    22,
-                                );
-                                ui.label(
-                                    RichText::new(sub_str)
-                                        .size(11.5)
-                                        .color(palette.text_muted),
-                                );
-
-                                if art_resp.clicked() || title_lbl.clicked() {
-                                    player.load_queue(album.tracks.clone(), 0);
-                                    *on_play_track = Some(album.sample_track.clone());
-                                }
-                            },
-                        );
-                    }
-                });
-            });
+                            }
+                        });
+                    });
+            },
+        );
     }
 }
 
@@ -1505,6 +1522,59 @@ mod tests {
                     play_count: 12,
                     file_size: 4096,
                 }];
+
+                render_home(
+                    ui,
+                    &tracks,
+                    &tracks,
+                    &mut player,
+                    &theme,
+                    &mut on_play,
+                    &mut art_manager,
+                    &mut on_scan,
+                    &mut on_navigate,
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn test_home_view_rendering_narrow_760px() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_width(760.0);
+                let theme = Theme::from_name("Eclipse", None);
+                let cfg = AppConfig::default();
+                let mut player = PlayerController::new(&cfg);
+                let mut art_manager = AlbumArtManager::new();
+                let mut on_play = None;
+                let mut on_scan = false;
+                let mut on_navigate = None;
+
+                let tracks: Vec<Track> = (1..=12)
+                    .map(|i| Track {
+                        id: i,
+                        path: format!("song_{}.flac", i),
+                        title: format!("Home Track {}", i),
+                        artist: format!("Home Artist {}", i % 3),
+                        album: format!("Home Album {}", i % 4),
+                        genre: "Ambient".into(),
+                        year: 2024,
+                        track_number: i as u32,
+                        duration_secs: 200.0 + (i as f64 * 10.0),
+                        format: "FLAC".into(),
+                        bitrate_kbps: 1411,
+                        sample_rate: 48000,
+                        channels: 2,
+                        favorite: i % 2 == 0,
+                        has_art: false,
+                        folder: "".into(),
+                        album_artist: "".into(),
+                        play_count: i as u32 * 3,
+                        file_size: 4096,
+                    })
+                    .collect();
 
                 render_home(
                     ui,
