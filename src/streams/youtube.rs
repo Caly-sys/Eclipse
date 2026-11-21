@@ -587,7 +587,9 @@ pub fn unescape_html(input: &str) -> String {
                     is_entity = true;
                     break;
                 } else if next_ch.is_alphanumeric() || next_ch == '#' {
-                    entity.push(chars.next().unwrap());
+                    if let Some(c) = chars.next() {
+                        entity.push(c);
+                    }
                     if entity.len() > 10 {
                         break;
                     }

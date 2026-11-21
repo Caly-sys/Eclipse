@@ -1077,6 +1077,17 @@ impl DownloadManagerInner {
     }
 }
 
+#[inline]
+fn lock_inner(inner: &Mutex<DownloadManagerInner>) -> std::sync::MutexGuard<'_, DownloadManagerInner> {
+    match inner.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            eprintln!("[WARN] Recovering from poisoned DownloadManagerInner mutex");
+            poisoned.into_inner()
+        }
+    }
+}
+
 /// RAII Drop guard ensuring running_jobs slot is always released and next pending job is started.
 struct WorkerGuard {
     inner: Arc<Mutex<DownloadManagerInner>>,
@@ -1088,7 +1099,7 @@ struct WorkerGuard {
 impl Drop for WorkerGuard {
     fn drop(&mut self) {
         let next_tasks = {
-            let mut lock = self.inner.lock().unwrap();
+            let mut lock = lock_inner(&self.inner);
             lock.running_jobs.remove(&self.job_id);
             lock.cancellations.remove(&self.job_id);
             if !self.completed {
@@ -1139,7 +1150,7 @@ fn spawn_download_worker(
             };
 
             let update_job_status = |status: DownloadStatus| {
-                let mut lock = inner.lock().unwrap();
+                let mut lock = lock_inner(&inner);
                 if let Some(job) = lock.jobs.get_mut(&job_id) {
                     job.status = status.clone();
                     let _ = tx.send(StreamEvent::DownloadUpdated(job.clone()));
@@ -1169,7 +1180,7 @@ fn spawn_download_worker(
                 Err(e) => {
                     guard.completed = true;
                     {
-                        let mut lock = inner.lock().unwrap();
+                        let mut lock = lock_inner(&inner);
                         if let Some(job) = lock.jobs.get_mut(&job_id) {
                             job.status = DownloadStatus::Failed(e.clone());
                             job.error = Some(e.clone());
@@ -1216,7 +1227,7 @@ fn spawn_download_worker(
                 Err(e) => {
                     guard.completed = true;
                     {
-                        let mut lock = inner.lock().unwrap();
+                        let mut lock = lock_inner(&inner);
                         if let Some(job) = lock.jobs.get_mut(&job_id) {
                             job.status = DownloadStatus::Failed(e.clone());
                             job.error = Some(e.clone());
@@ -1281,7 +1292,7 @@ fn spawn_download_worker(
             // Stage 5: Completed
             guard.completed = true;
             {
-                let mut lock = inner.lock().unwrap();
+                let mut lock = lock_inner(&inner);
                 if let Some(job) = lock.jobs.get_mut(&job_id) {
                     job.status = DownloadStatus::Completed(final_path.clone());
                     job.track.set_local_match(local_track_id, final_path.to_string_lossy());
@@ -1325,7 +1336,7 @@ impl DownloadManager {
         let initial_job = DownloadJob::with_format(job_id.clone(), track, format);
 
         let next_tasks = {
-            let mut lock = self.inner.lock().unwrap();
+            let mut lock = lock_inner(&self.inner);
             lock.cancellations.insert(job_id.clone(), cancel_flag);
             lock.jobs.insert(job_id.clone(), initial_job.clone());
             if !lock.running_jobs.contains(&job_id) && !lock.pending_queue.contains(&job_id) {
@@ -1355,7 +1366,7 @@ impl DownloadManager {
         let mut events = Vec::new();
 
         let next_tasks = {
-            let mut lock = self.inner.lock().unwrap();
+            let mut lock = lock_inner(&self.inner);
             for track in tracks {
                 let job_id = if !track.id.is_empty() {
                     track.id.clone()
@@ -1406,7 +1417,7 @@ impl DownloadManager {
     pub fn cancel_download(&self, id: &str) {
         let mut event_to_send = None;
         let next_tasks = {
-            let mut lock = self.inner.lock().unwrap();
+            let mut lock = lock_inner(&self.inner);
             if let Some(flag) = lock.cancellations.get(id) {
                 flag.store(true, Ordering::Relaxed);
             }
@@ -1445,7 +1456,7 @@ impl DownloadManager {
     pub fn cancel_all_downloads(&self) {
         let mut cancelled_jobs = Vec::new();
         {
-            let mut lock = self.inner.lock().unwrap();
+            let mut lock = lock_inner(&self.inner);
             for flag in lock.cancellations.values() {
                 flag.store(true, Ordering::Relaxed);
             }
@@ -1471,7 +1482,7 @@ impl DownloadManager {
     /// Retry a previously failed or completed download.
     pub fn retry_download(&self, id: &str) {
         let job_opt = {
-            let lock = self.inner.lock().unwrap();
+            let lock = lock_inner(&self.inner);
             lock.jobs.get(id).map(|j| (j.track.clone(), j.format))
         };
 
@@ -1483,7 +1494,7 @@ impl DownloadManager {
     /// Retry all failed downloads currently recorded.
     pub fn retry_all_failed(&self) {
         let failed_jobs: Vec<(StreamTrack, DownloadFormat)> = {
-            let lock = self.inner.lock().unwrap();
+            let lock = lock_inner(&self.inner);
             lock.jobs
                 .values()
                 .filter(|j| j.is_failed())
@@ -1498,28 +1509,28 @@ impl DownloadManager {
 
     /// Clear all completed jobs from memory.
     pub fn clear_completed(&self) {
-        let mut lock = self.inner.lock().unwrap();
+        let mut lock = lock_inner(&self.inner);
         lock.jobs.retain(|_, j| !matches!(j.status, DownloadStatus::Completed(_)));
     }
 
     /// Number of workers currently actively executing in threads (0..=MAX_CONCURRENT_DOWNLOADS).
     pub fn running_count(&self) -> usize {
-        self.inner.lock().unwrap().running_jobs.len()
+        lock_inner(&self.inner).running_jobs.len()
     }
 
     /// Number of jobs waiting in the pending queue.
     pub fn queued_count(&self) -> usize {
-        self.inner.lock().unwrap().pending_queue.len()
+        lock_inner(&self.inner).pending_queue.len()
     }
 
     /// Total count of active (running + queued) jobs.
     pub fn active_count(&self) -> usize {
-        self.inner.lock().unwrap().jobs.values().filter(|j| j.is_active()).count()
+        lock_inner(&self.inner).jobs.values().filter(|j| j.is_active()).count()
     }
 
     /// Get a snapshot of a specific job by id.
     pub fn get_job(&self, id: &str) -> Option<DownloadJob> {
-        self.inner.lock().unwrap().jobs.get(id).cloned()
+        lock_inner(&self.inner).jobs.get(id).cloned()
     }
 }
 
@@ -1527,6 +1538,25 @@ impl DownloadManager {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn test_lock_inner_recovers_from_poisoned_mutex() {
+        let inner = Arc::new(Mutex::new(DownloadManagerInner::new()));
+
+        // Intentionally poison the mutex in a spawned thread
+        let inner_clone = inner.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = inner_clone.lock().unwrap();
+            panic!("Intentional test panic to poison mutex");
+        })
+        .join();
+
+        assert!(inner.is_poisoned());
+
+        // lock_inner must recover gracefully without panicking
+        let guard = lock_inner(&inner);
+        assert_eq!(guard.running_jobs.len(), 0);
+    }
 
     #[test]
     fn test_sanitize_filename() {

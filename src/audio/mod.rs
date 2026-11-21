@@ -35,8 +35,9 @@ pub struct PlayerController {
     pub is_searching_lyrics: bool,
     pub manual_search_results: Option<Vec<LrclibRecord>>,
     pub manual_search_error: Option<String>,
-    lyrics_rx: Receiver<Option<Lyrics>>,
-    lyrics_tx: Sender<Option<Lyrics>>,
+    pub lyrics_req_id: u64,
+    lyrics_rx: Receiver<(u64, Option<Lyrics>)>,
+    lyrics_tx: Sender<(u64, Option<Lyrics>)>,
     manual_search_rx: Receiver<Result<Vec<LrclibRecord>, String>>,
     manual_search_tx: Sender<Result<Vec<LrclibRecord>, String>>,
     /// Legacy field kept for backward compatibility; now mirrors `shuffle_order`.
@@ -80,6 +81,7 @@ impl PlayerController {
             is_searching_lyrics: false,
             manual_search_results: None,
             manual_search_error: None,
+            lyrics_req_id: 0,
             lyrics_rx: rx,
             lyrics_tx: tx,
             manual_search_rx: ms_rx,
@@ -188,6 +190,8 @@ impl PlayerController {
     ) {
         self.lyrics = None;
         self.is_loading_lyrics = true;
+        self.lyrics_req_id = self.lyrics_req_id.wrapping_add(1);
+        let req_id = self.lyrics_req_id;
 
         let tx = self.lyrics_tx.clone();
         let track_path = std::path::PathBuf::from(format!("stream_{}_{}.lrc", artist, title));
@@ -202,7 +206,7 @@ impl PlayerController {
             alb,
             duration_secs,
             move |res| {
-                let _ = tx.send(res);
+                let _ = tx.send((req_id, res));
             },
         );
     }
@@ -397,6 +401,8 @@ impl PlayerController {
     pub fn load_lyrics_for_track(&mut self, track: &Track) {
         self.lyrics = None;
         self.is_loading_lyrics = true;
+        self.lyrics_req_id = self.lyrics_req_id.wrapping_add(1);
+        let req_id = self.lyrics_req_id;
 
         let track_path = Path::new(&track.path).to_path_buf();
 
@@ -421,7 +427,7 @@ impl PlayerController {
             album,
             duration,
             move |res| {
-                let _ = tx.send(res);
+                let _ = tx.send((req_id, res));
             },
         );
     }
@@ -448,6 +454,8 @@ impl PlayerController {
     }
 
     pub fn apply_custom_lyrics(&mut self, record: &LrclibRecord) {
+        self.lyrics_req_id = self.lyrics_req_id.wrapping_add(1);
+        self.is_loading_lyrics = false;
         if let Some(track) = self.current_track() {
             let track_path = Path::new(&track.path);
             let lyrics = crate::lyrics::lrclib::apply_and_cache_record(track_path, record);
@@ -757,10 +765,12 @@ impl PlayerController {
     }
 
     pub fn update(&mut self) {
-        // Poll background lyrics
-        if let Ok(res) = self.lyrics_rx.try_recv() {
-            self.lyrics = res;
-            self.is_loading_lyrics = false;
+        // Poll background lyrics (safely discard stale responses from fast skips)
+        while let Ok((req_id, res)) = self.lyrics_rx.try_recv() {
+            if req_id == self.lyrics_req_id {
+                self.lyrics = res;
+                self.is_loading_lyrics = false;
+            }
         }
 
         // Poll manual lyrics search
@@ -1093,6 +1103,52 @@ mod tests {
         assert!(lyrics.is_synced);
         assert_eq!(lyrics.lines[0].text, "Custom lyrics test");
         assert_eq!(lyrics.lines[0].timestamp_ms, 15000);
+    }
+
+    #[test]
+    fn test_lyrics_stale_response_discarded_on_track_skip() {
+        let cfg = AppConfig::default();
+        let mut player = PlayerController::new(&cfg);
+        player.lyrics_req_id = 1;
+        player.is_loading_lyrics = true;
+
+        // Simulate a stale background response arriving for request 1
+        let stale_lyrics = crate::lyrics::lrc::Lyrics {
+            lines: vec![crate::lyrics::lrc::LyricLine {
+                timestamp_ms: 1000,
+                text: "Stale song lyrics".to_string(),
+            }],
+            is_synced: true,
+            source: "Test".to_string(),
+        };
+        let _ = player.lyrics_tx.send((1, Some(stale_lyrics)));
+
+        // User rapidly skipped to track 2 (req_id bumped to 2)
+        player.lyrics_req_id = 2;
+        player.lyrics = None;
+
+        // Process frame update
+        player.update();
+
+        // Stale lyrics from req 1 must be discarded and NOT overwrite current lyrics
+        assert!(player.lyrics.is_none());
+
+        // Now fresh response arrives for request 2
+        let fresh_lyrics = crate::lyrics::lrc::Lyrics {
+            lines: vec![crate::lyrics::lrc::LyricLine {
+                timestamp_ms: 2000,
+                text: "Fresh song lyrics".to_string(),
+            }],
+            is_synced: true,
+            source: "Test".to_string(),
+        };
+        let _ = player.lyrics_tx.send((2, Some(fresh_lyrics)));
+        player.update();
+
+        // Fresh lyrics matching req_id 2 are accepted
+        assert!(player.lyrics.is_some());
+        assert_eq!(player.lyrics.as_ref().unwrap().lines[0].text, "Fresh song lyrics");
+        assert!(!player.is_loading_lyrics);
     }
 
     #[test]
