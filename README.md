@@ -77,11 +77,6 @@ A high-performance music player for Windows written in Rust with a calm, dark pu
 - **Full-Bleed Center Glow**: Edge-to-edge 10-row multi-stop `egui::Mesh` blending from center slate into active theme accent color across the entire top header width with zero dark gutters.
 - **Ease-Out Color Mathematics**: Calibrated lerp curve maintains pure RGB color vibrancy without dark grey muddying.
 
-### 🎵 Restored Now Playing View & Enhanced Right Inspector
-- **Real-Time PCM Spectrum Analyzer**: Restored dedicated Now Playing view with logarithmic FFT frequency visualizer and stereo peak meters.
-- **LRCLIB Cloud Lyrics & Manual Search**: Interactive `Search Online (LRCLIB)` modal to query, preview, and apply synced lyrics on the fly.
-- **High-Contrast Active Lyric Lines**: Enhanced readability across dark matte surfaces with crisp translucent highlight pill and gold badges.
-
 ### 🪟 Native Windows Pop-Out Mini-Player Rounding
 - **DWM Native Window Rounding**: Native Win32 `DwmSetWindowAttribute` / `CreateRoundRectRgn` rounded corners on the borderless mini-player viewport (`HWND`), eliminating dark rectangular corner artifacts on Windows 10/11.
 
